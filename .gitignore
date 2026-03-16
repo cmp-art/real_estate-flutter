@@ -1,0 +1,55 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Makazi Estate — Root .gitignore
+# Protects the entire repository from accidental secret commits
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Claude Code session data (local dev tool — never push) ───────────────────
+.claude/
+
+# ── Microsoft Office temp/lock files ─────────────────────────────────────────
+~$*.docx
+~$*.xlsx
+~$*.pptx
+*_NEW.docx
+*_TEMP.docx
+*_BACKUP.docx
+
+# ── macOS junk ────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── Windows junk ──────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+
+# ── Environment variables & secrets (ALL levels) ─────────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+
+# ── Signing keys (never push keystores or certificates) ──────────────────────
+*.jks
+*.keystore
+*.p12
+*.pfx
+key.properties
+
+# ── Backend (Node.js) ─────────────────────────────────────────────────────────
+real_estate_app_backend/node_modules/
+real_estate_app_backend/.env
+real_estate_app_backend/npm-debug.log
+real_estate_app_backend/yarn-error.log
+
+# ── Flutter build outputs ─────────────────────────────────────────────────────
+real_estate_app/build/
+real_estate_app/playstore_assets/
+
+# ── Python dev tools ──────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup Rules for Android 12+ (API 31+)
+    Defines what data should be backed up and restored
+-->
+<full-backup-content>
+    
+    <!-- Include shared preferences -->
+    <include 
+        domain="sharedpref" 
+        path="." />
+    
+    <!-- Include app database -->
+    <include 
+        domain="database" 
+        path="." />
+    
+    <!-- Include files directory -->
+    <include 
+        domain="file" 
+        path="." />
+    
+    <!-- Exclude sensitive data -->
+    <exclude 
+        domain="sharedpref" 
+        path="FlutterSecureStorage" />
+    
+    <!-- Exclude cache (must be under included file domain) -->
+    <exclude 
+        domain="file" 
+        path="cache" />
+    
+    <!-- Exclude code cache -->
+    <exclude 
+        domain="file" 
+        path="code_cache" />
+    
+    <!-- Exclude no_backup directory -->
+    <exclude 
+        domain="file" 
+        path="no_backup" />
+    
+    <!-- Exclude device-specific data -->
+    <exclude 
+        domain="database" 
+        path="device_info.db" />
+    
+</full-backup-content>
+
+<!-- 
+NOTES:
+- This file is required for Android 12+ (targetSdk 31+)
+- Paths in <exclude> must be relative to an included domain
+- No trailing slashes in paths
+- Backup data is encrypted by default
+- Maximum backup size is 25MB
+- User must enable backup in device settings
+- Restore happens automatically on new device
+
+LOCATION:
+Save as: android/app/src/main/res/xml/backup_rules.xml
+
+IMPORTANT:
+- Remove trailing slashes from paths (use "cache" not "cache/")
+- Make sure parent domain is included before excluding subdirectories
+- Use "database" domain for .db files, not "file" domain
+-->

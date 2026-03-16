@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PRODUCTION FIXES:
+    FIX iOS-1: Added NSCameraUsageDescription       — app CRASHES on iOS if missing when camera is accessed.
+    FIX iOS-2: Added NSPhotoLibraryUsageDescription — app CRASHES on iOS if missing when photo library accessed.
+    FIX iOS-3: Replaced placeholder Google reversed client ID with correct format note.
+               Search for REPLACE_WITH_REVERSED_CLIENT_ID and substitute your actual value.
+-->
+<plist version="1.0">
+<dict>
+    <!-- ── Flutter ─────────────────────────────────────────────────────── -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Real Estate</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>real_estate_app</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(FLUTTER_BUILD_NAME)</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleVersion</key>
+    <string>$(FLUTTER_BUILD_NUMBER)</string>
+
+    <!-- ── Orientation ─────────────────────────────────────────────────── -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- ── Privacy usage descriptions ────────────────────────────────────
+         ALL of these are REQUIRED. The app will crash on iOS if the device
+         tries to use the capability and the description key is absent.
+    ─────────────────────────────────────────────────────────────────────── -->
+
+    <!-- FIX iOS-1: REQUIRED — app crashes without this when camera is used -->
+    <key>NSCameraUsageDescription</key>
+    <string>Real Estate needs camera access to let you photograph and upload property images and videos for your listings.</string>
+
+    <!-- FIX iOS-2: REQUIRED — app crashes without this when photo library is accessed -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Real Estate needs access to your photo library so you can select and upload property images for your listings.</string>
+
+    <!-- Photo library add-only (writing captured photos back) -->
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Real Estate would like to save property photos to your photo library.</string>
+
+    <!-- Location — foreground only -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Real Estate uses your location to show nearby properties and auto-fill your listing's location.</string>
+
+    <!-- Microphone — required if video recording is used -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Real Estate needs microphone access to record audio when you shoot property walkthrough videos.</string>
+
+    <!-- Face ID -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Use Face ID to quickly and securely sign in to Real Estate.</string>
+
+    <!-- Contacts (optional — if your app has a contact-agent feature) -->
+    <!-- Remove if unused to avoid App Review questions -->
+    <!--
+    <key>NSContactsUsageDescription</key>
+    <string>Real Estate can optionally import contact details for agents you work with.</string>
+    -->
+
+    <!-- ── Location always usage — OMIT unless you have background location ─
+         Do NOT add NSLocationAlwaysAndWhenInUseUsageDescription unless you
+         have a specific approved use case. Requiring it without justification
+         causes App Store rejection.
+    ─────────────────────────────────────────────────────────────────────── -->
+
+    <!-- ── Deep links & URL schemes ────────────────────────────────────── -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <!-- App-specific custom scheme -->
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>realestateapp</string>
+            </array>
+        </dict>
+
+        <!-- Google Sign-In reversed client ID -->
+        <!-- FIX iOS-3: Replace REPLACE_WITH_REVERSED_CLIENT_ID with your actual
+             reversed client ID from GoogleService-Info.plist, e.g.:
+             com.googleusercontent.apps.123456789-abcdefghijklmnopqrstuvwxyz012345
+        -->
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>google-signin</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>REPLACE_WITH_REVERSED_CLIENT_ID</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ── Queried URL schemes (iOS 9+ canOpenURL) ─────────────────────── -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>https</string>
+        <string>http</string>
+        <string>tel</string>
+        <string>mailto</string>
+        <string>maps</string>
+        <string>comgooglemaps</string>
+    </array>
+
+    <!-- ── App Transport Security ─────────────────────────────────────── -->
+    <!-- Only whitelist domains you actually need. Do NOT set
+         NSAllowsArbitraryLoads to true in production. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <!-- Supabase project domain — replace with your actual subdomain -->
+            <key>supabase.co</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <false/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
+
+    <!-- ── Misc ────────────────────────────────────────────────────────── -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>remote-notification</string>
+    </array>
+
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+
+    <key>UIMainStoryboardFile</key>
+    <string>Main</string>
+
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+
+    <!-- Prevent AirPlay / external screen mirroring of secure content -->
+    <!-- Set to true only if you need to prevent screen recording -->
+    <!--
+    <key>UIRequiresPersistentWiFi</key>
+    <false/>
+    -->
+
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+</dict>
+</plist>

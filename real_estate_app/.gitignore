@@ -1,0 +1,69 @@
+# ── SECRETS & SIGNING KEYS — NEVER commit these ───────────────────────────────
+android/key.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Environment variables
+assets/.env
+.env
+.env.*
+!.env.example
+
+# ── Miscellaneous ─────────────────────────────────────────────────────────────
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# ── IntelliJ / Android Studio ─────────────────────────────────────────────────
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+#.vscode/
+
+# ── Flutter / Dart / Pub ──────────────────────────────────────────────────────
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# ── Symbolication & Obfuscation ───────────────────────────────────────────────
+app.*.symbols
+app.*.map.json
+
+# ── Android build & local config ──────────────────────────────────────────────
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/local.properties
+/android/.gradle
+
+# ── iOS ───────────────────────────────────────────────────────────────────────
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/flutter_export_environment.sh
+
+# ── Google Services (contain API keys) ───────────────────────────────────────
+google-services.json
+GoogleService-Info.plist
+
+# ── Play Store assets (large binaries, regenerate with generate_assets.py) ────
+playstore_assets/

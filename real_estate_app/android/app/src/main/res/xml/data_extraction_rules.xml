@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Data Extraction Rules for Android 12+ (API 31+)
+    Controls what data can be extracted during device-to-device transfer
+    and cloud backup
+-->
+<data-extraction-rules>
+    
+    <cloud-backup>
+        <!-- Enable cloud backup -->
+        <include 
+            domain="sharedpref" 
+            path="." />
+        
+        <include 
+            domain="database" 
+            path="." />
+        
+        <include 
+            domain="file" 
+            path="." />
+        
+        <!-- Exclude sensitive data from cloud backup -->
+        <exclude 
+            domain="sharedpref" 
+            path="FlutterSecureStorage" />
+        
+        <exclude 
+            domain="sharedpref" 
+            path="auth_token.xml" />
+        
+        <exclude 
+            domain="file" 
+            path="cache/" />
+        
+        <exclude 
+            domain="file" 
+            path="tmp/" />
+    </cloud-backup>
+    
+    <device-transfer>
+        <!-- Device-to-device transfer rules -->
+        <include 
+            domain="sharedpref" 
+            path="." />
+        
+        <include 
+            domain="database" 
+            path="." />
+        
+        <include 
+            domain="file" 
+            path="." />
+        
+        <!-- Exclude sensitive data from device transfer -->
+        <exclude 
+            domain="sharedpref" 
+            path="FlutterSecureStorage" />
+        
+        <exclude 
+            domain="sharedpref" 
+            path="auth_token.xml" />
+        
+        <exclude 
+            domain="file" 
+            path="cache/" />
+    </device-transfer>
+    
+</data-extraction-rules>
+
+<!-- 
+IMPORTANT NOTES:
+
+1. SECURITY:
+   - Never include authentication tokens
+   - Never include API keys
+   - Never include user passwords
+   - Exclude FlutterSecureStorage
+
+2. SIZE LIMITS:
+   - Cloud backup: 25MB limit
+   - Device transfer: No size limit
+   - Compress large files if possible
+
+3. PRIVACY:
+   - Follow Google Play privacy policies
+   - Disclose backup in privacy policy
+   - User data must be encrypted
+
+4. TESTING:
+   Test backup/restore:
+   adb shell bmgr backupnow com.example.real_estate_app
+   adb shell bmgr restore com.example.real_estate_app
+
+LOCATION:
+Save as: android/app/src/main/res/xml/data_extraction_rules.xml
+
+REFERENCE:
+https://developer.android.com/guide/topics/data/autobackup
+-->

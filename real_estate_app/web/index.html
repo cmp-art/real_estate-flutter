@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="Find your dream property. Buy, sell, and rent homes with our comprehensive real estate platform featuring property listings, virtual tours, and instant notifications.">
+  <meta name="keywords" content="real estate, property, buy house, sell house, rent apartment, homes for sale, real estate listings">
+  <meta name="author" content="Makazi Estate">
+  <meta name="robots" content="index, follow">
+  
+  <!-- PWA Primary Meta Tags -->
+  <meta name="application-name" content="Makazi Estate">
+  <meta name="theme-color" content="#0175C2">
+  <meta name="mobile-web-app-capable" content="yes">
+  
+  <!-- iOS Meta Tags & Icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Makazi Estate">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="icons/Icon-192.png">
+  
+  <!-- Android Chrome Meta Tags -->
+  <meta name="theme-color" content="#0175C2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0175C2" media="(prefers-color-scheme: dark)">
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://your-domain.com/">
+  <meta property="og:title" content="Makazi Estate - Buy, Sell &amp; Rent Properties">
+  <meta property="og:description" content="Find your dream property. Buy, sell, and rent homes with our comprehensive real estate platform.">
+  <meta property="og:image" content="icons/Icon-512.png">
+  
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://your-domain.com/">
+  <meta property="twitter:title" content="Makazi Estate - Buy, Sell &amp; Rent Properties">
+  <meta property="twitter:description" content="Find your dream property. Buy, sell, and rent homes with our comprehensive real estate platform.">
+  <meta property="twitter:image" content="icons/Icon-512.png">
+  
+  <!-- Microsoft Tiles -->
+  <meta name="msapplication-TileColor" content="#0175C2">
+  <meta name="msapplication-TileImage" content="icons/Icon-192.png">
+  <meta name="msapplication-config" content="browserconfig.xml">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png"/>
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon.png"/>
+  <link rel="shortcut icon" href="favicon.png">
+
+  <title>Makazi Estate - Buy, Sell &amp; Rent Properties</title>
+  <link rel="manifest" href="manifest.json">
+  
+  <style>
+    /* Loading Spinner Styles */
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #FFFFFF;
+    }
+    
+    .loading-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: #FFFFFF;
+      z-index: 9999;
+    }
+    
+    .loading-logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 20px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #0175C2;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    .loading-text {
+      margin-top: 20px;
+      color: #0175C2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 16px;
+      font-weight: 500;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(0.95); }
+    }
+    
+    /* Hide loading when Flutter is ready */
+    .flutter-ready .loading-container {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div class="loading-container">
+    <img class="loading-logo" src="icons/Icon-192.png" alt="Makazi Estate Logo">
+    <div class="loading-spinner"></div>
+    <p class="loading-text">Loading Makazi Estate...</p>
+  </div>
+
+  <!-- Service Worker & PWA Setup -->
+  <script>
+    // ── Register both service workers ────────────────────────────────────────
+    // Flutter's generated SW handles asset caching; our custom SW handles push.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', async () => {
+        try {
+          // Register our custom service worker (push + cache)
+          const reg = await navigator.serviceWorker.register('service-worker.js', { scope: '/' });
+          console.log('[SW] Custom service-worker.js registered:', reg.scope);
+
+          // Update check
+          reg.addEventListener('updatefound', () => {
+            const nw = reg.installing;
+            nw.addEventListener('statechange', () => {
+              if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                if (confirm('New version available! Reload to update?')) {
+                  nw.postMessage({ type: 'SKIP_WAITING' });
+                  window.location.reload();
+                }
+              }
+            });
+          });
+
+          // Request Web Push permission after Flutter loads
+          window.addEventListener('flutter-first-frame', async () => {
+            if ('Notification' in window && Notification.permission === 'default') {
+              await Notification.requestPermission();
+            }
+          });
+
+        } catch (err) {
+          console.warn('[SW] Registration failed:', err);
+        }
+      });
+    }
+
+    // ── PWA Install Prompt ────────────────────────────────────────────────────
+    let deferredInstallPrompt = null;
+
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      // Flutter can call window.triggerPWAInstall() from a button
+      console.log('[PWA] Install prompt ready');
+    });
+
+    // Expose install trigger so Flutter web can call it
+    window.triggerPWAInstall = async () => {
+      if (!deferredInstallPrompt) return false;
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      return outcome === 'accepted';
+    };
+
+    window.addEventListener('appinstalled', () => {
+      console.log('[PWA] Installed successfully');
+      deferredInstallPrompt = null;
+    });
+
+    // ── Online / Offline banner ───────────────────────────────────────────────
+    const showBanner = (msg, color) => {
+      const b = document.createElement('div');
+      b.textContent = msg;
+      Object.assign(b.style, {
+        position:'fixed', top:0, left:0, right:0, padding:'8px',
+        background: color, color:'#fff', textAlign:'center',
+        fontSize:'14px', zIndex:99999, fontFamily:'sans-serif',
+      });
+      document.body.appendChild(b);
+      setTimeout(() => b.remove(), 3000);
+    };
+
+    window.addEventListener('online',  () => showBanner('Back online ✓', '#22c55e'));
+    window.addEventListener('offline', () => showBanner('You are offline', '#ef4444'));
+  </script>
+
+  <!-- Flutter Bootstrap -->
+  <script src="flutter_bootstrap.js" async></script>
+  
+  <!-- Remove loading screen when Flutter is ready -->
+  <script>
+    window.addEventListener('flutter-first-frame', function() {
+      document.body.classList.add('flutter-ready');
+    });
+  </script>
+</body>
+</html>

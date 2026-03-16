@@ -1,0 +1,69 @@
+{
+    "name": "Makazi Estate - Buy, Sell & Rent Properties",
+    "short_name": "Makazi Estate",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#1A1A2E",
+    "theme_color": "#E94560",
+    "description": "Find your dream property. Buy, sell, and rent homes with our comprehensive real estate platform featuring property listings, virtual tours, and instant notifications.",
+    "orientation": "any",
+    "display_override": ["window-controls-overlay", "standalone", "browser"],
+    "prefer_related_applications": false,
+    "categories": ["business", "lifestyle", "shopping"],
+    "lang": "en-US",
+    "dir": "ltr",
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "Search Properties",
+            "short_name": "Search",
+            "description": "Search for properties",
+            "url": "/search",
+            "icons": [{ "src": "icons/Icon-192.png", "sizes": "192x192" }]
+        },
+        {
+            "name": "My Favorites",
+            "short_name": "Favorites",
+            "description": "View saved properties",
+            "url": "/favorites",
+            "icons": [{ "src": "icons/Icon-192.png", "sizes": "192x192" }]
+        }
+    ],
+    "related_applications": [],
+    "share_target": {
+        "action": "/share",
+        "method": "POST",
+        "enctype": "multipart/form-data",
+        "params": {
+            "title": "title",
+            "text": "text",
+            "url": "url"
+        }
+    }
+}

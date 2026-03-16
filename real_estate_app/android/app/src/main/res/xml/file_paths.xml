@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 
+    File Provider Paths Configuration
+    This file defines which directories the app can share files from
+    Required for sharing images, PDFs, and other files
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Internal storage files directory -->
+    <files-path 
+        name="files" 
+        path="." />
+    
+    <!-- Internal storage cache directory -->
+    <cache-path 
+        name="cache" 
+        path="." />
+    
+    <!-- External storage root directory -->
+    <external-path 
+        name="external" 
+        path="." />
+    
+    <!-- External storage files directory -->
+    <external-files-path 
+        name="external_files" 
+        path="." />
+    
+    <!-- External storage cache directory -->
+    <external-cache-path 
+        name="external_cache" 
+        path="." />
+    
+    <!-- External storage media directory -->
+    <external-media-path 
+        name="external_media" 
+        path="." />
+    
+    <!-- Images directory specifically -->
+    <external-files-path 
+        name="images" 
+        path="Pictures/" />
+    
+    <!-- Documents directory -->
+    <external-files-path 
+        name="documents" 
+        path="Documents/" />
+    
+</paths>
+
+<!-- 
+USAGE IN CODE:
+When sharing files, use FileProvider.getUriForFile():
+
+val file = File(context.cacheDir, "property_image.jpg")
+val uri = FileProvider.getUriForFile(
+    context,
+    "${context.packageName}.fileprovider",
+    file
+)
+
+LOCATION:
+Save this file as: android/app/src/main/res/xml/file_paths.xml
+-->

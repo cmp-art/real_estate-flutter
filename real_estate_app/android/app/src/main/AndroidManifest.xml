@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PRODUCTION FIXES:
+    FIX M-5: Removed ACCESS_BACKGROUND_LOCATION — not needed; Play Store flags it as high-risk.
+    FIX M-6: Removed CALL_PHONE — dangerous permission rejected by Play Store without justification.
+             Use url_launcher with tel: URI instead (no permission needed).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ── Core network ─────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ── Location (foreground only — no background access needed) ─────── -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- REMOVED: android.permission.ACCESS_BACKGROUND_LOCATION (FIX M-5) -->
+
+    <!-- ── Camera & storage ─────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Fallback for Android < 13 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"  android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+    <!-- ── Notifications ─────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- ── Phone (READ_PHONE_STATE for dual-SIM detection only) ──────────── -->
+    <!-- NOTE: CALL_PHONE was removed (FIX M-6). Use url_launcher tel: URI instead.  -->
+    <!--       Example: launchUrl(Uri.parse('tel:+255123456789'))                    -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- ── Biometrics ─────────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+
+    <!-- ── Required features ─────────────────────────────────────────────── -->
+    <uses-feature android:name="android.hardware.camera"          android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps"   android:required="false" />
+
+    <application
+        android:label="Makazi Estate"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:requestLegacyExternalStorage="false">
+
+        <!-- ── Main activity ──────────────────────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+
+            <!-- App launch -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Deep links: realestateapp://... -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="realestateapp" />
+            </intent-filter>
+
+            <!--
+              HTTPS App Links — DISABLED until you own a real domain.
+              "yourdomain.com" is a placeholder; Play Store rejects apps whose
+              autoVerify intent-filters point to domains with no assetlinks.json.
+
+              TO ENABLE before Play Store submission:
+                1. Replace yourdomain.com with your actual domain in both filters below
+                2. Uncomment the intent-filters
+                3. Deploy /.well-known/assetlinks.json on that domain (see README)
+                4. The SHA-256 fingerprint must match your release signing key
+
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="yourdomain.com" />
+            </intent-filter>
+
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="yourdomain.com"
+                      android:pathPrefix="/reset-password" />
+            </intent-filter>
+            -->
+        </activity>
+
+        <!-- Google Sign-In -->
+        <meta-data android:name="com.google.android.gms.version"
+                   android:value="@integer/google_play_services_version" />
+
+        <!-- ── Flutter v2 embedding declaration (required by Flutter 3.3+) ── -->
+        <!-- Without this tag Flutter tools default to v1 and fail the build  -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!--
+          Disable Impeller (Vulkan-based renderer) for emulator compatibility.
+          Flutter 3.22+ enables Impeller by default on Android. x86_64 emulators
+          often have broken Vulkan drivers that crash the native Flutter engine
+          before the Dart VM can emit its service URL to logcat — this is what
+          causes the "Waiting for VM Service port to be available..." hang.
+          Skia (the fallback) works reliably on all emulators.
+          Remove this tag when targeting physical devices in release.
+        -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+
+        <!-- Flutter deferred component loader (if using deferred loading) -->
+        <meta-data
+            android:name="io.flutter.embedding.android.SplashScreenDrawable"
+            android:resource="@drawable/launch_background" />
+
+        <!-- Prevent screenshots / screen recording of sensitive screens -->
+        <!-- Remove this meta-data if you don't need FLAG_SECURE -->
+        <!-- <meta-data android:name="io.flutter.app.android.SplashScreenUntilFirstFrame" android:value="true" /> -->
+
+        <!-- FileProvider for sharing files -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileProvider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+    <!-- Required for flutter_local_notifications on Android 12+ -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+                     android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+</manifest>

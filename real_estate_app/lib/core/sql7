@@ -1,0 +1,548 @@
+-- ============================================================================
+-- REAL ESTATE APP — FILE 2 OF 5: SUBSCRIPTION & PAYMENT SYSTEM
+-- Tables: subscription_tiers, user_subscriptions, usage_tracking,
+--         payment_history
+-- Run this SECOND after 01_core_database_setup.sql
+-- ============================================================================
+
+-- ============================================================================
+-- PART 1: CLEANUP
+-- ============================================================================
+DO $$
+BEGIN
+    DROP TRIGGER IF EXISTS on_auth_user_created          ON auth.users;
+    DROP TRIGGER IF EXISTS sync_tier_name_trigger        ON user_subscriptions;
+    DROP TRIGGER IF EXISTS update_subscription_tiers_updated_at ON subscription_tiers;
+    DROP TRIGGER IF EXISTS update_user_subscriptions_updated_at ON user_subscriptions;
+    DROP TRIGGER IF EXISTS update_usage_tracking_timestamps      ON usage_tracking;
+
+    DROP FUNCTION IF EXISTS create_free_subscription()          CASCADE;
+    DROP FUNCTION IF EXISTS sync_tier_name()                    CASCADE;
+    DROP FUNCTION IF EXISTS increment_usage(UUID,TEXT)          CASCADE;
+    DROP FUNCTION IF EXISTS increment_usage(UUID,TEXT,DATE)     CASCADE;
+    DROP FUNCTION IF EXISTS get_current_usage(UUID,TEXT)        CASCADE;
+    DROP FUNCTION IF EXISTS get_usage_history(UUID,TEXT,DATE,DATE) CASCADE;
+    DROP FUNCTION IF EXISTS reset_daily_usage()                 CASCADE;
+    DROP FUNCTION IF EXISTS check_subscription_expiration()     CASCADE;
+    DROP FUNCTION IF EXISTS update_usage_tracking_timestamps()  CASCADE;
+
+    -- ad_impressions is managed by 03_advertisement_system.sql
+    DROP TABLE IF EXISTS payment_history   CASCADE;
+    DROP TABLE IF EXISTS usage_tracking    CASCADE;
+    DROP TABLE IF EXISTS user_subscriptions CASCADE;
+    DROP TABLE IF EXISTS subscription_tiers CASCADE;
+    RAISE NOTICE 'Cleanup complete';
+END $$;
+
+-- ============================================================================
+-- PART 2: TABLES
+-- ============================================================================
+
+CREATE TABLE subscription_tiers (
+    id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name       TEXT        NOT NULL UNIQUE,
+    price      DECIMAL(10,2) NOT NULL DEFAULT 0,
+    features   JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    limits     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    is_active  BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO subscription_tiers (name, price, features, limits) VALUES
+('free', 0.00,
+ '{"browse_properties":true,"basic_search":true,"create_listing":true,"save_favorites":true,"send_messages":true}'::jsonb,
+ '{"browse_properties":-1,"create_listing":10,"create_listing_image":10,"create_listing_video":0,"save_favorites":5,"send_messages":20}'::jsonb),
+('pro', 29.99,
+ '{"browse_properties":true,"basic_search":true,"advanced_search":true,"create_listing":true,"save_favorites":true,"send_messages":true,"analytics_dashboard":true,"advanced_analytics":true,"priority_listing":true,"featured_badge":true,"priority_support":true,"no_ads":true}'::jsonb,
+ '{"browse_properties":-1,"create_listing":-1,"create_listing_image":-1,"create_listing_video":-1,"save_favorites":-1,"send_messages":-1}'::jsonb)
+ON CONFLICT (name) DO UPDATE SET
+    price = EXCLUDED.price, features = EXCLUDED.features,
+    limits = EXCLUDED.limits, updated_at = NOW();
+
+-- Remove basic tier if it exists from a previous deployment
+DELETE FROM subscription_tiers WHERE name = 'basic';
+
+CREATE TABLE user_subscriptions (
+    id                    UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id               UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    tier_id               UUID        NOT NULL REFERENCES subscription_tiers(id) ON DELETE RESTRICT,
+    tier                  TEXT        NOT NULL DEFAULT 'free',
+    status                TEXT        NOT NULL DEFAULT 'active'
+                          CHECK (status IN ('active','cancelled','expired')),
+    started_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at            TIMESTAMPTZ NOT NULL,
+    auto_renew            BOOLEAN     NOT NULL DEFAULT TRUE,
+    payment_provider_id   TEXT,
+    stripe_customer_id    TEXT,
+    stripe_subscription_id TEXT,
+    payment_method        TEXT,
+    last_payment_date     TIMESTAMPTZ,
+    next_billing_date     TIMESTAMPTZ,
+    cancelled_at          TIMESTAMPTZ,
+    cancelled_by          UUID,
+    cancellation_reason   TEXT,
+    created_at            TIMESTAMPTZ DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+DROP INDEX IF EXISTS idx_user_subscriptions_active_unique;
+CREATE UNIQUE INDEX idx_user_subscriptions_active_unique
+    ON user_subscriptions(user_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user_id  ON user_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status   ON user_subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_tier_id  ON user_subscriptions(tier_id);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_tier     ON user_subscriptions(tier);
+
+CREATE TABLE usage_tracking (
+    id           UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID    NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    feature_name TEXT    NOT NULL,
+    usage_count  INTEGER NOT NULL DEFAULT 0,
+    date         DATE    NOT NULL DEFAULT CURRENT_DATE,
+    reset_at     TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, feature_name, date),
+    CONSTRAINT positive_usage CHECK (usage_count >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_tracking_user_id          ON usage_tracking(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_tracking_date             ON usage_tracking(date);
+CREATE INDEX IF NOT EXISTS idx_usage_tracking_feature          ON usage_tracking(feature_name);
+CREATE INDEX IF NOT EXISTS idx_usage_tracking_user_feature_date ON usage_tracking(user_id, feature_name, date);
+CREATE INDEX IF NOT EXISTS idx_usage_tracking_last_used        ON usage_tracking(last_used_at DESC);
+
+CREATE TABLE payment_history (
+    id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id           UUID        REFERENCES auth.users(id) ON DELETE CASCADE,
+    stripe_payment_id TEXT        NOT NULL,
+    amount            DECIMAL(10,2) NOT NULL,
+    currency          TEXT        DEFAULT 'USD',
+    status            TEXT        NOT NULL,
+    tier              TEXT        NOT NULL,
+    billing_cycle     TEXT        NOT NULL,
+    paid_at           TIMESTAMPTZ DEFAULT NOW(),
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_history_user_id    ON payment_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_history_created_at ON payment_history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_id  ON payment_history(stripe_payment_id);
+
+
+-- ============================================================================
+-- PART 3: FUNCTIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION sync_tier_name()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT name INTO NEW.tier FROM subscription_tiers WHERE id = NEW.tier_id;
+    ELSIF NEW.tier_id IS DISTINCT FROM OLD.tier_id THEN
+        SELECT name INTO NEW.tier FROM subscription_tiers WHERE id = NEW.tier_id;
+    ELSIF NEW.tier IS DISTINCT FROM OLD.tier THEN
+        SELECT id INTO NEW.tier_id FROM subscription_tiers WHERE name = NEW.tier LIMIT 1;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION create_free_subscription()
+RETURNS TRIGGER AS $$
+DECLARE v_free_tier_id UUID;
+BEGIN
+    SELECT id INTO v_free_tier_id FROM subscription_tiers WHERE name='free' LIMIT 1;
+    IF v_free_tier_id IS NULL THEN
+        RAISE EXCEPTION 'Free tier not found in subscription_tiers table';
+    END IF;
+    INSERT INTO user_subscriptions (user_id, tier_id, status, started_at, expires_at, auto_renew)
+    VALUES (NEW.id, v_free_tier_id, 'active', NOW(), NOW() + INTERVAL '100 years', FALSE)
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION increment_usage(
+    p_user_id      UUID,
+    p_feature_name TEXT,
+    p_date         DATE DEFAULT (NOW() AT TIME ZONE 'UTC')::DATE
+)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    INSERT INTO usage_tracking (user_id, feature_name, usage_count, date, created_at, updated_at, last_used_at)
+    VALUES (p_user_id, p_feature_name, 1, p_date, NOW(), NOW(), NOW())
+    ON CONFLICT (user_id, feature_name, date) DO UPDATE SET
+        usage_count  = usage_tracking.usage_count + 1,
+        last_used_at = NOW(),
+        updated_at   = NOW();
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'Error incrementing usage for user %: %', p_user_id, SQLERRM;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_current_usage(p_user_id UUID, p_feature_name TEXT)
+RETURNS INTEGER AS $$
+DECLARE v_count INTEGER;
+BEGIN
+    SELECT COALESCE(usage_count, 0) INTO v_count
+    FROM usage_tracking
+    WHERE user_id = p_user_id AND feature_name = p_feature_name AND date = CURRENT_DATE;
+    RETURN COALESCE(v_count, 0);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION get_usage_history(
+    p_user_id UUID, p_feature_name TEXT, p_start_date DATE, p_end_date DATE
+)
+RETURNS TABLE(date DATE, usage_count INTEGER) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT ut.date, ut.usage_count FROM usage_tracking ut
+    WHERE ut.user_id = p_user_id AND ut.feature_name = p_feature_name
+      AND ut.date BETWEEN p_start_date AND p_end_date
+    ORDER BY ut.date;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION reset_daily_usage()
+RETURNS void AS $$
+BEGIN
+    DELETE FROM usage_tracking WHERE date < CURRENT_DATE - INTERVAL '30 days';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION check_subscription_expiration()
+RETURNS void AS $$
+BEGIN
+    UPDATE user_subscriptions SET status='expired'
+    WHERE status='active' AND expires_at < NOW() AND auto_renew = FALSE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION update_usage_tracking_timestamps()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at   = NOW();
+    NEW.last_used_at = NOW();
+    IF TG_OP = 'INSERT' AND NEW.date IS NULL THEN
+        NEW.date = (NOW() AT TIME ZONE 'UTC')::DATE;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Cancel subscription (self-service)
+DROP FUNCTION IF EXISTS cancel_user_subscription(UUID,UUID,TEXT) CASCADE;
+
+CREATE OR REPLACE FUNCTION cancel_user_subscription(
+    p_subscription_id UUID, p_user_id UUID, p_reason TEXT DEFAULT NULL
+)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_sub user_subscriptions%ROWTYPE;
+BEGIN
+    SELECT * INTO v_sub FROM user_subscriptions
+    WHERE id = p_subscription_id AND user_id = p_user_id AND status = 'active';
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Active subscription not found');
+    END IF;
+    UPDATE user_subscriptions SET
+        status = 'cancelled', cancelled_at = NOW(), cancelled_by = p_user_id,
+        cancellation_reason = p_reason, auto_renew = FALSE, updated_at = NOW()
+    WHERE id = p_subscription_id;
+    RETURN jsonb_build_object('success', true,
+        'message', 'Subscription cancelled. Access continues until expiry date.',
+        'expires_at', v_sub.expires_at);
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$$;
+
+-- ============================================================================
+-- CHECK PROPERTY CREATION LIMITS
+-- ============================================================================
+CREATE OR REPLACE FUNCTION check_property_creation_allowed(
+    p_user_id    UUID,
+    p_has_video  BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+    v_tier         TEXT;
+    v_total_props  INTEGER;
+    v_max_props    INTEGER;
+BEGIN
+    -- Get user's active tier
+    SELECT st.name INTO v_tier
+    FROM   user_subscriptions us
+    JOIN   subscription_tiers st ON st.id = us.tier_id
+    WHERE  us.user_id = p_user_id AND us.status = 'active'
+    LIMIT  1;
+
+    v_tier := COALESCE(v_tier, 'free');
+
+    -- Pro users: unlimited everything
+    IF v_tier = 'pro' THEN
+        RETURN jsonb_build_object('allowed', true, 'tier', v_tier,
+            'reason', NULL, 'current', 0, 'max', -1);
+    END IF;
+
+    -- Free users: no video properties allowed
+    IF p_has_video THEN
+        RETURN jsonb_build_object(
+            'allowed', false,
+            'tier', v_tier,
+            'reason', 'Video properties require a Pro subscription. Upgrade to Pro to add video listings.',
+            'current', 0,
+            'max', 0,
+            'upgrade_required', true
+        );
+    END IF;
+
+    -- Free users: max 10 image properties (total active, non-deleted)
+    SELECT COUNT(*) INTO v_total_props
+    FROM   properties
+    WHERE  owner_id   = p_user_id
+      AND  deleted_at IS NULL;
+
+    v_max_props := 10;
+
+    IF v_total_props >= v_max_props THEN
+        RETURN jsonb_build_object(
+            'allowed', false,
+            'tier', v_tier,
+            'reason', 'Free accounts can create up to ' || v_max_props || ' property listings. Upgrade to Pro for unlimited listings.',
+            'current', v_total_props,
+            'max', v_max_props,
+            'upgrade_required', true
+        );
+    END IF;
+
+    RETURN jsonb_build_object('allowed', true, 'tier', v_tier,
+        'reason', NULL, 'current', v_total_props, 'max', v_max_props);
+END;
+$$;
+
+-- ============================================================================
+-- PART 4: TRIGGERS
+-- ============================================================================
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users FOR EACH ROW
+    EXECUTE FUNCTION create_free_subscription();
+
+DROP TRIGGER IF EXISTS sync_tier_name_trigger ON user_subscriptions;
+CREATE TRIGGER sync_tier_name_trigger
+    BEFORE INSERT OR UPDATE OF tier_id, tier ON user_subscriptions FOR EACH ROW
+    EXECUTE FUNCTION sync_tier_name();
+
+DROP TRIGGER IF EXISTS update_subscription_tiers_updated_at ON subscription_tiers;
+CREATE TRIGGER update_subscription_tiers_updated_at
+    BEFORE UPDATE ON subscription_tiers FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_user_subscriptions_updated_at ON user_subscriptions;
+CREATE TRIGGER update_user_subscriptions_updated_at
+    BEFORE UPDATE ON user_subscriptions FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_usage_tracking_timestamps ON usage_tracking;
+CREATE TRIGGER update_usage_tracking_timestamps
+    BEFORE INSERT OR UPDATE ON usage_tracking FOR EACH ROW
+    EXECUTE FUNCTION update_usage_tracking_timestamps();
+
+-- ============================================================================
+-- PART 5: ROW LEVEL SECURITY
+-- ============================================================================
+
+ALTER TABLE subscription_tiers  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_subscriptions  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usage_tracking      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_history     ENABLE ROW LEVEL SECURITY;
+
+-- Drop old policies
+DROP POLICY IF EXISTS "Allow public read access to subscription tiers"  ON subscription_tiers;
+DROP POLICY IF EXISTS "Anyone can view active subscription tiers"        ON subscription_tiers;
+DROP POLICY IF EXISTS "Service role can manage subscription tiers"       ON subscription_tiers;
+DROP POLICY IF EXISTS "Users can view their own subscriptions"           ON user_subscriptions;
+DROP POLICY IF EXISTS "Users can insert their own subscriptions"         ON user_subscriptions;
+DROP POLICY IF EXISTS "Users can update their own subscriptions"         ON user_subscriptions;
+DROP POLICY IF EXISTS "Service role can manage all subscriptions"        ON user_subscriptions;
+DROP POLICY IF EXISTS "Users can view their own usage"                   ON usage_tracking;
+DROP POLICY IF EXISTS "Users can insert their own usage"                 ON usage_tracking;
+DROP POLICY IF EXISTS "Users can update their own usage"                 ON usage_tracking;
+DROP POLICY IF EXISTS "Service role can manage usage tracking"           ON usage_tracking;
+DROP POLICY IF EXISTS "Users can view own payment history"               ON payment_history;
+DROP POLICY IF EXISTS "Service role can insert payment history"          ON payment_history;
+
+-- Subscription tiers
+CREATE POLICY "Anyone can view active subscription tiers"
+    ON subscription_tiers FOR SELECT TO authenticated USING (is_active = TRUE);
+CREATE POLICY "Service role can manage subscription tiers"
+    ON subscription_tiers FOR ALL TO service_role USING (TRUE) WITH CHECK (TRUE);
+
+-- User subscriptions
+CREATE POLICY "Users can view their own subscriptions"
+    ON user_subscriptions FOR SELECT TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own subscriptions"
+    ON user_subscriptions FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own subscriptions"
+    ON user_subscriptions FOR UPDATE TO authenticated
+    USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Service role can manage all subscriptions"
+    ON user_subscriptions FOR ALL TO service_role USING (TRUE) WITH CHECK (TRUE);
+
+-- Usage tracking
+CREATE POLICY "Users can view their own usage"
+    ON usage_tracking FOR SELECT TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own usage"
+    ON usage_tracking FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own usage"
+    ON usage_tracking FOR UPDATE TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Service role can manage usage tracking"
+    ON usage_tracking FOR ALL TO service_role USING (TRUE) WITH CHECK (TRUE);
+
+-- Payment history
+CREATE POLICY "Users can view own payment history"
+    ON payment_history FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Service role can insert payment history"
+    ON payment_history FOR INSERT WITH CHECK (TRUE);
+
+-- ============================================================================
+-- PART 6: GRANTS
+-- ============================================================================
+
+GRANT SELECT                  ON subscription_tiers  TO authenticated;
+GRANT SELECT, INSERT, UPDATE  ON user_subscriptions  TO authenticated;
+GRANT SELECT, INSERT, UPDATE  ON usage_tracking      TO authenticated;
+GRANT SELECT                  ON payment_history     TO authenticated;
+
+GRANT ALL ON subscription_tiers TO service_role;
+GRANT ALL ON user_subscriptions  TO service_role;
+GRANT ALL ON usage_tracking      TO service_role;
+GRANT ALL ON payment_history     TO service_role;
+
+GRANT EXECUTE ON FUNCTION check_property_creation_allowed(UUID, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION increment_usage(UUID, TEXT, DATE)    TO authenticated;
+GRANT EXECUTE ON FUNCTION cancel_user_subscription(UUID,UUID,TEXT) TO authenticated;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- VERIFICATION
+-- ============================================================================
+DO $$
+DECLARE v_tiers INT; v_policies INT;
+BEGIN
+    SELECT COUNT(*) INTO v_tiers   FROM subscription_tiers;
+    SELECT COUNT(*) INTO v_policies FROM pg_policies
+        WHERE tablename IN ('subscription_tiers','user_subscriptions','usage_tracking','payment_history');
+    RAISE NOTICE '=== FILE 2: SUBSCRIPTION SYSTEM COMPLETE ===';
+    RAISE NOTICE '  Tiers: %  RLS policies: %', v_tiers, v_policies;
+END $$;
+-- ============================================================================
+-- EXTENSION B: APP CONFIG, PAYMENT RECORDS & AGENT VERIFICATION
+-- (Appended to sql7 — runs after subscription system above)
+-- ============================================================================
+
+-- ── App Config (remote feature flags, min version, limits) ──────────────────
+CREATE TABLE IF NOT EXISTS app_config (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    description TEXT,
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO app_config(key, value, description) VALUES
+    ('maintenance_mode',         'false',  'Set true to show maintenance screen'),
+    ('min_app_version',          '1.0.0',  'Minimum supported app version'),
+    ('max_free_listings',        '3',      'Free-tier property listing limit'),
+    ('max_basic_listings',       '10',     'Basic-tier property listing limit'),
+    ('max_pro_listings',         '100',    'Pro-tier property listing limit'),
+    ('featured_listing_price',   '15000',  'Cost in TZS to feature a listing for 30 days'),
+    ('price_drop_alert_cooldown','24',     'Hours between price-drop alerts per property'),
+    ('ad_min_budget_tzs',        '5000',   'Minimum ad campaign budget in TZS'),
+    ('support_whatsapp',         '',       'Support WhatsApp number'),
+    ('support_email',            '',       'Support email address'),
+    ('selcom_env',               'sandbox','sandbox or live')
+ON CONFLICT (key) DO NOTHING;
+
+ALTER TABLE app_config ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read app config" ON app_config;
+DROP POLICY IF EXISTS "Super admin write config" ON app_config;
+CREATE POLICY "Public read app config"   ON app_config FOR SELECT USING (TRUE);
+CREATE POLICY "Super admin write config" ON app_config FOR ALL USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role = 'super_admin'));
+
+-- ── Payment Records (Selcom audit trail) ─────────────────────────────────────
+CREATE TABLE IF NOT EXISTS payment_records (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    order_id        TEXT        UNIQUE NOT NULL,
+    amount          DECIMAL(15,2) NOT NULL,
+    currency        TEXT        DEFAULT 'TZS',
+    status          TEXT        DEFAULT 'pending'
+                        CHECK (status IN ('pending','completed','failed','refunded','cancelled')),
+    payment_method  TEXT        DEFAULT 'selcom',
+    metadata        JSONB       DEFAULT '{}'::JSONB,
+    selcom_response JSONB       DEFAULT '{}'::JSONB,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_records_user_id  ON payment_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_records_order_id ON payment_records(order_id);
+CREATE INDEX IF NOT EXISTS idx_payment_records_status   ON payment_records(status);
+
+ALTER TABLE payment_records ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users view own payments"      ON payment_records;
+DROP POLICY IF EXISTS "Admins view all payments"     ON payment_records;
+DROP POLICY IF EXISTS "Service role insert payments" ON payment_records;
+CREATE POLICY "Users view own payments"  ON payment_records FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Admins view all payments" ON payment_records FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role IN ('admin','super_admin')));
+-- Backend (service role) inserts/updates — no RLS restriction for service role key
+
+-- ── Agent Verifications ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agent_verifications (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID        UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name       TEXT        NOT NULL,
+    agency_name     TEXT,
+    license_number  TEXT,
+    id_document_url TEXT,
+    license_url     TEXT,
+    status          TEXT        DEFAULT 'pending'
+                        CHECK (status IN ('pending','verified','rejected','suspended')),
+    rejection_reason TEXT,
+    reviewed_by     UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    reviewed_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_verif_user_id ON agent_verifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_agent_verif_status  ON agent_verifications(status);
+
+-- Helper: check if a user is a verified agent
+CREATE OR REPLACE FUNCTION is_verified_agent(p_user_id UUID)
+RETURNS BOOLEAN LANGUAGE SQL STABLE SECURITY DEFINER AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM agent_verifications
+        WHERE user_id = p_user_id AND status = 'verified'
+    );
+$$;
+GRANT EXECUTE ON FUNCTION is_verified_agent(UUID) TO authenticated, anon;
+
+ALTER TABLE agent_verifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own verification"  ON agent_verifications;
+DROP POLICY IF EXISTS "Admins manage verifications"    ON agent_verifications;
+CREATE POLICY "Users manage own verification" ON agent_verifications
+    USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Admins manage verifications"   ON agent_verifications FOR ALL USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role IN ('admin','super_admin')));
+
+RAISE NOTICE '✅ sql7 Extension B: app_config, payment_records, agent_verifications — DONE';
