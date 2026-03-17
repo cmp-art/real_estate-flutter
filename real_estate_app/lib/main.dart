@@ -48,20 +48,20 @@ void main() async {
 
   // Overlay --dart-define values (production/Netlify) over any .env values.
   // String.fromEnvironment reads values compiled in via --dart-define at build time.
-  const _defineSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
-  const _defineAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
-  const _defineGoogleClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
+  const defineSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
+  const defineAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  const defineGoogleClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
 
-  if (_defineSupabaseUrl.isNotEmpty) {
-    dotenv.env['SUPABASE_URL'] = _defineSupabaseUrl;
+  if (defineSupabaseUrl.isNotEmpty) {
+    dotenv.env['SUPABASE_URL'] = defineSupabaseUrl;
     logger.d('SUPABASE_URL loaded from --dart-define');
   }
-  if (_defineAnonKey.isNotEmpty) {
-    dotenv.env['SUPABASE_ANON_KEY'] = _defineAnonKey;
+  if (defineAnonKey.isNotEmpty) {
+    dotenv.env['SUPABASE_ANON_KEY'] = defineAnonKey;
     logger.d('SUPABASE_ANON_KEY loaded from --dart-define');
   }
-  if (_defineGoogleClientId.isNotEmpty) {
-    dotenv.env['GOOGLE_WEB_CLIENT_ID'] = _defineGoogleClientId;
+  if (defineGoogleClientId.isNotEmpty) {
+    dotenv.env['GOOGLE_WEB_CLIENT_ID'] = defineGoogleClientId;
   }
 
   _verifyEnvironmentVariables();
@@ -163,7 +163,7 @@ void main() async {
         ),
       ),
     );
-    return; // Stop main() — do not proceed to runApp(RealEstateApp)
+    return; // Stop main() — do not proceed to runApp(PatamjengoApp)
   }
 
   // ========================================
@@ -246,7 +246,7 @@ void main() async {
         errorLoggingServiceProvider.overrideWithValue(errorLoggingService),
         performanceMonitorProvider.overrideWithValue(performanceMonitor),
       ],
-      child: const RealEstateApp(),
+      child: const PatamjengoApp(),
     ),
   );
 }
@@ -363,15 +363,13 @@ Future<void> _handleDeepLink(Uri uri) async {
   }
 
   // ── OAuth login callback (Google Sign-In via Supabase redirect) ───────────
-  // Deep link: realestateapp://login-callback?code=<pkce-code>
-  if (uri.scheme == 'realestateapp' && uri.host == 'login-callback') {
-    logger.d('🔑 OAuth login callback – exchanging PKCE code for session');
-    try {
-      await supabase.auth.getSessionFromUrl(uri);
-      logger.d('✅ OAuth session established');
-    } catch (e) {
-      logger.e('Failed to exchange OAuth login callback code', error: e);
-    }
+  // Deep link: patamjengo://login-callback?code=<pkce-code>
+  // NOTE: supabase_flutter v2 automatically handles this deep link internally
+  // via its own app_links listener and calls getSessionFromUrl() itself.
+  // We must NOT call getSessionFromUrl() here — doing so would double-consume
+  // the single-use PKCE code and cause "flow_state_not_found".
+  if (uri.scheme == 'patamjengo' && uri.host == 'login-callback') {
+    logger.d('🔑 OAuth login callback received – handled internally by supabase_flutter');
     return;
   }
 }

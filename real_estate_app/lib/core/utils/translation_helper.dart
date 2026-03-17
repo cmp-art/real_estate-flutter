@@ -3,7 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:real_estate_app/features/settings/presentation/screens/app_translations.dart';
+import 'package:patamjengo_app/features/settings/presentation/screens/app_translations.dart';
 import '../../features/settings/presentation/providers/app_providers.dart';
 
 

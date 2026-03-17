@@ -70,8 +70,8 @@ class PushNotificationService {
     if (!_initialized) await initialize();
 
     const androidDetails = AndroidNotificationDetails(
-      'makazi_estate_main',
-      'Makazi Estate Alerts',
+      'patamjengo_main',
+      'Patamjengo Alerts',
       channelDescription:
           'Property price drops, new listings, messages, and system alerts',
       importance: Importance.high,

@@ -1,10 +1,10 @@
-// Makazi Estate - Service Worker
+// Patamjengo - Service Worker
 // Provides offline support and caching for PWA
 
-const CACHE_VERSION = 'makazi-estate-v1.0.0';
-const CACHE_NAME = `makazi-estate-cache-${CACHE_VERSION}`;
-const RUNTIME_CACHE = 'makazi-estate-runtime';
-const IMAGE_CACHE = 'makazi-estate-images';
+const CACHE_VERSION = 'patamjengo-v1.0.0';
+const CACHE_NAME = `patamjengo-cache-${CACHE_VERSION}`;
+const RUNTIME_CACHE = 'patamjengo-runtime';
+const IMAGE_CACHE = 'patamjengo-images';
 
 // Assets to cache immediately on install
 const PRECACHE_URLS = [
@@ -284,7 +284,7 @@ self.addEventListener('push', (event) => {
   console.log('[Service Worker] Push received');
   
   const data = event.data ? event.data.json() : {};
-  const title = data.title || 'Makazi Estate';
+  const title = data.title || 'Patamjengo';
   const options = {
     body: data.body || 'New notification',
     icon: '/icons/Icon-192.png',

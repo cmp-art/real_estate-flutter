@@ -2,8 +2,8 @@
 // Unit tests for PropertyEntity domain model — pure Dart, no widgets.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:real_estate_app/features/properties/domain/entities/property_entity.dart';
-import 'package:real_estate_app/core/constants/app_constants.dart';
+import 'package:patamjengo_app/features/properties/domain/entities/property_entity.dart';
+import 'package:patamjengo_app/core/constants/app_constants.dart';
 
 PropertyEntity _makeProperty({
   PropertyType type = PropertyType.sale,

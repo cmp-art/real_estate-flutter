@@ -26,13 +26,13 @@ void main() {
       const MaterialApp(
         home: Scaffold(
           body: Center(
-            child: Text('Makazi Estate'),
+            child: Text('Patamjengo'),
           ),
         ),
       ),
     );
 
-    expect(find.text('Makazi Estate'), findsOneWidget);
+    expect(find.text('Patamjengo'), findsOneWidget);
   });
 
   testWidgets('Card renders title and price', (WidgetTester tester) async {

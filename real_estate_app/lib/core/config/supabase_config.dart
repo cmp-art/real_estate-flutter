@@ -26,9 +26,9 @@ class SupabaseConfig {
   static const String profileImagesBucket = 'profile-images';
 
   // ── Deep-link scheme for auth callbacks ──────────────────────────────────
-  // Must match the <data android:scheme="realestateapp" /> intent-filter
+  // Must match the <data android:scheme="patamjengo" /> intent-filter
   // and the Supabase Dashboard → Auth → URL Configuration redirect URL.
-  static const String deepLinkScheme = 'realestateapp';
+  static const String deepLinkScheme = 'patamjengo';
   static const String resetPasswordPath = 'reset-password';
   static const String resetCallbackPath = 'reset-callback';
 

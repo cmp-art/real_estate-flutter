@@ -4,6 +4,7 @@
 // ignore_for_file: unused_catch_stack
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState;
 import '../../core/utils/logger.dart';
 import '../../features/settings/presentation/providers/app_providers.dart';
 import '../../features/subscriptions/data/models/subscription_model.dart';
@@ -79,7 +80,10 @@ class AuthNotifier extends StateNotifier<AsyncValue<UserEntity?>> {
     return result.fold(
       (failure) {
         _logger.e('Google Sign-In failed: ${failure.message}');
-        state = AsyncValue.error(failure.message, StackTrace.current);
+        // Keep state as data(null) so AuthWrapper stays on LoginScreen without
+        // flashing an error. The caller (_handleGoogleSignIn) will fall back to
+        // Chrome Custom Tabs — we only want error state for actual cancellations.
+        state = const AsyncValue.data(null);
         return false;
       },
       (user) async {
@@ -107,7 +111,8 @@ class AuthNotifier extends StateNotifier<AsyncValue<UserEntity?>> {
     );
   } catch (e, stack) {
     _logger.e('Google Sign-In exception: $e', error: e, stackTrace: stack);
-    state = AsyncValue.error(e, stack);
+    // Keep data(null) so Chrome Custom Tabs fallback can proceed cleanly
+    state = const AsyncValue.data(null);
     return false;
   }
 }
@@ -425,15 +430,20 @@ Future<bool> logout() async {
   }
 
   Future<void> refreshUser() async {
+    if (!mounted) return;
     try {
       _logger.i('🔄 Refresh User Data');
-      
+      // Signal loading so AuthWrapper shows SplashScreen and doesn't
+      // schedule another refresh while this one is in-flight.
+      state = const AsyncValue.loading();
+
       final result = await _repository.getCurrentUser();
 
       if (mounted) {
         result.fold(
           (failure) {
             _logger.e('❌ Refresh failed: ${failure.message}');
+            state = const AsyncValue.data(null);
           },
           (user) {
             if (user != null) {
@@ -441,12 +451,14 @@ Future<bool> logout() async {
               state = AsyncValue.data(user);
             } else {
               _logger.i('ℹ️ No user found during refresh');
+              state = const AsyncValue.data(null);
             }
           },
         );
       }
     } catch (e) {
       _logger.e('❌ Refresh exception: $e', error: e);
+      if (mounted) state = const AsyncValue.data(null);
     }
   }
 }
@@ -455,4 +467,11 @@ Future<bool> logout() async {
 final authNotifierProvider =
     StateNotifierProvider<AuthNotifier, AsyncValue<UserEntity?>>((ref) {
   return AuthNotifier(ref.read(authRepositoryProvider));
+});
+
+// Watches the raw Supabase auth stream so that any widget watching this
+// provider rebuilds immediately when the session changes (sign-in, sign-out,
+// token refresh, OAuth callback, etc.) — independent of authNotifierProvider.
+final supabaseAuthStreamProvider = StreamProvider<AuthState>((ref) {
+  return supabase.auth.onAuthStateChange;
 });

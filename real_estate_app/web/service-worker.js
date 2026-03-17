@@ -1,7 +1,7 @@
-// service-worker.js — Makazi Estate PWA
+// service-worker.js — Patamjengo PWA
 // Handles: caching, offline fallback, Web Push notifications (Supabase-powered)
 
-const CACHE_NAME    = 'makazi-estate-v2';
+const CACHE_NAME    = 'patamjengo-v2';
 const OFFLINE_URL   = '/index.html';
 
 const PRECACHE_URLS = [
@@ -65,7 +65,7 @@ self.addEventListener('message', event => {
 // The server stores VAPID public key in Supabase app_config.
 // The Edge Function calls web-push library with the stored subscription.
 self.addEventListener('push', event => {
-  let data = { title: 'Makazi Estate', body: 'You have a new notification.' };
+  let data = { title: 'Patamjengo', body: 'You have a new notification.' };
   try {
     data = event.data ? event.data.json() : data;
   } catch (_) {

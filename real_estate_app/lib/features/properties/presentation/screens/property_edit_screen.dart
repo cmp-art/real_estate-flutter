@@ -4,7 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
-import 'package:real_estate_app/presentation/providers/auth_provider.dart';
+import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../core/utils/image_helper.dart';

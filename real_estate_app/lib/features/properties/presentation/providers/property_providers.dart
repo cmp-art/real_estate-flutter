@@ -2,8 +2,8 @@
 // COMPLETE FIXED VERSION - All errors resolved
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:real_estate_app/presentation/providers/auth_provider.dart';
-import 'package:real_estate_app/main.dart';
+import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
+import 'package:patamjengo_app/main.dart';
 
 import '../../data/datasources/property_remote_datasource.dart';
 import '../../data/repositories/property_repository_impl.dart';

@@ -2,7 +2,7 @@
 // Unit tests for Formatters utility — no Flutter widgets needed.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:real_estate_app/core/utils/formatters.dart';
+import 'package:patamjengo_app/core/utils/formatters.dart';
 
 void main() {
   group('Formatters.formatCurrency', () {

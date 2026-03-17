@@ -105,7 +105,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
             ),
             const SizedBox(height: 32),
             const Text(
-              'Makazi Estate',
+              'Patamjengo',
               style: TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,

@@ -2,7 +2,7 @@
 // FIXED VERSION - Added missing PropertyCategory enum
 
 class AppConstants {
-  static const String appName = 'Makazi Estate';
+  static const String appName = 'Patamjengo';
   static const String appVersion = '1.0.0';
   static const int defaultPageSize = 20;
   static const int maxPageSize = 50;

@@ -45,7 +45,7 @@
     <uses-feature android:name="android.hardware.location.gps"   android:required="false" />
 
     <application
-        android:label="Makazi Estate"
+        android:label="Patamjengo"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
@@ -76,12 +76,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Deep links: realestateapp://... -->
+            <!-- Deep links: patamjengo://... -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="realestateapp" />
+                <data android:scheme="patamjengo" />
             </intent-filter>
 
             <!--

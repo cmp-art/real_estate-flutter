@@ -1,4 +1,4 @@
-package com.makaziestate.app
+package com.patamjengo.app
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 

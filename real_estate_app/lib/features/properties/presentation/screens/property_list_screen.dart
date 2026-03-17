@@ -373,7 +373,7 @@ ${property.title}
 
 View full details: https://yourapp.com/property/${property.id}
 
-Shared via Makazi Estate
+Shared via Patamjengo
 ''';
 
     Share.share(shareText, subject: property.title);

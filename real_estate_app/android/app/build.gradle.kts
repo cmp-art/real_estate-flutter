@@ -16,7 +16,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.makaziestate.app"
+    namespace = "com.patamjengo.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -33,7 +33,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.makaziestate.app"
+        applicationId = "com.patamjengo.app"
         // Hardcoded to 21 for flutter_stripe and other plugin compatibility
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion

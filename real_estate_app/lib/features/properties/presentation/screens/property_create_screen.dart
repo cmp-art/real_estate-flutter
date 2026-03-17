@@ -8,7 +8,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:video_compress/video_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:real_estate_app/presentation/providers/auth_provider.dart';
+import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';

@@ -16,7 +16,7 @@ class AppLocalizations {
   static final Map<String, Map<String, String>> _localizedValues = {
     'en': {
       // Common
-      'app_name': 'Makazi Estate',
+      'app_name': 'Patamjengo',
       'welcome': 'Welcome',
       'hello': 'Hello',
       

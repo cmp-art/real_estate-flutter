@@ -387,15 +387,16 @@ class AuthRemoteDataSource {
       final currentSession = supabaseClient.auth.currentSession;
       logger.d('Current session exists: ${currentSession != null}');
 
-      // Sign out from Google if signed in
+      // Sign out from Google — disconnect() revokes tokens fully so the next
+      // signIn() always shows a fresh account-picker instead of silently
+      // reusing a stale cached credential that Supabase may reject.
       try {
-        if (await _googleSignIn.isSignedIn()) {
-          await _googleSignIn.signOut();
-          logger.d('✅ Signed out from Google');
-        }
+        await _googleSignIn.signOut();
+        await _googleSignIn.disconnect();
+        logger.d('✅ Signed out and disconnected from Google');
       } catch (e) {
         logger.w('⚠️ Google sign out warning: $e');
-        // Continue with Supabase logout even if Google fails
+        // Continue with Supabase logout even if Google disconnect fails
       }
 
       // Sign out from Supabase

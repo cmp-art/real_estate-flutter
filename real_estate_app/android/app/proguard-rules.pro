@@ -256,9 +256,9 @@
 # CUSTOM MODELS
 # ========================================
 # If you have custom model classes, keep them
-# Replace 'com.makaziestate.app.models' with your package
--keep class com.makaziestate.app.models.** { *; }
--keep class com.makaziestate.app.data.** { *; }
+# Replace 'com.patamjengo.app.models' with your package
+-keep class com.patamjengo.app.models.** { *; }
+-keep class com.patamjengo.app.data.** { *; }
 
 # ========================================
 # NOTES

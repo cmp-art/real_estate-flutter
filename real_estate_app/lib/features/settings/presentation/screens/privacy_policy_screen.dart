@@ -1,6 +1,6 @@
 // lib/features/settings/presentation/screens/privacy_policy_screen.dart
 //
-// Displays the Makazi Estate Privacy Policy inside the app.
+// Displays the Patamjengo Privacy Policy inside the app.
 // On Android/iOS  → loads the bundled HTML asset via WebView.
 // On Web (PWA)    → navigates to /privacy_policy.html in the same origin.
 
@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 /// Public URL where the privacy policy is hosted.
 /// Update this once you deploy the PWA to a real domain.
 const String kPrivacyPolicyUrl =
-    'https://makaziestate.com/privacy_policy.html';
+    'https://patamjengo.com/privacy_policy.html';
 
 /// Effective date shown in the app bar subtitle.
 const String kPrivacyPolicyDate = 'March 2026';
@@ -95,7 +95,7 @@ class _PrivacyPolicyScreenState extends State<PrivacyPolicyScreen> {
                     style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
                 const SizedBox(height: 20),
                 const Text(
-                  'Our Privacy Policy explains what data Makazi Estate collects, '
+                  'Our Privacy Policy explains what data Patamjengo collects, '
                   'how it is used, and your rights under Tanzanian law.',
                   textAlign: TextAlign.center,
                 ),

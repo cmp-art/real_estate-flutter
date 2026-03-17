@@ -360,7 +360,7 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
 
     // Tablet / Desktop: grid of PropertyGridCard
     final cols = ResponsiveHelper.getPropertyGridColumns(context);
-    final spacing = 16.0;
+    const spacing = 16.0;
 
     return LayoutBuilder(
       builder: (context, constraints) {

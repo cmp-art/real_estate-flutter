@@ -1,13 +1,14 @@
 // lib/features/authentication/presentation/widgets/social_sign_in_buttons.dart
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../features/main_navigation/presentation/screens/main_screen.dart';
 
 class SocialSignInButtons extends ConsumerWidget {
   const SocialSignInButtons({super.key});
@@ -53,6 +54,39 @@ class GoogleSignInButton extends ConsumerStatefulWidget {
 
 class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
   bool _isLoading = false;
+  StreamSubscription<AuthState>? _oauthSubscription;
+
+  @override
+  void dispose() {
+    _oauthSubscription?.cancel();
+    super.dispose();
+  }
+
+  /// After Chrome Custom Tabs / web OAuth launches, wait for the Supabase
+  /// signedIn event and navigate to MainScreen as soon as the session lands.
+  void _listenForOAuthCallback() {
+    _oauthSubscription?.cancel();
+    _oauthSubscription = Supabase.instance.client.auth.onAuthStateChange.listen(
+      (data) async {
+        if (data.event == AuthChangeEvent.signedIn && data.session != null) {
+          _oauthSubscription?.cancel();
+          _oauthSubscription = null;
+          if (!mounted) return;
+          setState(() => _isLoading = false);
+          // Ensure the notifier has the user loaded before navigating.
+          final current = ref.read(authNotifierProvider);
+          if (current.valueOrNull == null) {
+            await ref.read(authNotifierProvider.notifier).refreshUser();
+          }
+          if (!mounted) return;
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const MainScreen()),
+            (route) => false,
+          );
+        }
+      },
+    );
+  }
 
   Future<void> _handleGoogleSignIn() async {
     setState(() => _isLoading = true);
@@ -64,13 +98,15 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
         // Web: redirect the current browser tab via Supabase OAuth.
         // PKCE code is automatically exchanged when the page reloads.
         // Requires Google provider enabled in Supabase Dashboard → Auth → Providers.
+        _listenForOAuthCallback();
         final launched = await Supabase.instance.client.auth.signInWithOAuth(
           OAuthProvider.google,
-          redirectTo: 'https://makaziestate.com',
+          redirectTo: 'https://patamjengo.com',
           authScreenLaunchMode: LaunchMode.platformDefault,
         );
         logger.d('Web signInWithOAuth launched: $launched');
         if (!launched && mounted) {
+          _oauthSubscription?.cancel();
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -98,7 +134,12 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
       if (!mounted) return;
 
       if (nativeSuccess) {
+        // Native sign-in set state=data(user) — navigate directly to the app.
         setState(() => _isLoading = false);
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const MainScreen()),
+          (route) => false,
+        );
         return;
       }
 
@@ -114,17 +155,19 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
       // Fall back to an in-app browser overlay:
       //   • Android → Chrome Custom Tabs (stays within app, NOT a separate browser app)
       //   • iOS     → SFSafariViewController (same in-app feel)
-      // After auth, Supabase redirects to realestateapp://login-callback and
-      // the app receives it via app_links — user never truly "leaves" the app.
+      // After auth, Supabase redirects to patamjengo://login-callback and
+      // the app receives it via app_links — navigate once signedIn fires.
       logger.w('Native Google Sign-In not configured — falling back to in-app browser OAuth');
+      _listenForOAuthCallback();
       final launched = await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
-        redirectTo: 'realestateapp://login-callback',
+        redirectTo: 'patamjengo://login-callback',
         authScreenLaunchMode: LaunchMode.platformDefault,
       );
       logger.d('Mobile signInWithOAuth launched: $launched');
 
       if (!launched && mounted) {
+        _oauthSubscription?.cancel();
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -139,11 +182,10 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
         return;
       }
 
-      // Overlay opened — Supabase auth-state stream fires when the deep link
-      // callback arrives; AuthWrapper then navigates to MainScreen.
-      if (mounted) setState(() => _isLoading = false);
+      // Overlay opened — _listenForOAuthCallback will navigate on success.
     } catch (e) {
       logger.e('Google Sign-In error', error: e);
+      _oauthSubscription?.cancel();
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(

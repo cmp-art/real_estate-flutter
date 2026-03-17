@@ -17,14 +17,14 @@ import 'main.dart';
 // Provider to track password recovery state
 final isPasswordRecoveryProvider = StateProvider<bool>((ref) => false);
 
-class RealEstateApp extends ConsumerStatefulWidget {
-  const RealEstateApp({super.key});
+class PatamjengoApp extends ConsumerStatefulWidget {
+  const PatamjengoApp({super.key});
 
   @override
-  ConsumerState<RealEstateApp> createState() => _RealEstateAppState();
+  ConsumerState<PatamjengoApp> createState() => _PatamjengoAppState();
 }
 
-class _RealEstateAppState extends ConsumerState<RealEstateApp> {
+class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
@@ -61,16 +61,26 @@ class _RealEstateAppState extends ConsumerState<RealEstateApp> {
       else if (event == AuthChangeEvent.signedIn) {
         logger.d('✅ User signed in - refreshing auth state');
         ref.read(isPasswordRecoveryProvider.notifier).state = false;
-        // Refresh the notifier so AuthWrapper navigates to MainScreen.
-        // This is critical for OAuth (Google) sign-in where the session is
-        // established via a deep-link callback rather than a direct notifier call.
-        ref.read(authNotifierProvider.notifier).refreshUser();
+        // Only refresh when the notifier hasn't already started loading the user.
+        // If isLoading=true, signInWithGoogle() / signInWithApple() is still in
+        // progress and will set state=data(user) itself — calling refreshUser()
+        // here would create a race that sets state=loading AFTER the user data
+        // is already set, dropping the user back to SplashScreen.
+        // For the Chrome Custom Tabs path: state is data(null) when signedIn
+        // fires (because we never kicked off a native sign-in), so refreshUser()
+        // IS called and loads the user correctly.
+        final current = ref.read(authNotifierProvider);
+        if (!current.isLoading && current.valueOrNull == null) {
+          ref.read(authNotifierProvider.notifier).refreshUser();
+        }
       }
       else if (event == AuthChangeEvent.signedOut) {
         logger.d('🚪 User signed out - clearing recovery state');
         ref.read(isPasswordRecoveryProvider.notifier).state = false;
-        // Force auth state refresh
-        ref.invalidate(authNotifierProvider);
+        // DO NOT invalidate authNotifierProvider here — logout() already sets
+        // state = AsyncValue.data(null). Invalidating disposes the notifier
+        // while logout() is still running, causing "Bad state: Tried to use
+        // AuthNotifier after dispose was called".
       }
     });
   }
@@ -102,38 +112,101 @@ class _RealEstateAppState extends ConsumerState<RealEstateApp> {
   }
 }
 
-class AuthWrapper extends ConsumerWidget {
+class AuthWrapper extends ConsumerStatefulWidget {
   const AuthWrapper({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends ConsumerState<AuthWrapper>
+    with WidgetsBindingObserver {
+  bool _refreshRequested = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Fires whenever the app comes back to the foreground — most importantly
+  /// when Chrome Custom Tabs closes after OAuth. At that point the Supabase
+  /// session is already set, but the notifier may not know yet.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAndRefreshSession();
+    }
+  }
+
+  void _checkAndRefreshSession() {
+    final session = supabase.auth.currentSession;
+    final authState = ref.read(authNotifierProvider);
+    if (session != null && authState.valueOrNull == null && !authState.isLoading) {
+      logger.d('🔄 App resumed with session but no user — triggering refresh');
+      ref.read(authNotifierProvider.notifier).refreshUser();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final authState = ref.watch(authNotifierProvider);
     final isPasswordRecovery = ref.watch(isPasswordRecoveryProvider);
-    
-    // CRITICAL FIX: Always check actual Supabase session
+    // Watch the raw Supabase auth stream so AuthWrapper rebuilds the instant
+    // the session changes (OAuth callback, logout, token refresh, etc.).
+    ref.watch(supabaseAuthStreamProvider);
+
     final currentSession = supabase.auth.currentSession;
     final hasActiveSession = currentSession != null;
-    
+
     logger.d('🔍 AuthWrapper - Session exists: $hasActiveSession');
     logger.d('🔍 AuthWrapper - Password recovery: $isPasswordRecovery');
-    
+
     // Password recovery takes priority
     if (isPasswordRecovery) {
       logger.d('🔐 Password recovery mode - showing ResetPasswordScreen');
       return const ResetPasswordScreen();
     }
-    
-    // If no active session, always show login
+
+    // No session → login; also reset the refresh flag for the next sign-in
     if (!hasActiveSession) {
       logger.d('❌ No active session - showing LoginScreen');
+      _refreshRequested = false;
       return const LoginScreen();
     }
-    
-    // Has session - check auth state
+
+    // Session exists but notifier hasn't loaded the user yet.
+    // Trigger refreshUser() once as a fallback safety net.
+    if (!authState.isLoading && authState.valueOrNull == null) {
+      if (!_refreshRequested) {
+        _refreshRequested = true;
+        logger.d('🔄 Session active but user null — triggering refresh');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            final current = ref.read(authNotifierProvider);
+            if (current.valueOrNull == null && !current.isLoading) {
+              ref.read(authNotifierProvider.notifier).refreshUser();
+            }
+          }
+        });
+      }
+      logger.d('⏳ Waiting for user data - showing SplashScreen');
+      return const SplashScreen();
+    }
+
+    // User is loaded — reset flag so the next logout/sign-in cycle works
+    _refreshRequested = false;
+
     return authState.when(
       data: (user) {
         if (user == null) {
-          logger.d('📱 User is null despite session - showing LoginScreen');
+          logger.d('📱 User null after refresh - showing LoginScreen');
           return const LoginScreen();
         } else {
           logger.d('✅ User logged in - showing MainScreen');

@@ -9,7 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
-import 'package:real_estate_app/features/settings/presentation/providers/app_providers.dart';
+import 'package:patamjengo_app/features/settings/presentation/providers/app_providers.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 
@@ -504,7 +504,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     '🚿 ${property.bathrooms} bath  '
                     '📐 ${property.area.toInt()} sqft\n\n'
                     '${property.description.length > 120 ? '${property.description.substring(0, 120)}...' : property.description}\n\n'
-                    'Find more properties on Makazi Estate',
+                    'Find more properties on Patamjengo',
                     subject: property.title,
                   );
                 },

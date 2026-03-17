@@ -1,5 +1,5 @@
 import 'package:dartz/dartz.dart';
-import 'package:real_estate_app/features/favorites/data/datasources/favorite_remote_datasource.dart';
+import 'package:patamjengo_app/features/favorites/data/datasources/favorite_remote_datasource.dart';
 import '../../../../core/errors/exceptions.dart';
 import '../../../../core/errors/failures.dart';
 import '../../../properties/domain/entities/property_entity.dart';

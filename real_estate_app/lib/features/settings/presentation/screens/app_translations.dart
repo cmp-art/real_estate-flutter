@@ -5,8 +5,8 @@ class AppTranslations {
   static const Map<String, Map<String, String>> _translations = {
     'en': {
       // App
-      'app_name': 'Makazi Estate',
-      'real_estate_app': 'Makazi Estate',
+      'app_name': 'Patamjengo',
+      'real_estate_app': 'Patamjengo',
       'modern_real_estate_app':
           'A modern property platform for buying, selling, and renting properties in East Africa.',
 
@@ -224,7 +224,7 @@ class AppTranslations {
       'terms_disclaimer_text':
           'The materials in this application are provided on an "as is" basis. We make no warranties, expressed or implied, and hereby disclaim and negate all other warranties.',
       'terms_limitations_text':
-          'In no event shall Makazi Estate or its suppliers be liable for any damages arising out of the use or inability to use the materials in this application.',
+          'In no event shall Patamjengo or its suppliers be liable for any damages arising out of the use or inability to use the materials in this application.',
       'terms_modifications_text':
           'We may revise these terms of service at any time without notice. By using this application you are agreeing to be bound by the current version of these terms.',
       'version': 'Version',

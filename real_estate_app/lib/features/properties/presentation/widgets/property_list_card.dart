@@ -18,7 +18,7 @@ import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
 import '../screens/property_edit_screen.dart';
-import 'package:real_estate_app/features/settings/presentation/screens/app_translations.dart';
+import 'package:patamjengo_app/features/settings/presentation/screens/app_translations.dart';
 
 class PropertyListCard extends ConsumerStatefulWidget {
   final dynamic property;
