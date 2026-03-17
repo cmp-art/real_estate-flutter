@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, Tar
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../presentation/providers/auth_provider.dart';
@@ -61,14 +62,15 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
 
       if (kIsWeb) {
         // Web: google_sign_in cannot get idToken on web — use Supabase OAuth redirect instead.
-        // Supabase will redirect to Google, user logs in, then redirects back to the app.
-        // Auth state is automatically updated via the Supabase auth state stream.
+        // Requires Google provider enabled in Supabase Dashboard → Auth → Providers → Google.
         logger.d('Web: using Supabase OAuth redirect for Google Sign-In');
-        await Supabase.instance.client.auth.signInWithOAuth(
+        final res = await Supabase.instance.client.auth.signInWithOAuth(
           OAuthProvider.google,
           redirectTo: 'https://makaziestate.com',
+          authScreenLaunchMode: LaunchMode.platformDefault,
         );
-        // Do not reset _isLoading — browser will redirect away from this page.
+        logger.d('signInWithOAuth result: $res');
+        // Browser redirects away — do not reset loading state.
         return;
       }
 

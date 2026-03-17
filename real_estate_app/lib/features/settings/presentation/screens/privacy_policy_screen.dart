@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 /// Public URL where the privacy policy is hosted.
 /// Update this once you deploy the PWA to a real domain.
 const String kPrivacyPolicyUrl =
-    'https://makaziestate.co.tz/privacy_policy.html';
+    'https://makaziestate.com/privacy_policy.html';
 
 /// Effective date shown in the app bar subtitle.
 const String kPrivacyPolicyDate = 'March 2026';
