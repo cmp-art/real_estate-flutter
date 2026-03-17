@@ -667,49 +667,76 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
   }
 
   Widget _buildPropertiesList(List<dynamic> properties) {
+    final cols = ResponsiveHelper.getPropertyGridColumns(context);
+    final hPad = ResponsiveHelper.getResponsiveHorizontalPadding(context);
+    const spacing = 16.0;
+
+    Future<void> navigate(dynamic property) async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PropertyDetailScreen(propertyId: property.id),
+        ),
+      );
+      if (mounted) {
+        ref.read(myPropertiesProvider.notifier).loadProperties();
+        ref.invalidate(favoritePropertiesProvider);
+      }
+    }
+
+    if (cols == 1) {
+      // Mobile: single-column list (unchanged)
+      return Padding(
+        padding: EdgeInsets.symmetric(horizontal: hPad),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListView.separated(
+              physics: const NeverScrollableScrollPhysics(),
+              shrinkWrap: true,
+              itemCount: properties.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 15),
+              itemBuilder: (_, index) {
+                final property = properties[index];
+                return GestureDetector(
+                  onTap: () => navigate(property),
+                  onLongPress: () => _showPropertyOptions(property),
+                  child: PropertyGridCard(
+                    property: property,
+                    onTap: () => navigate(property),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Tablet / Desktop: multi-column Wrap layout (natural card heights)
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: ResponsiveHelper.getResponsiveHorizontalPadding(context)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ListView.separated(
-            physics: const NeverScrollableScrollPhysics(),
-            shrinkWrap: true,
-            itemCount: properties.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 15),
-            itemBuilder: (context, index) {
-              final property = properties[index];
-              return GestureDetector(
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => PropertyDetailScreen(propertyId: property.id)),
-                  );
-                  if (mounted) {
-                    ref.read(myPropertiesProvider.notifier).loadProperties();
-                    ref.invalidate(favoritePropertiesProvider);
-                  }
-                },
-                onLongPress: () => _showPropertyOptions(property),
-                child: PropertyGridCard(
-                  property: property,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => PropertyDetailScreen(propertyId: property.id)),
-                    );
-                    if (mounted) {
-                      ref.read(myPropertiesProvider.notifier).loadProperties();
-                      ref.invalidate(favoritePropertiesProvider);
-                    }
-                  },
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cardWidth =
+              (constraints.maxWidth - spacing * (cols - 1)) / cols;
+          return Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: properties.map((property) {
+              return SizedBox(
+                width: cardWidth,
+                child: GestureDetector(
+                  onLongPress: () => _showPropertyOptions(property),
+                  child: PropertyGridCard(
+                    property: property,
+                    onTap: () => navigate(property),
+                  ),
                 ),
               );
-            },
-          ),
-        ],
+            }).toList(),
+          );
+        },
       ),
     );
   }
@@ -741,29 +768,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
             ref.invalidate(favoritePropertiesProvider);
             await ref.read(favoritePropertiesProvider.future);
           },
-          child: ListView.separated(
-            padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-            itemCount: favorites.length,
-            separatorBuilder: (context, index) => SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-            itemBuilder: (context, index) {
-              final property = favorites[index];
-              return PropertyListCard(
-                property: property,
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => PropertyDetailScreen(propertyId: property.id)),
-                  );
-                  if (mounted) {
-                    ref.read(myPropertiesProvider.notifier).loadProperties();
-                    ref.invalidate(favoritePropertiesProvider);
-                  }
-                },
-                onShare: () => SnackbarUtils.showInfo(context, 'Share functionality coming soon'),
-              );
-            },
-          ),
+          child: _buildFavoritesList(favorites),
         );
       },
       loading: () => Center(child: CircularProgressIndicator(color: Theme.of(context).primaryColor)),
@@ -785,6 +790,65 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
               ),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  /// Renders the favorites list: single column on mobile, multi-column grid on
+  /// tablet and desktop.
+  Widget _buildFavoritesList(List<dynamic> favorites) {
+    final cols = ResponsiveHelper.getPropertyGridColumns(context);
+    final padding = ResponsiveHelper.getResponsivePadding(context);
+
+    Future<void> navigate(dynamic property) async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PropertyDetailScreen(propertyId: property.id),
+        ),
+      );
+      if (mounted) {
+        ref.read(myPropertiesProvider.notifier).loadProperties();
+        ref.invalidate(favoritePropertiesProvider);
+      }
+    }
+
+    if (cols == 1) {
+      // Mobile: current single-column list with PropertyListCard
+      return ListView.separated(
+        padding: EdgeInsets.all(padding),
+        itemCount: favorites.length,
+        separatorBuilder: (_, __) =>
+            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+        itemBuilder: (_, index) {
+          final property = favorites[index];
+          return PropertyListCard(
+            property: property,
+            onTap: () => navigate(property),
+            onShare: () =>
+                SnackbarUtils.showInfo(context, 'Share functionality coming soon'),
+          );
+        },
+      );
+    }
+
+    // Tablet / Desktop: GridView with PropertyGridCard
+    return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.all(padding),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: ResponsiveHelper.isDesktop(context) ? 0.82 : 0.88,
+      ),
+      itemCount: favorites.length,
+      itemBuilder: (_, index) {
+        final property = favorites[index];
+        return PropertyGridCard(
+          property: property,
+          onTap: () => navigate(property),
         );
       },
     );

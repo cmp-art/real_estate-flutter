@@ -473,9 +473,13 @@ class _CampaignDetailsScreenState
         NumberFormat.currency(symbol: 'TSh ', decimalDigits: 0);
     final statusColor = _statusColor(widget.campaign.status);
 
+    final hPad = ResponsiveHelper.getContentHorizontalPadding(context);
     return SingleChildScrollView(
-      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-      child: Column(
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: ResponsiveHelper.getResponsivePadding(context)),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Status card
@@ -662,6 +666,8 @@ class _CampaignDetailsScreenState
 
           const SizedBox(height: 80),
         ],
+          ),
+        ),
       ),
     );
   }
@@ -718,10 +724,41 @@ class _CampaignDetailsScreenState
       );
     }
 
-    return ListView.builder(
-      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-      itemCount: _creatives.length,
-      itemBuilder: (context, i) => _buildCreativeCard(_creatives[i]),
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final hPad = ResponsiveHelper.getContentHorizontalPadding(context);
+
+    if (isMobile) {
+      return ListView.builder(
+        padding: EdgeInsets.all(hPad),
+        itemCount: _creatives.length,
+        itemBuilder: (context, i) => _buildCreativeCard(_creatives[i]),
+      );
+    }
+
+    // Tablet / Desktop: 2-column Wrap layout
+    return SingleChildScrollView(
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 16),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1200),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const spacing = 16.0;
+              final cardWidth = (constraints.maxWidth - spacing) / 2;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: _creatives
+                    .map((c) => SizedBox(
+                          width: cardWidth,
+                          child: _buildCreativeCard(c),
+                        ))
+                    .toList(),
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 
@@ -739,9 +776,13 @@ class _CampaignDetailsScreenState
     final formatter =
         NumberFormat.currency(symbol: 'TSh ', decimalDigits: 0);
 
+    final hPad2 = ResponsiveHelper.getContentHorizontalPadding(context);
     return SingleChildScrollView(
-      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-      child: Column(
+      padding: EdgeInsets.symmetric(horizontal: hPad2, vertical: ResponsiveHelper.getResponsivePadding(context)),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: Column(
         children: [
           _buildSectionCard(
             title: 'Performance Metrics',
@@ -796,6 +837,8 @@ class _CampaignDetailsScreenState
           ),
           const SizedBox(height: 80),
         ],
+          ),
+        ),
       ),
     );
   }

@@ -430,16 +430,52 @@ class UserProfileViewScreen extends ConsumerWidget {
                     );
                   }
 
+                  // Tablet / Desktop: multi-column grid
+                  final cols = ResponsiveHelper.getPropertyGridColumns(context);
+                  if (cols > 1) {
+                    return SliverPadding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: ResponsiveHelper.getContentHorizontalPadding(context),
+                        vertical: 8,
+                      ),
+                      sliver: SliverGrid(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: cols,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          childAspectRatio:
+                              ResponsiveHelper.isDesktop(context) ? 0.82 : 0.88,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final property = properties[index];
+                            return PropertyGridCard(
+                              property: property,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => PropertyDetailScreen(
+                                      propertyId: property.id,
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                          childCount: properties.length,
+                        ),
+                      ),
+                    );
+                  }
+
+                  // Mobile: single-column list
                   return SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final property = properties[index];
                         return Padding(
-                          padding: EdgeInsets.fromLTRB(
-                              16,
-                              index == 0 ? 0 : 0,
-                              16,
-                              12),
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                           child: PropertyGridCard(
                             property: property,
                             onTap: () {

@@ -17,6 +17,7 @@ import '../../../../shared/widgets/empty_state.dart';
 import '../providers/property_providers.dart';
 
 import '../widgets/property_ad_card.dart';
+import '../widgets/property_grid_card.dart';
 import '../widgets/property_list_card.dart';
 import 'property_detail_screen.dart';
 import 'property_search_screen.dart';
@@ -507,83 +508,154 @@ Shared via Makazi Estate
     PropertyListState state,
     ThemeData theme,
   ) {
-    // Create interleaved list with ads
+    // Build interleaved list with ads (same logic as before)
     final itemsWithAds = <dynamic>[];
     int propertyIndex = 0;
-
     for (var property in properties) {
       itemsWithAds.add(property);
       propertyIndex++;
-
       if (_shouldShowAds &&
           propertyIndex % _adFrequency == 0 &&
           _shuffledAdPool.isNotEmpty) {
         final ad = _getAdForPosition(itemsWithAds.length);
-        if (ad != null) {
-          itemsWithAds.add(ad);
-        }
+        if (ad != null) itemsWithAds.add(ad);
       }
     }
 
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final hPad = isMobile
+        ? ResponsiveHelper.getResponsivePadding(context)
+        : ResponsiveHelper.getContentHorizontalPadding(context);
+
+    // ── Mobile: single-column ListView with PropertyListCard ──────────────
+    if (isMobile) {
+      return ListView.builder(
+        controller: _scrollController,
+        padding: EdgeInsets.all(hPad),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: itemsWithAds.length + (state.hasMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == itemsWithAds.length) return _buildLoadingIndicator(theme);
+          final item = itemsWithAds[index];
+          if (item is DirectAd) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: DirectAdWidget(
+                ad: item,
+                onImpression: () {
+                  if (!_sessionImpressionRecorded.contains(item.creativeId)) {
+                    _recordAdImpression(item);
+                    _sessionImpressionRecorded.add(item.creativeId);
+                  }
+                },
+                onClick: () => _recordAdClick(item),
+              ),
+            );
+          }
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: PropertyListCard(
+              property: item,
+              onTap: () => _navigateToDetail(item),
+              onShare: () => _handlePropertyShare(item),
+            ),
+          );
+        },
+      );
+    }
+
+    // ── Tablet / Desktop: multi-column grid, ads remain full-width ────────
+    final cols = ResponsiveHelper.getPropertyGridColumns(context);
+    final displayRows = _buildGridRows(itemsWithAds, cols);
+    const spacing = 16.0;
+
     return ListView.builder(
       controller: _scrollController,
-      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 16),
       physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: itemsWithAds.length + (state.hasMore ? 1 : 0),
+      itemCount: displayRows.length + (state.hasMore ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index == itemsWithAds.length) {
-          return _buildLoadingIndicator(theme);
-        }
+        if (index == displayRows.length) return _buildLoadingIndicator(theme);
+        final rowItem = displayRows[index];
 
-        final item = itemsWithAds[index];
-
-        // ✅ FIXED: Render Ad using DirectAdWidget (correct widget name)
-        if (item is DirectAd) {
+        // Full-width ad card
+        if (rowItem is DirectAd) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 16),
             child: DirectAdWidget(
-              ad: item,
+              ad: rowItem,
               onImpression: () {
-                if (!_sessionImpressionRecorded.contains(item.creativeId)) {
-                  _recordAdImpression(item);
-                  _sessionImpressionRecorded.add(item.creativeId);
+                if (!_sessionImpressionRecorded.contains(rowItem.creativeId)) {
+                  _recordAdImpression(rowItem);
+                  _sessionImpressionRecorded.add(rowItem.creativeId);
                 }
               },
-              onClick: () {
-                _recordAdClick(item);
-              },
+              onClick: () => _recordAdClick(rowItem),
             ),
           );
         }
 
-        // ✅ FIXED: Render Property with propertyId parameter
+        // Row of property grid cards
+        final row = rowItem as List<dynamic>;
         return Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: PropertyListCard(
-            property: item,
-            onTap: () async {
-              _propertyViewCount++;
-
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => PropertyDetailScreen(
-                    propertyId: item.id, // ✅ FIXED: Using propertyId as required
-                  ),
+          padding: const EdgeInsets.only(bottom: spacing),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < cols; i++) ...[
+                if (i > 0) const SizedBox(width: spacing),
+                Expanded(
+                  child: i < row.length
+                      ? PropertyGridCard(
+                          property: row[i],
+                          onTap: () => _navigateToDetail(row[i]),
+                        )
+                      : const SizedBox(), // empty filler for last incomplete row
                 ),
-              );
-
-              if (mounted) {
-                ref
-                    .read(propertyListProvider.notifier)
-                    .loadProperties(refresh: true);
-              }
-            },
-            onShare: () => _handlePropertyShare(item),
+              ],
+            ],
           ),
         );
       },
     );
+  }
+
+  /// Groups a flat [itemsWithAds] list into display rows:
+  /// - [DirectAd] → full-width row on its own
+  /// - properties → grouped into rows of [cols] items
+  List<dynamic> _buildGridRows(List<dynamic> itemsWithAds, int cols) {
+    final result = <dynamic>[];
+    List<dynamic> currentRow = [];
+    for (final item in itemsWithAds) {
+      if (item is DirectAd) {
+        if (currentRow.isNotEmpty) {
+          result.add(List<dynamic>.from(currentRow));
+          currentRow = [];
+        }
+        result.add(item);
+      } else {
+        currentRow.add(item);
+        if (currentRow.length == cols) {
+          result.add(List<dynamic>.from(currentRow));
+          currentRow = [];
+        }
+      }
+    }
+    if (currentRow.isNotEmpty) result.add(List<dynamic>.from(currentRow));
+    return result;
+  }
+
+  Future<void> _navigateToDetail(dynamic property) async {
+    _propertyViewCount++;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PropertyDetailScreen(propertyId: property.id),
+      ),
+    );
+    if (mounted) {
+      ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
+    }
   }
 
   Widget _buildLoadingIndicator(ThemeData theme) {
