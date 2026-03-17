@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../presentation/providers/auth_provider.dart';
@@ -57,12 +58,26 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
 
     try {
       logger.d('User clicked Google Sign-In button');
+
+      if (kIsWeb) {
+        // Web: google_sign_in cannot get idToken on web — use Supabase OAuth redirect instead.
+        // Supabase will redirect to Google, user logs in, then redirects back to the app.
+        // Auth state is automatically updated via the Supabase auth state stream.
+        logger.d('Web: using Supabase OAuth redirect for Google Sign-In');
+        await Supabase.instance.client.auth.signInWithOAuth(
+          OAuthProvider.google,
+          redirectTo: 'https://makaziestate.com',
+        );
+        // Do not reset _isLoading — browser will redirect away from this page.
+        return;
+      }
+
+      // Mobile: use google_sign_in package (gets idToken → Supabase signInWithIdToken)
       final success = await ref.read(authNotifierProvider.notifier).signInWithGoogle();
 
       if (!mounted) return;
-      
       setState(() => _isLoading = false);
-      
+
       if (!success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
