@@ -92,7 +92,7 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
 
     return MaterialApp(
       navigatorKey: _navigatorKey,
-      title: AppConstants.appName,
+      title: 'Patamjengo - Buy, Sell & Rent Property in Tanzania | Real Estate',
       debugShowCheckedModeBanner: false,
       theme: ThemeConfig.lightTheme,
       darkTheme: ThemeConfig.darkTheme,
