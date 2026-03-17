@@ -21,10 +21,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   
   <!-- SEO Meta Tags -->
-  <meta name="description" content="Find your dream property. Buy, sell, and rent homes with our comprehensive real estate platform featuring property listings, virtual tours, and instant notifications.">
-  <meta name="keywords" content="real estate, property, buy house, sell house, rent apartment, homes for sale, real estate listings">
+  <meta name="description" content="Patamjengo - Tanzania's property platform. Buy, sell, and rent homes with property listings, virtual tours, and instant notifications. Pata nyumba, ardhi, na mali Tanzania.">
+  <meta name="keywords" content="patamjengo, real estate tanzania, property tanzania, buy house tanzania, sell house, rent apartment dar es salaam, nyumba tanzania, ardhi, mali isiyohamia">
   <meta name="author" content="Patamjengo">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://patamjengo.com/">
   
   <!-- PWA Primary Meta Tags -->
   <meta name="application-name" content="Patamjengo">
@@ -131,9 +132,110 @@
     .flutter-ready .loading-container {
       display: none;
     }
+
+    /* ── Install Banner ─────────────────────────────────────────────────── */
+    #install-banner {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #0175C2;
+      color: #fff;
+      padding: 12px 16px;
+      z-index: 99998;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 -2px 12px rgba(0,0,0,0.25);
+    }
+    #install-banner.show { display: flex; }
+    #install-banner img { width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0; }
+    #install-banner .banner-text { flex: 1; }
+    #install-banner .banner-text strong { display: block; font-size: 15px; }
+    #install-banner .banner-text span { font-size: 12px; opacity: 0.85; }
+    #install-btn {
+      background: #fff;
+      color: #0175C2;
+      border: none;
+      border-radius: 20px;
+      padding: 8px 18px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #dismiss-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0 4px;
+      flex-shrink: 0;
+      opacity: 0.8;
+    }
+
+    /* ── Install Instructions Modal ─────────────────────────────────────── */
+    #install-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100000;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #install-modal.show { display: flex; }
+    #install-modal .modal-box {
+      background: #fff;
+      width: 100%;
+      max-width: 480px;
+      border-radius: 20px 20px 0 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    #install-modal h3 { margin: 0 0 16px; font-size: 18px; color: #1a1a1a; }
+    #install-modal .step {
+      display: flex; align-items: flex-start; gap: 12px;
+      margin-bottom: 14px;
+    }
+    #install-modal .step-num {
+      background: #0175C2; color: #fff;
+      border-radius: 50%; width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 14px; flex-shrink: 0;
+    }
+    #install-modal .step p { margin: 0; font-size: 14px; color: #333; line-height: 1.5; }
+    #install-modal .close-modal {
+      width: 100%; margin-top: 16px;
+      background: #0175C2; color: #fff;
+      border: none; border-radius: 12px;
+      padding: 14px; font-size: 16px; font-weight: 600;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
+  <!-- ── Install Banner (shown after Flutter loads) ──────────────────────── -->
+  <div id="install-banner">
+    <img src="icons/Icon-192.png" alt="Patamjengo">
+    <div class="banner-text">
+      <strong>Install Patamjengo</strong>
+      <span>Add to your device for quick access</span>
+    </div>
+    <button id="install-btn">Install</button>
+    <button id="dismiss-btn" aria-label="Dismiss">✕</button>
+  </div>
+
+  <!-- ── Install Instructions Modal (for Firefox / unsupported browsers) ── -->
+  <div id="install-modal">
+    <div class="modal-box" id="modal-content">
+      <h3 id="modal-title">📲 Install Patamjengo</h3>
+      <div id="modal-steps"></div>
+      <button class="close-modal" onclick="document.getElementById('install-modal').classList.remove('show')">Got it</button>
+    </div>
+  </div>
+
   <!-- Loading Screen -->
   <div class="loading-container">
     <img class="loading-logo" src="icons/Icon-192.png" alt="Patamjengo Logo">
@@ -178,29 +280,132 @@
       });
     }
 
-    // ── PWA Install Prompt ────────────────────────────────────────────────────
+    // ── PWA Install Logic ─────────────────────────────────────────────────────
     let deferredInstallPrompt = null;
+    const banner    = document.getElementById('install-banner');
+    const installBtn = document.getElementById('install-btn');
+    const dismissBtn = document.getElementById('dismiss-btn');
+    const modal     = document.getElementById('install-modal');
 
+    // Detect browser/OS
+    const ua = navigator.userAgent;
+    const isIOS     = /iphone|ipad|ipod/i.test(ua);
+    const isAndroid = /android/i.test(ua);
+    const isFirefox = /firefox/i.test(ua);
+    const isSafari  = /safari/i.test(ua) && !/chrome/i.test(ua);
+    const isAlreadyInstalled = window.matchMedia('(display-mode: standalone)').matches
+                             || navigator.standalone === true;
+
+    // Don't show if already installed
+    if (isAlreadyInstalled) {
+      banner.style.display = 'none';
+    }
+
+    // Chrome/Edge/Brave/Opera: native prompt available
     window.addEventListener('beforeinstallprompt', e => {
       e.preventDefault();
       deferredInstallPrompt = e;
-      // Flutter can call window.triggerPWAInstall() from a button
       console.log('[PWA] Install prompt ready');
+      if (!isAlreadyInstalled) {
+        // Show banner after app loads
+        window.addEventListener('flutter-first-frame', () => {
+          setTimeout(() => banner.classList.add('show'), 2000);
+        }, { once: true });
+      }
     });
 
-    // Expose install trigger so Flutter web can call it
-    window.triggerPWAInstall = async () => {
-      if (!deferredInstallPrompt) return false;
-      deferredInstallPrompt.prompt();
-      const { outcome } = await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt = null;
-      return outcome === 'accepted';
-    };
+    installBtn.addEventListener('click', async () => {
+      banner.classList.remove('show');
+      if (deferredInstallPrompt) {
+        // Chrome/Edge: native prompt
+        deferredInstallPrompt.prompt();
+        const { outcome } = await deferredInstallPrompt.userChoice;
+        deferredInstallPrompt = null;
+      } else {
+        // Firefox / Safari / other: show manual instructions
+        showInstallInstructions();
+      }
+    });
+
+    dismissBtn.addEventListener('click', () => {
+      banner.classList.remove('show');
+      sessionStorage.setItem('pwa-banner-dismissed', '1');
+    });
 
     window.addEventListener('appinstalled', () => {
-      console.log('[PWA] Installed successfully');
+      banner.classList.remove('show');
       deferredInstallPrompt = null;
     });
+
+    // For Firefox/Safari: show banner with manual steps after load
+    window.addEventListener('flutter-first-frame', () => {
+      if (isAlreadyInstalled) return;
+      if (sessionStorage.getItem('pwa-banner-dismissed')) return;
+      if (!deferredInstallPrompt) {
+        // No native prompt: show banner anyway so user can tap for instructions
+        setTimeout(() => banner.classList.add('show'), 2000);
+      }
+    }, { once: true });
+
+    function showInstallInstructions() {
+      const stepsEl = document.getElementById('modal-steps');
+      let steps = [];
+
+      if (isIOS && isSafari) {
+        document.getElementById('modal-title').textContent = '📲 Install on iPhone / iPad';
+        steps = [
+          'Open this page in <strong>Safari</strong> (not Chrome)',
+          'Tap the <strong>Share button</strong> (□↑) at the bottom of the screen',
+          'Scroll down and tap <strong>"Add to Home Screen"</strong>',
+          'Tap <strong>Add</strong> — Patamjengo appears on your home screen',
+        ];
+      } else if (isAndroid) {
+        document.getElementById('modal-title').textContent = '📲 Install on Android';
+        steps = [
+          'Open this page in <strong>Chrome</strong> browser',
+          'Tap the <strong>3-dot menu</strong> (⋮) at the top right',
+          'Tap <strong>"Add to Home Screen"</strong> or <strong>"Install app"</strong>',
+          'Tap <strong>Add</strong> — done!',
+        ];
+      } else if (isFirefox) {
+        document.getElementById('modal-title').textContent = '📲 Install Patamjengo';
+        steps = [
+          'Firefox desktop does not support app install',
+          'Open <strong>patamjengo.com</strong> in <strong>Chrome</strong> or <strong>Microsoft Edge</strong>',
+          'Click the <strong>install icon (⊕)</strong> in the address bar',
+          'Click <strong>Install</strong> — the app opens like a desktop app',
+        ];
+      } else {
+        document.getElementById('modal-title').textContent = '📲 Install Patamjengo';
+        steps = [
+          'Open <strong>patamjengo.com</strong> in <strong>Chrome</strong> or <strong>Edge</strong>',
+          'Click the <strong>install icon (⊕)</strong> in the address bar',
+          'Click <strong>Install</strong>',
+        ];
+      }
+
+      stepsEl.innerHTML = steps.map((s, i) => `
+        <div class="step">
+          <div class="step-num">${i + 1}</div>
+          <p>${s}</p>
+        </div>`).join('');
+
+      modal.classList.add('show');
+    }
+
+    // Expose for Flutter to call
+    window.triggerPWAInstall = async () => {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        const { outcome } = await deferredInstallPrompt.userChoice;
+        deferredInstallPrompt = null;
+        return outcome === 'accepted';
+      }
+      showInstallInstructions();
+      return false;
+    };
+
+    window.showInstallInstructions = showInstallInstructions;
 
     // ── Online / Offline banner ───────────────────────────────────────────────
     const showBanner = (msg, color) => {
