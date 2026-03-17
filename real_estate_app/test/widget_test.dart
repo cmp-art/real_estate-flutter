@@ -67,7 +67,7 @@ void main() {
         'finishing throughout.';
 
     await tester.pumpWidget(
-      MaterialApp(
+      const MaterialApp(
         home: Scaffold(
           body: _ExpandableTextTest(text: longText),
         ),

@@ -1,5 +1,5 @@
 // lib/features/authentication/presentation/widgets/social_sign_in_buttons.dart
-import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/config/theme_config.dart';
@@ -33,7 +33,7 @@ class SocialSignInButtons extends ConsumerWidget {
         SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
         const GoogleSignInButton(),
         
-        if (Platform.isIOS) ...[
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) ...[
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
           const AppleSignInButton(),
         ],

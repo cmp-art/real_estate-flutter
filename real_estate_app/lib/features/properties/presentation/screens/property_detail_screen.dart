@@ -255,6 +255,44 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               ),
             ),
           ),
+
+        // Left / Right arrow buttons — only on tablet & desktop
+        if (totalItems > 1 && !ResponsiveHelper.isMobile(context)) ...[
+          // Left arrow
+          Positioned(
+            left: 12, top: 0, bottom: 0,
+            child: Center(
+              child: _currentHeaderIndex > 0
+                  ? _NavArrowButton(
+                      icon: Icons.chevron_left_rounded,
+                      onTap: () {
+                        _headerPageController.previousPage(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        );
+                      },
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+          // Right arrow
+          Positioned(
+            right: 12, top: 0, bottom: 0,
+            child: Center(
+              child: _currentHeaderIndex < totalItems - 1
+                  ? _NavArrowButton(
+                      icon: Icons.chevron_right_rounded,
+                      onTap: () {
+                        _headerPageController.nextPage(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        );
+                      },
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1681,5 +1719,30 @@ class _CalcResult extends StatelessWidget {
               ?.copyWith(color: Colors.grey.shade500, fontSize: 11),
           textAlign: TextAlign.center),
     ]);
+  }
+}
+
+// ── Navigation arrow button for carousel (tablet / desktop) ──────────────────
+class _NavArrowButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _NavArrowButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.55),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white24, width: 1),
+        ),
+        child: Icon(icon, color: Colors.white, size: 28),
+      ),
+    );
   }
 }

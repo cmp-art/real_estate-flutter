@@ -213,12 +213,11 @@ class ResponsiveHelper {
     }
   }
 
-  /// Property grid columns — adapts to orientation and screen class
-  /// Phone landscape gets 2 cols; tablet landscape gets 3; desktop 4.
+  /// Property grid columns — adapts to orientation and screen class.
+  /// Capped at 3 to keep cards wide enough for readable text.
   static int getPropertyGridColumns(BuildContext context) {
     final width = getScreenWidth(context);
-    if (width >= 1400) return 4;   // Large desktop / 4K
-    if (width >= tabletBreakpoint) return 3;   // Desktop / laptop
+    if (width >= tabletBreakpoint) return 3;   // Desktop / laptop / large screens
     if (width >= mobileBreakpoint) return 2;   // Tablet portrait+landscape
     if (isLandscape(context))      return 2;   // Phone landscape
     return 1;                                   // Phone portrait

@@ -8,8 +8,10 @@ import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/empty_state.dart';
 
 import "../widgets/property_list_card.dart";
+import '../widgets/property_grid_card.dart';
 import '../providers/property_providers.dart';
 import '../../domain/entities/property_filter_entity.dart';
+import '../../domain/entities/property_entity.dart';
 import 'property_detail_screen.dart';
 import 'property_filter_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
@@ -279,33 +281,7 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
                             ),
                           ),
                           Expanded(
-                            child: ListView.builder(
-                              padding: EdgeInsets.symmetric(horizontal: ResponsiveHelper.getResponsiveHorizontalPadding(context)),
-                              itemCount: properties.length,
-                              itemBuilder: (context, index) {
-                                final property = properties[index];
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 16),
-                                  child: PropertyListCard(
-                                    property: property,
-                                    onShare: () {},
-                                    onTap: () {
-                                      // Dismiss keyboard before navigation
-                                      FocusScope.of(context).unfocus();
-                                      
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => PropertyDetailScreen(
-                                            propertyId: property.id,
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
+                            child: _buildResultsList(context, properties),
                           ),
                         ],
                       );
@@ -347,6 +323,66 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _navigateToDetail(PropertyEntity property) {
+    FocusScope.of(context).unfocus();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PropertyDetailScreen(propertyId: property.id),
+      ),
+    );
+  }
+
+  Widget _buildResultsList(BuildContext context, List<PropertyEntity> properties) {
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final hPad = ResponsiveHelper.getContentHorizontalPadding(context);
+
+    if (isMobile) {
+      return ListView.builder(
+        padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+        itemCount: properties.length,
+        itemBuilder: (context, index) {
+          final property = properties[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: PropertyListCard(
+              property: property,
+              onShare: () {},
+              onTap: () => _navigateToDetail(property),
+            ),
+          );
+        },
+      );
+    }
+
+    // Tablet / Desktop: grid of PropertyGridCard
+    final cols = ResponsiveHelper.getPropertyGridColumns(context);
+    final spacing = 16.0;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth =
+            (constraints.maxWidth - hPad * 2 - spacing * (cols - 1)) / cols;
+        return SingleChildScrollView(
+          padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+          child: Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: properties.map((property) {
+              return SizedBox(
+                width: cardWidth,
+                child: PropertyGridCard(
+                  property: property,
+                  onTap: () => _navigateToDetail(property),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      },
     );
   }
 

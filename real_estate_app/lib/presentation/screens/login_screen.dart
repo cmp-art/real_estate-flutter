@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config/theme_config.dart';
 import '../../core/utils/logger.dart';
+import '../../core/utils/responsive_helper.dart';
 import '../../core/utils/validators.dart';
 import '../../features/authentication/presentation/widget/social_sign_in_buttons.dart';
 
@@ -91,10 +92,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
+            padding: EdgeInsets.symmetric(
+              horizontal: ResponsiveHelper.getResponsivePadding(context),
+              vertical: 24,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: ResponsiveHelper.getMaxFormWidth(context),
+              ),
+              child: Form(
+                key: _formKey,
+                child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -236,6 +244,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
