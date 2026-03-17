@@ -522,8 +522,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
                           indicatorColor: Theme.of(context).primaryColor,
                           indicatorSize: TabBarIndicatorSize.tab,
                           tabs: [
-                            Tab(text: 'Properties ($propertiesCount)', icon: Icon(Icons.home_work, size: ResponsiveHelper.getResponsiveIconSize(context))),
-                            Tab(text: 'Favorites ($favoritesCount)', icon: Icon(Icons.favorite, size: ResponsiveHelper.getResponsiveIconSize(context))),
+                            Tab(text: 'Properties ($propertiesCount)'),
+                            Tab(text: 'Favorites ($favoritesCount)'),
                           ],
                         );
                       },

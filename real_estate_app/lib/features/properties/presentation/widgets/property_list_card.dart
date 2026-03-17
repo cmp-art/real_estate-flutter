@@ -4,8 +4,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:video_player/video_player.dart';
-import 'package:visibility_detector/visibility_detector.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/config/theme_config.dart';
@@ -19,7 +17,6 @@ import '../../../../presentation/providers/auth_provider.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
-import '../providers/video_providers.dart';
 import '../screens/property_edit_screen.dart';
 import 'package:real_estate_app/features/settings/presentation/screens/app_translations.dart';
 
@@ -40,153 +37,6 @@ class PropertyListCard extends ConsumerStatefulWidget {
 }
 
 class _PropertyListCardState extends ConsumerState<PropertyListCard> {
-  int _currentImageIndex = 0;
-  final PageController _pageController = PageController();
-  VideoPlayerController? _videoController;
-  bool _isVideoInitialized = false;
-  bool _isVideoLoading = false;
-  // Only stream video when user explicitly taps play (saves egress)
-  bool _userTappedPlay = false;
-
-  // ── Video lifecycle (tap-to-play) ─────────────────────────────────────────
-
-  Future<void> _initVideo() async {
-    if (_videoController != null) return;
-    if (widget.property.videos.isEmpty) return;
-    if (mounted) setState(() => _isVideoLoading = true);
-    try {
-      _videoController = VideoPlayerController.networkUrl(
-          Uri.parse(widget.property.videos.first));
-      await _videoController!.initialize();
-      await _videoController!.setLooping(true);
-      final isMuted = ref.read(videoMuteProvider);
-      await _videoController!.setVolume(isMuted ? 0 : 1);
-      if (mounted) {
-        setState(() {
-          _isVideoInitialized = true;
-          _isVideoLoading = false;
-        });
-        // Only play if user explicitly tapped — never autoplay in list
-        if (_userTappedPlay) _videoController!.play();
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isVideoLoading = false);
-      debugPrint('Video init error: $e');
-    }
-  }
-
-  void _disposeVideo() {
-    _videoController?.dispose();
-    _videoController = null;
-    _isVideoInitialized = false;
-    _isVideoLoading = false;
-    _userTappedPlay = false;
-  }
-
-  void _onVisibilityChanged(VisibilityInfo info) {
-    if (!mounted) return;
-    if (info.visibleFraction > 0.5) {
-      // Resume only if user already tapped play for this card
-      if (_userTappedPlay && _isVideoInitialized && !_videoController!.value.isPlaying) {
-        _videoController!.play();
-      }
-      // Do NOT auto-init — wait for explicit tap
-    } else if (info.visibleFraction == 0) {
-      if (_videoController != null) setState(() { _disposeVideo(); });
-    } else {
-      if (_isVideoInitialized && _videoController!.value.isPlaying) {
-        _videoController!.pause();
-      }
-    }
-  }
-
-  // ── Video tile ─────────────────────────────────────────────────────────────
-
-  Widget _buildVideoTile(bool isMuted) {
-    if (_isVideoLoading) {
-      return Container(
-        color: Colors.black87,
-        child: const Center(
-            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)));
-    }
-    if (!_isVideoInitialized || _videoController == null) {
-      // Tap-to-play: show property image as poster — no video stream until tap
-      return GestureDetector(
-        onTap: () {
-          setState(() => _userTappedPlay = true);
-          _initVideo();
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (widget.property.images.isNotEmpty)
-              CachedNetworkImage(
-                imageUrl: widget.property.images.first,
-                fit: BoxFit.cover,
-                color: Colors.black.withOpacity(0.3),
-                colorBlendMode: BlendMode.darken,
-                placeholder: (_, __) => Container(color: Colors.grey.shade900),
-                errorWidget: (_, __, ___) => Container(color: Colors.grey.shade900),
-              )
-            else
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft, end: Alignment.bottomRight,
-                    colors: [Color(0xFF1a1a2e), Color(0xFF16213e)],
-                  ),
-                ),
-              ),
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: const BoxDecoration(
-                    color: Colors.black45, shape: BoxShape.circle),
-                child: const Icon(Icons.play_arrow_rounded,
-                    color: Colors.white, size: 40),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    _videoController!.setVolume(isMuted ? 0 : 1);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _videoController!.value.size.width,
-            height: _videoController!.value.size.height,
-            child: VideoPlayer(_videoController!),
-          ),
-        ),
-        Positioned(
-          bottom: 8,
-          right: 8,
-          child: GestureDetector(
-            onTap: () {
-              final current = ref.read(videoMuteProvider);
-              ref.read(videoMuteProvider.notifier).state = !current;
-              _videoController?.setVolume(current ? 1 : 0);
-            },
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(
-                  color: Colors.black54, shape: BoxShape.circle),
-              child: Icon(
-                isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                color: Colors.white,
-                size: ResponsiveHelper.getResponsiveIconSize(context),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   // ── Owner actions ──────────────────────────────────────────────────────────
 
   Future<void> _handleShare() async {
@@ -302,13 +152,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
     );
   }
 
-  @override
-  void dispose() {
-    _videoController?.dispose();
-    _pageController.dispose();
-    super.dispose();
-  }
-
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -370,231 +213,141 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Media section ────────────────────────────────────────────────
-            VisibilityDetector(
-              key: Key('prop-list-${widget.property.id}'),
-              onVisibilityChanged: _onVisibilityChanged,
-              child: Stack(
-                children: [
-                  // Image / video carousel
-                  Container(
-                    height: 220,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: backgroundColor,
-                      borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(12)),
-                    ),
-                    child: (widget.property.images.isNotEmpty || hasVideo)
-                        ? ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(12)),
-                            child: PageView.builder(
-                              controller: _pageController,
-                              itemCount: totalMedia,
-                              onPageChanged: (index) =>
-                                  setState(() => _currentImageIndex = index),
-                              itemBuilder: (context, index) {
-                                if (hasVideo &&
-                                    index == widget.property.images.length) {
-                                  final isMuted = ref.watch(videoMuteProvider);
-                                  return _buildVideoTile(isMuted);
-                                }
-                                return CachedNetworkImage(
-                                  imageUrl: widget.property.images[index],
-                                  cacheManager: CustomCacheManager.instance,
-                                  fit: BoxFit.cover,
-                                  width: double.infinity,
-                                  placeholder: (context, url) => Container(
-                                    color: backgroundColor,
-                                    child: const Center(
-                                      child: CircularProgressIndicator(
-                                          color: ThemeConfig.primaryColor),
-                                    ),
-                                  ),
-                                  errorWidget: (context, url, error) =>
-                                      Container(
-                                    color: backgroundColor,
-                                    child: Icon(Icons.home,
-                                        size: ResponsiveHelper
-                                            .getResponsiveIconSize(context),
-                                        color: iconColor),
-                                  ),
-                                  fadeInDuration:
-                                      const Duration(milliseconds: 300),
-                                  fadeOutDuration:
-                                      const Duration(milliseconds: 100),
-                                );
-                              },
-                            ),
-                          )
-                        : Center(
-                            child: Icon(Icons.home,
-                                size: ResponsiveHelper.getResponsiveIconSize(
-                                    context),
-                                color: iconColor),
-                          ),
+            // ── Media section — first image only (reduces CDN egress) ────────
+            Stack(
+              children: [
+                Container(
+                  height: 220,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                   ),
+                  child: widget.property.images.isNotEmpty
+                      ? ClipRRect(
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                          child: CachedNetworkImage(
+                            imageUrl: widget.property.images.first,
+                            cacheManager: CustomCacheManager.instance,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            placeholder: (context, url) => Container(
+                              color: backgroundColor,
+                              child: const Center(child: CircularProgressIndicator(color: ThemeConfig.primaryColor)),
+                            ),
+                            errorWidget: (context, url, error) => Container(
+                              color: backgroundColor,
+                              child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor),
+                            ),
+                            fadeInDuration: const Duration(milliseconds: 300),
+                            fadeOutDuration: const Duration(milliseconds: 100),
+                          ),
+                        )
+                      : Center(child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor)),
+                ),
 
-                  // Status badge — top left
+                // Status badge — top left
+                Positioned(
+                  top: 8, left: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(6)),
+                    child: Text(
+                      widget.property.status.displayName.toUpperCase(),
+                      style: TextStyle(
+                        color: statusTextColor,
+                        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Tier badge — top right
+                if (widget.property.ownerTier == 'pro' || widget.property.ownerTier == 'basic')
                   Positioned(
-                    top: 8, left: 8,
+                    top: 8, right: 8,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: statusColor,
+                        color: widget.property.ownerTier == 'pro' ? Colors.green[700] : Colors.blue[700],
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Text(
-                        widget.property.status.displayName.toUpperCase(),
-                        style: TextStyle(
-                          color: statusTextColor,
-                          fontSize: ResponsiveHelper.getResponsiveFontSize(
-                              context, mobile: 10),
-                          fontWeight: FontWeight.w600,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            widget.property.ownerTier == 'pro' ? Icons.workspace_premium : Icons.verified,
+                            color: Colors.white,
+                            size: ResponsiveHelper.getResponsiveIconSize(context),
+                          ),
+                          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
+                          Text(
+                            widget.property.ownerTier == 'pro' ? 'PRO' : 'BASIC',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
 
-                  // Tier badge — top right (offset when counter also showing)
-                  if (widget.property.ownerTier == 'pro' ||
-                      widget.property.ownerTier == 'basic')
-                    Positioned(
-                      top: 8,
-                      right: totalMedia > 1 ? 48 : 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: widget.property.ownerTier == 'pro'
-                              ? Colors.green[700]
-                              : Colors.blue[700],
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              widget.property.ownerTier == 'pro'
-                                  ? Icons.workspace_premium
-                                  : Icons.verified,
-                              color: Colors.white,
-                              size: ResponsiveHelper.getResponsiveIconSize(
-                                  context),
-                            ),
-                            SizedBox(
-                                width: ResponsiveHelper.getResponsiveSpacing(
-                                        context) /
-                                    2),
-                            Text(
-                              widget.property.ownerTier == 'pro'
-                                  ? 'PRO'
-                                  : 'BASIC',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize:
-                                    ResponsiveHelper.getResponsiveFontSize(
-                                        context, mobile: 10),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
+                // Media count — bottom right
+                if (totalMedia > 1)
+                  Positioned(
+                    bottom: 8, right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
                       ),
-                    ),
-
-                  // Image counter badge — top right
-                  if (totalMedia > 1)
-                    Positioned(
-                      top: 8, right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(
-                              ResponsiveHelper.getResponsiveBorderRadius(
-                                  context)),
-                        ),
-                        child: Text(
-                          '${_currentImageIndex + 1}/$totalMedia',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: ResponsiveHelper.getResponsiveFontSize(
-                                context, mobile: 10),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-
-                  // Dot indicators — bottom centre
-                  if (totalMedia > 1)
-                    Positioned(
-                      bottom: hasVideo ? 28 : 8,
-                      left: 0,
-                      right: 0,
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: List.generate(
-                          totalMedia,
-                          (index) => GestureDetector(
-                            onTap: () => _pageController.animateToPage(index,
-                                duration: const Duration(milliseconds: 300),
-                                curve: Curves.easeInOut),
-                            child: Container(
-                              width: 6, height: 6,
-                              margin: const EdgeInsets.symmetric(horizontal: 2),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: _currentImageIndex == index
-                                    ? Colors.white
-                                    : Colors.white.withOpacity(0.5),
-                              ),
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.photo_library_outlined, color: Colors.white, size: 12),
+                          const SizedBox(width: 3),
+                          Text(
+                            '$totalMedia',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
+                  ),
 
-                  // VIDEO badge — bottom left
-                  if (hasVideo)
-                    Positioned(
-                      bottom: 28, left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade700,
-                          borderRadius: BorderRadius.circular(
-                              ResponsiveHelper.getResponsiveBorderRadius(
-                                      context) /
-                                  2),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.videocam_rounded,
-                                color: Colors.white, size: 12),
-                            const SizedBox(width: 3),
-                            Text(
-                              'VIDEO',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize:
-                                    ResponsiveHelper.getResponsiveFontSize(
-                                        context, mobile: 10),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
+                // VIDEO badge — bottom left
+                if (hasVideo)
+                  Positioned(
+                    bottom: 8, left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade700,
+                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.videocam_rounded, color: Colors.white, size: 12),
+                          const SizedBox(width: 3),
+                          Text('VIDEO', style: TextStyle(
+                            color: Colors.white,
+                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                            fontWeight: FontWeight.bold,
+                          )),
+                        ],
                       ),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
 
             // ── Details section ──────────────────────────────────────────────

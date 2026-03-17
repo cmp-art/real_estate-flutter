@@ -1,7 +1,7 @@
 // features/authentication/data/datasources/auth_remote_datasource.dart
 // COMPLETE FILE - UPDATED WITH GOOGLE AND APPLE SIGN-IN + SUPABASE ONLY
 
-import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
@@ -101,7 +101,7 @@ class AuthRemoteDataSource {
   // ════════════════════════════════════════════════════════════════
   Future<UserModel> signInWithApple() async {
     try {
-      if (!Platform.isIOS && !Platform.isMacOS) {
+      if (kIsWeb || (defaultTargetPlatform != TargetPlatform.iOS && defaultTargetPlatform != TargetPlatform.macOS)) {
         throw const AuthException(
             'Apple Sign-In is only available on iOS/macOS');
       }

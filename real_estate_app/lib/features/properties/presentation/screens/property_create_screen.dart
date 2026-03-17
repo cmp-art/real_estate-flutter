@@ -101,13 +101,13 @@ class _S {
   String get addMoreMedia  => pick('Add more', 'Ongeza zaidi');
   String get mediaSectionTitle => pick('Photos & Video', 'Picha & Video');
   String get mediaTip      => pick(
-    'Add photos and optionally a short video. All media is reviewed by AI. Min 1 required.',
-    'Ongeza picha na video fupi ikitaka. Vyombo vyote vikaguliwa na AI. Angalau 1 inahitajika.',
+    'At least 1 photo required. Video optional — photos must come first.',
+    'Picha angalau 1 inahitajika. Video ni ya hiari — picha lazima ziwe za kwanza.',
   );
   String get videoLabel    => pick('VIDEO', 'VIDEO');
   String get mediaRequired => pick(
-    'Add at least one photo or video — listings without media get very few inquiries',
-    'Ongeza picha au video angalau moja — matangazo bila picha yanapata maswali machache sana',
+    'At least one photo is required — you cannot post a video-only listing',
+    'Picha angalau moja inahitajika — huwezi kutuma tangazo lenye video peke yake',
   );
   String get videoTooBig   => pick('Video must be under 50 MB', 'Video lazima iwe chini ya MB 50');
   String get videoFail     => pick(
@@ -748,7 +748,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       return;
     }
 
-    if (_selectedImages.isEmpty && _selectedVideos.isEmpty && widget.property == null) {
+    if (_selectedImages.isEmpty && widget.property == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(s.mediaRequired),
         backgroundColor: ThemeConfig.errorColor,
@@ -1004,8 +1004,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             _FieldTip(s.mediaTip),
             const SizedBox(height: 10),
 
-            // Empty state — two tap targets side by side
-            if (_selectedImages.isEmpty && _selectedVideos.isEmpty)
+            // Empty state — two tap targets side by side (shown until at least one image is added)
+            if (_selectedImages.isEmpty)
               Row(
                 children: [
                   // Photos tap
