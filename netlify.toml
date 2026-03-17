@@ -60,7 +60,10 @@
 
     # ── 4. Get dependencies & build ─────────────────────────────────
     flutter pub get
-    flutter build web --release --base-href /
+    flutter build web --release --base-href / \
+      --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+      --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+      --dart-define=GOOGLE_WEB_CLIENT_ID="$GOOGLE_WEB_CLIENT_ID"
   """
 
 # ── SPA Routing: send all routes to Flutter's index.html ──────────

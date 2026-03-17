@@ -37,13 +37,34 @@ void main() async {
   // ========================================
   // ENVIRONMENT VARIABLES - LOAD FIRST
   // ========================================
+  // Strategy: --dart-define values (baked in at build time) take priority.
+  // .env file is used as a fallback for local development only.
   try {
     await dotenv.load(fileName: "assets/.env");
     logger.d('.env file loaded successfully');
-    _verifyEnvironmentVariables();
-  } catch (e, s) {
-    logger.e('Failed to load .env file', error: e, stackTrace: s);
+  } catch (e) {
+    logger.d('.env file not found — relying on --dart-define values');
   }
+
+  // Overlay --dart-define values (production/Netlify) over any .env values.
+  // String.fromEnvironment reads values compiled in via --dart-define at build time.
+  const _defineSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
+  const _defineAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  const _defineGoogleClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
+
+  if (_defineSupabaseUrl.isNotEmpty) {
+    dotenv.env['SUPABASE_URL'] = _defineSupabaseUrl;
+    logger.d('SUPABASE_URL loaded from --dart-define');
+  }
+  if (_defineAnonKey.isNotEmpty) {
+    dotenv.env['SUPABASE_ANON_KEY'] = _defineAnonKey;
+    logger.d('SUPABASE_ANON_KEY loaded from --dart-define');
+  }
+  if (_defineGoogleClientId.isNotEmpty) {
+    dotenv.env['GOOGLE_WEB_CLIENT_ID'] = _defineGoogleClientId;
+  }
+
+  _verifyEnvironmentVariables();
 
   AppLifecycleObserver().initialize();
 
