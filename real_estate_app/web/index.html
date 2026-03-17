@@ -69,8 +69,39 @@
   <link rel="icon" type="image/png" sizes="16x16" href="favicon.png"/>
   <link rel="shortcut icon" href="favicon.png">
 
-  <title>Patamjengo - Buy, Sell &amp; Rent Properties</title>
+  <title>Patamjengo - Buy, Sell &amp; Rent Properties in Tanzania</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Structured Data — helps Google & Bing understand the site -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "Patamjengo",
+    "url": "https://patamjengo.com",
+    "description": "Tanzania's property platform. Buy, sell, and rent homes — nyumba, ardhi, na mali Tanzania.",
+    "potentialAction": {
+      "@type": "SearchAction",
+      "target": "https://patamjengo.com/?search={search_term_string}",
+      "query-input": "required name=search_term_string"
+    }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "Patamjengo",
+    "url": "https://patamjengo.com",
+    "logo": "https://patamjengo.com/icons/Icon-512.png",
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "customer support",
+      "email": "support@patamjengo.com"
+    },
+    "sameAs": []
+  }
+  </script>
   
   <style>
     /* Loading Spinner Styles */
@@ -216,6 +247,39 @@
   </style>
 </head>
 <body>
+  <!-- ── Static content for search engine crawlers ───────────────────────
+       Flutter is JS-rendered so crawlers see this static HTML instead.
+       This section is hidden from users once Flutter loads.
+  ──────────────────────────────────────────────────────────────────────── -->
+  <div id="seo-content" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;">
+    <h1>Patamjengo — Tanzania Real Estate Platform</h1>
+    <h2>Buy, Sell &amp; Rent Properties in Tanzania</h2>
+    <p>
+      Patamjengo is Tanzania's leading property platform. Find houses, apartments,
+      land, and commercial properties for sale or rent across Dar es Salaam,
+      Arusha, Mwanza, Dodoma, and all regions of Tanzania.
+    </p>
+    <h3>Why Patamjengo?</h3>
+    <ul>
+      <li>Thousands of verified property listings in Tanzania</li>
+      <li>Buy, sell, or rent houses, apartments, land and commercial spaces</li>
+      <li>Direct messaging with property owners and agents</li>
+      <li>Property price alerts and instant notifications</li>
+      <li>Available as a mobile app and progressive web app (PWA)</li>
+    </ul>
+    <h3>Popular Searches</h3>
+    <ul>
+      <li>Houses for sale in Dar es Salaam</li>
+      <li>Apartments for rent in Arusha</li>
+      <li>Land for sale in Tanzania</li>
+      <li>Nyumba za kuuza Dar es Salaam</li>
+      <li>Nyumba za kupanga Tanzania</li>
+      <li>Ardhi ya kuuza Tanzania</li>
+      <li>Patamjengo — pata nyumba yako leo</li>
+    </ul>
+    <p>Visit <a href="https://patamjengo.com">patamjengo.com</a> to browse all listings.</p>
+  </div>
+
   <!-- ── Install Banner (shown after Flutter loads) ──────────────────────── -->
   <div id="install-banner">
     <img src="icons/Icon-192.png" alt="Patamjengo">
