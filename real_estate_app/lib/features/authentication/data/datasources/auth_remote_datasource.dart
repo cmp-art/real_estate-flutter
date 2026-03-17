@@ -236,13 +236,27 @@ class AuthRemoteDataSource {
             },
           );
 
-      if (response == null) {
-        logger.d('No user profile found');
-        return null;
+      if (response != null) {
+        logger.d('User profile loaded: ${response['email']}');
+        return UserModel.fromJson(response);
       }
 
-      logger.d('User profile loaded: ${response['email']}');
-      return UserModel.fromJson(response);
+      // No profile row — first sign-in via Google/Apple OAuth.
+      // Auto-create the profile from OAuth metadata so AuthWrapper can navigate.
+      logger.d('No profile for ${authUser.id} — creating from OAuth metadata');
+      final email = authUser.email ?? '';
+      final fullName = (authUser.userMetadata?['full_name'] as String?)
+          ?? (authUser.userMetadata?['name'] as String?)
+          ?? 'User';
+      final avatarUrl = (authUser.userMetadata?['avatar_url'] as String?)
+          ?? (authUser.userMetadata?['picture'] as String?);
+
+      return await _getOrCreateUserProfile(
+        userId: authUser.id,
+        email: email,
+        fullName: fullName,
+        avatarUrl: avatarUrl,
+      );
     } catch (e, s) {
       logger.e('getCurrentUser error', error: e, stackTrace: s);
       return null;

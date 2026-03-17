@@ -59,9 +59,13 @@ class _RealEstateAppState extends ConsumerState<RealEstateApp> {
         });
       } 
       else if (event == AuthChangeEvent.signedIn) {
-        logger.d('✅ User signed in - clearing recovery state');
+        logger.d('✅ User signed in - refreshing auth state');
         ref.read(isPasswordRecoveryProvider.notifier).state = false;
-      } 
+        // Refresh the notifier so AuthWrapper navigates to MainScreen.
+        // This is critical for OAuth (Google) sign-in where the session is
+        // established via a deep-link callback rather than a direct notifier call.
+        ref.read(authNotifierProvider.notifier).refreshUser();
+      }
       else if (event == AuthChangeEvent.signedOut) {
         logger.d('🚪 User signed out - clearing recovery state');
         ref.read(isPasswordRecoveryProvider.notifier).state = false;

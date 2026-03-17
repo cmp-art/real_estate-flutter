@@ -61,33 +61,87 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
       logger.d('User clicked Google Sign-In button');
 
       if (kIsWeb) {
-        // Web: google_sign_in cannot get idToken on web — use Supabase OAuth redirect instead.
-        // Requires Google provider enabled in Supabase Dashboard → Auth → Providers → Google.
-        logger.d('Web: using Supabase OAuth redirect for Google Sign-In');
-        final res = await Supabase.instance.client.auth.signInWithOAuth(
+        // Web: redirect the current browser tab via Supabase OAuth.
+        // PKCE code is automatically exchanged when the page reloads.
+        // Requires Google provider enabled in Supabase Dashboard → Auth → Providers.
+        final launched = await Supabase.instance.client.auth.signInWithOAuth(
           OAuthProvider.google,
           redirectTo: 'https://makaziestate.com',
           authScreenLaunchMode: LaunchMode.platformDefault,
         );
-        logger.d('signInWithOAuth result: $res');
-        // Browser redirects away — do not reset loading state.
+        logger.d('Web signInWithOAuth launched: $launched');
+        if (!launched && mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Google sign-in unavailable. '
+                'Enable the Google provider in Supabase Dashboard → Auth → Providers.',
+              ),
+              backgroundColor: ThemeConfig.errorColor,
+              duration: Duration(seconds: 6),
+            ),
+          );
+        }
+        // If launched: browser redirects away, no further action needed.
         return;
       }
 
-      // Mobile: use google_sign_in package (gets idToken → Supabase signInWithIdToken)
-      final success = await ref.read(authNotifierProvider.notifier).signInWithGoogle();
+      // ── Mobile ────────────────────────────────────────────────────────────
+      // Step 1: Try the native Google account picker (dialog inside the app).
+      //         Requires SHA-1 fingerprint registered in Google Cloud Console
+      //         for the project that owns GOOGLE_WEB_CLIENT_ID.
+      logger.d('Mobile: attempting native Google Sign-In…');
+      final nativeSuccess =
+          await ref.read(authNotifierProvider.notifier).signInWithGoogle();
 
       if (!mounted) return;
-      setState(() => _isLoading = false);
 
-      if (!success) {
+      if (nativeSuccess) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // Check whether it was a user cancellation.
+      final authState = ref.read(authNotifierProvider);
+      final errMsg = authState.error?.toString().toLowerCase() ?? '';
+      if (errMsg.contains('cancelled')) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // Step 2: native failed (DEVELOPER_ERROR / SHA-1 not registered yet).
+      // Fall back to an in-app browser overlay:
+      //   • Android → Chrome Custom Tabs (stays within app, NOT a separate browser app)
+      //   • iOS     → SFSafariViewController (same in-app feel)
+      // After auth, Supabase redirects to realestateapp://login-callback and
+      // the app receives it via app_links — user never truly "leaves" the app.
+      logger.w('Native Google Sign-In not configured — falling back to in-app browser OAuth');
+      final launched = await Supabase.instance.client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: 'realestateapp://login-callback',
+        authScreenLaunchMode: LaunchMode.platformDefault,
+      );
+      logger.d('Mobile signInWithOAuth launched: $launched');
+
+      if (!launched && mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Google Sign-In failed. Please try again.'),
+            content: Text(
+              'Google sign-in unavailable. '
+              'Enable the Google provider in Supabase Dashboard → Auth → Providers.',
+            ),
             backgroundColor: ThemeConfig.errorColor,
+            duration: Duration(seconds: 6),
           ),
         );
+        return;
       }
+
+      // Overlay opened — Supabase auth-state stream fires when the deep link
+      // callback arrives; AuthWrapper then navigates to MainScreen.
+      if (mounted) setState(() => _isLoading = false);
     } catch (e) {
       logger.e('Google Sign-In error', error: e);
       if (mounted) {
@@ -96,6 +150,7 @@ class _GoogleSignInButtonState extends ConsumerState<GoogleSignInButton> {
           SnackBar(
             content: Text('Google Sign-In failed: ${e.toString()}'),
             backgroundColor: ThemeConfig.errorColor,
+            duration: const Duration(seconds: 6),
           ),
         );
       }

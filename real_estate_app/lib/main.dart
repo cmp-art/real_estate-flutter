@@ -341,16 +341,38 @@ Future<void> _handleInitialLink() async {
 Future<void> _handleDeepLink(Uri uri) async {
   logger.d('🔍 Processing deep link: $uri');
 
+  // ── Password-reset flow ────────────────────────────────────────────────────
   if (uri.host == 'reset-password' ||
       uri.path.contains('reset-password') ||
       uri.host == 'reset-callback') {
     logger.d('🔐 Password reset deep link detected');
     await _handlePasswordRecovery(uri);
+    return;
   }
 
+  // ── Supabase server-side auth callback (email verify, magic link, etc.) ───
   if (uri.path.contains('/auth/v1/callback') ||
       uri.path.contains('/auth/v1/verify')) {
-    logger.d('🔑 Supabase auth callback detected');
+    logger.d('🔑 Supabase auth callback – exchanging code for session');
+    try {
+      await supabase.auth.getSessionFromUrl(uri);
+    } catch (e) {
+      logger.e('Failed to exchange Supabase auth callback', error: e);
+    }
+    return;
+  }
+
+  // ── OAuth login callback (Google Sign-In via Supabase redirect) ───────────
+  // Deep link: realestateapp://login-callback?code=<pkce-code>
+  if (uri.scheme == 'realestateapp' && uri.host == 'login-callback') {
+    logger.d('🔑 OAuth login callback – exchanging PKCE code for session');
+    try {
+      await supabase.auth.getSessionFromUrl(uri);
+      logger.d('✅ OAuth session established');
+    } catch (e) {
+      logger.e('Failed to exchange OAuth login callback code', error: e);
+    }
+    return;
   }
 }
 
