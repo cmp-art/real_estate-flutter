@@ -672,7 +672,7 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                           valueColor: textColor,
                           labelColor: secondaryTextColor,
                         ),
-                        SizedBox(width: ResponsiveHelper.getResponsivePadding(context)),
+                        const SizedBox(width: 8),
                         _PropertyDetailItem(
                           icon: Icons.bathtub,
                           value: '${widget.property.bathrooms}',
@@ -681,7 +681,7 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                           valueColor: textColor,
                           labelColor: secondaryTextColor,
                         ),
-                        SizedBox(width: ResponsiveHelper.getResponsivePadding(context)),
+                        const SizedBox(width: 8),
                       ],
                       _PropertyDetailItem(
                         icon: Icons.square_foot,
@@ -772,13 +772,14 @@ class _PropertyDetailItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
           icon,
-          size: ResponsiveHelper.getResponsiveIconSize(context),
+          size: 18,
           color: iconColor,
         ),
-        SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
+        const SizedBox(width: 4),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,

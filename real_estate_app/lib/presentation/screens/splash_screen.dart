@@ -115,7 +115,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Find your dream home',
+              'Makazi Yako Yanaanza Hapa',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.white70,

@@ -1,7 +1,7 @@
 // Patamjengo - Service Worker
 // Provides offline support and caching for PWA
 
-const CACHE_VERSION = 'patamjengo-v1.0.0';
+const CACHE_VERSION = 'patamjengo-v1.0.2';
 const CACHE_NAME = `patamjengo-cache-${CACHE_VERSION}`;
 const RUNTIME_CACHE = 'patamjengo-runtime';
 const IMAGE_CACHE = 'patamjengo-images';

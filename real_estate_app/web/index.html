@@ -148,6 +148,14 @@
       font-size: 16px;
       font-weight: 500;
     }
+    .loading-tagline {
+      margin-top: 6px;
+      color: #888;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 13px;
+      font-style: italic;
+      letter-spacing: 0.3px;
+    }
     
     @keyframes spin {
       0% { transform: rotate(0deg); }
@@ -305,6 +313,7 @@
     <img class="loading-logo" src="icons/Icon-192.png" alt="Patamjengo Logo">
     <div class="loading-spinner"></div>
     <p class="loading-text">Loading Patamjengo...</p>
+    <p class="loading-tagline">Makazi Yako Yanaanza Hapa</p>
   </div>
 
   <!-- Service Worker & PWA Setup -->
@@ -318,15 +327,13 @@
           const reg = await navigator.serviceWorker.register('service-worker.js', { scope: '/' });
           console.log('[SW] Custom service-worker.js registered:', reg.scope);
 
-          // Update check
+          // Auto-update silently — no popup
           reg.addEventListener('updatefound', () => {
             const nw = reg.installing;
             nw.addEventListener('statechange', () => {
               if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-                if (confirm('New version available! Reload to update?')) {
-                  nw.postMessage({ type: 'SKIP_WAITING' });
-                  window.location.reload();
-                }
+                nw.postMessage({ type: 'SKIP_WAITING' });
+                window.location.reload();
               }
             });
           });

@@ -261,6 +261,44 @@
 -keep class com.patamjengo.app.data.** { *; }
 
 # ========================================
+# FLUTTER MAP / LATLONG2
+# ========================================
+-keep class org.openstreetmap.** { *; }
+-dontwarn org.openstreetmap.**
+-keep class dev.fleaflet.** { *; }
+-dontwarn dev.fleaflet.**
+
+# ========================================
+# APP LINKS (deep linking)
+# ========================================
+-keep class com.llfbandit.app_links.** { *; }
+-dontwarn com.llfbandit.app_links.**
+
+# ========================================
+# GEOLOCATOR / GEOCODING
+# ========================================
+-keep class com.baseflow.geolocator.** { *; }
+-dontwarn com.baseflow.geolocator.**
+
+# ========================================
+# PERMISSION HANDLER
+# ========================================
+-keep class com.baseflow.permissionhandler.** { *; }
+-dontwarn com.baseflow.permissionhandler.**
+
+# ========================================
+# IMAGE CROPPER (uCrop)
+# ========================================
+-keep class com.yalantis.ucrop.** { *; }
+-dontwarn com.yalantis.ucrop.**
+
+# ========================================
+# FLUTTER LOCAL NOTIFICATIONS
+# ========================================
+-keep class com.dexterous.** { *; }
+-dontwarn com.dexterous.**
+
+# ========================================
 # NOTES
 # ========================================
 # This ProGuard configuration is optimized for:

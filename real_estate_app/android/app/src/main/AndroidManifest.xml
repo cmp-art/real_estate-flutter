@@ -122,18 +122,11 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!--
-          Disable Impeller (Vulkan-based renderer) for emulator compatibility.
-          Flutter 3.22+ enables Impeller by default on Android. x86_64 emulators
-          often have broken Vulkan drivers that crash the native Flutter engine
-          before the Dart VM can emit its service URL to logcat — this is what
-          causes the "Waiting for VM Service port to be available..." hang.
-          Skia (the fallback) works reliably on all emulators.
-          Remove this tag when targeting physical devices in release.
-        -->
+        <!-- Impeller enabled (default) for production physical devices -->
+        <!-- To disable on emulators during dev, set android:value="false" -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
+            android:value="true" />
 
         <!-- Flutter deferred component loader (if using deferred loading) -->
         <meta-data

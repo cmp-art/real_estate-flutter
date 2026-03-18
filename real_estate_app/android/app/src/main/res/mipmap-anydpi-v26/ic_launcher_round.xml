@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive round icon — required on Android 8.0+ (API 26+) for launchers
+  that display round icons (e.g. Pixel, Samsung One UI, etc.).
+  Uses the same foreground/background layers as the standard adaptive icon.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher" />
+    <foreground android:drawable="@mipmap/ic_launcher" />
+</adaptive-icon>

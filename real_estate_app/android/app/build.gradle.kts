@@ -34,9 +34,10 @@ android {
 
     defaultConfig {
         applicationId = "com.patamjengo.app"
-        // Hardcoded to 21 for flutter_stripe and other plugin compatibility
+        // flutter_stripe requires minSdk >= 21; hardcoded so it never regresses
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Target Android 15 (API 35) — required by Play Store for new apps from 2025
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         // Multi-dex support for apps with 64K+ methods

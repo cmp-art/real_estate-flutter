@@ -1,0 +1,852 @@
+-- ============================================================================
+-- REAL ESTATE APP — FILE 1 OF 5: CORE DATABASE SETUP
+-- Tables: users (extensions), conversations, messages, user_deleted_messages
+-- Functions: update_updated_at_column, update_conversation_timestamp,
+--            cleanup_soft_deletes, delete_user
+-- Run this FIRST.
+-- ============================================================================
+
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_cron";
+
+-- ============================================================================
+-- PART 1: USERS TABLE EXTENSIONS
+-- ============================================================================
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS bio TEXT,
+ADD COLUMN IF NOT EXISTS show_email BOOLEAN DEFAULT TRUE,
+ADD COLUMN IF NOT EXISTS show_phone BOOLEAN DEFAULT TRUE;
+
+ALTER TABLE users
+DROP CONSTRAINT IF EXISTS bio_length_check;
+
+ALTER TABLE users
+ADD CONSTRAINT bio_length_check
+CHECK (bio IS NULL OR length(bio) <= 500);
+
+COMMENT ON COLUMN users.bio        IS 'User biography/about section — max 500 characters';
+COMMENT ON COLUMN users.show_email IS 'Whether to show email on public profile';
+COMMENT ON COLUMN users.show_phone IS 'Whether to show phone on public profile';
+
+-- ============================================================================
+-- PART 2: CHAT — CONVERSATIONS TABLE
+-- ============================================================================
+
+DROP TABLE IF EXISTS messages              CASCADE;
+DROP TABLE IF EXISTS conversations         CASCADE;
+DROP TABLE IF EXISTS user_deleted_messages CASCADE;
+
+CREATE TABLE conversations (
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user1_id          UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user2_id          UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    property_id       UUID        REFERENCES properties(id) ON DELETE SET NULL,
+    last_message      TEXT,
+    last_message_time TIMESTAMPTZ,
+    is_deleted        BOOLEAN     DEFAULT FALSE,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT different_users     CHECK (user1_id < user2_id),
+    CONSTRAINT unique_conversation UNIQUE (user1_id, user2_id)
+);
+
+-- ============================================================================
+-- PART 3: CHAT — MESSAGES TABLE
+-- ============================================================================
+
+CREATE TABLE messages (
+    id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id      UUID        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id            UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    sender_name          TEXT        NOT NULL,
+    content              TEXT        NOT NULL,
+    type                 TEXT        DEFAULT 'text' CHECK (type IN ('text','property','property_text','image','file')),
+    is_read              BOOLEAN     DEFAULT FALSE,
+    is_edited            BOOLEAN     DEFAULT FALSE,
+    edited               BOOLEAN     DEFAULT FALSE,
+    edited_at            TIMESTAMPTZ,
+    is_deleted           BOOLEAN     DEFAULT FALSE,
+    deleted_at           TIMESTAMPTZ,
+    reply_to_id          UUID        REFERENCES messages(id) ON DELETE SET NULL,
+    reply_to_content     TEXT,
+    reply_to_sender_name TEXT,
+    created_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PART 4: CHAT — USER DELETED MESSAGES (SOFT DELETE PER USER)
+-- ============================================================================
+
+CREATE TABLE user_deleted_messages (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    deleted_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_user_message_delete UNIQUE (message_id, user_id)
+);
+
+-- ============================================================================
+-- PART 5: INDEXES
+-- ============================================================================
+
+-- Conversations
+CREATE INDEX idx_conversations_user1      ON conversations(user1_id);
+CREATE INDEX idx_conversations_user2      ON conversations(user2_id);
+CREATE INDEX idx_conversations_property   ON conversations(property_id);
+CREATE INDEX idx_conversations_updated_at ON conversations(updated_at DESC);
+CREATE INDEX idx_conversations_users      ON conversations(user1_id, user2_id);
+
+-- Messages
+CREATE INDEX idx_messages_conversation         ON messages(conversation_id);
+CREATE INDEX idx_messages_sender               ON messages(sender_id);
+CREATE INDEX idx_messages_created_at           ON messages(created_at DESC);
+CREATE INDEX idx_messages_is_read              ON messages(is_read)              WHERE is_read = FALSE;
+CREATE INDEX idx_messages_reply_to             ON messages(reply_to_id)          WHERE reply_to_id IS NOT NULL;
+CREATE INDEX idx_messages_conversation_deleted ON messages(conversation_id, is_deleted);
+CREATE INDEX idx_messages_is_deleted           ON messages(is_deleted);
+CREATE INDEX idx_messages_unread               ON messages(conversation_id, is_read) WHERE is_read = FALSE;
+
+-- Composite index for markMessagesAsRead query performance:
+-- (conversation_id, is_read, sender_id) lets Postgres find unread messages
+-- in a conversation not sent by the current user in a single index scan.
+CREATE INDEX idx_messages_unread_by_conversation
+    ON messages(conversation_id, sender_id, is_read)
+    WHERE is_read = FALSE;
+
+-- User deleted messages
+CREATE INDEX idx_user_deleted_messages_user      ON user_deleted_messages(user_id);
+CREATE INDEX idx_user_deleted_messages_message   ON user_deleted_messages(message_id);
+CREATE INDEX idx_user_deleted_messages_composite ON user_deleted_messages(user_id, message_id);
+-- Reverse-order composite for the RPC's "WHERE message_id = x AND user_id = y" lookup
+CREATE INDEX IF NOT EXISTS idx_user_deleted_messages_lookup
+    ON user_deleted_messages (message_id, user_id);
+
+-- ============================================================================
+-- PART 6: ROW LEVEL SECURITY
+-- ============================================================================
+
+ALTER TABLE conversations         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_deleted_messages  ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- PART 7: DROP LEGACY POLICIES (idempotent cleanup)
+-- ============================================================================
+
+DROP POLICY IF EXISTS "Users can view their conversations"              ON conversations;
+DROP POLICY IF EXISTS "Users can view their own conversations"          ON conversations;
+DROP POLICY IF EXISTS "Users can create conversations"                  ON conversations;
+DROP POLICY IF EXISTS "Users can update their conversations"            ON conversations;
+DROP POLICY IF EXISTS "Users can update their own conversations"        ON conversations;
+DROP POLICY IF EXISTS "Users can delete their conversations"            ON conversations;
+DROP POLICY IF EXISTS "Users can delete their own conversations"        ON conversations;
+
+DROP POLICY IF EXISTS "Users can view messages in their conversations"  ON messages;
+DROP POLICY IF EXISTS "Users can send messages"                         ON messages;
+DROP POLICY IF EXISTS "Users can send messages to their conversations"  ON messages;
+DROP POLICY IF EXISTS "Users can update their messages"                 ON messages;
+DROP POLICY IF EXISTS "Users can update their own messages"             ON messages;
+DROP POLICY IF EXISTS "Users can delete their own messages"             ON messages;
+
+-- ============================================================================
+-- BUG FIX: Drop the broken read-receipt policies so we can replace them.
+-- The old "Users can update their own messages" policy used:
+--     USING (auth.uid() = sender_id)
+-- This meant ONLY the sender could UPDATE a message row — so when the
+-- recipient called markMessagesAsRead(), Supabase silently updated 0 rows
+-- (RLS filtered them all out) and returned no error. The unread badge
+-- never cleared because is_read was never actually set to TRUE in the DB.
+--
+-- We replace it with two separate, purpose-specific UPDATE policies:
+--   1. Senders can edit their own message content (edit/delete flow)
+--   2. Conversation participants can mark messages as read (read-receipt flow)
+-- ============================================================================
+DROP POLICY IF EXISTS "Senders can edit their own messages"             ON messages;
+DROP POLICY IF EXISTS "Participants can mark messages as read"          ON messages;
+
+DROP POLICY IF EXISTS "Users can view their own deleted messages"       ON user_deleted_messages;
+DROP POLICY IF EXISTS "Users can view their deleted messages"           ON user_deleted_messages;
+DROP POLICY IF EXISTS "Users can delete messages for themselves"        ON user_deleted_messages;
+DROP POLICY IF EXISTS "Users can update their own deletion records"     ON user_deleted_messages;
+DROP POLICY IF EXISTS "Users can remove their own deletion records"     ON user_deleted_messages;
+DROP POLICY IF EXISTS "Users can manage their deleted messages"         ON user_deleted_messages;
+
+-- ============================================================================
+-- PART 8: RLS POLICIES — CONVERSATIONS
+-- ============================================================================
+
+CREATE POLICY "Users can view their own conversations"
+    ON conversations FOR SELECT
+    USING (auth.uid() = user1_id OR auth.uid() = user2_id);
+
+CREATE POLICY "Users can create conversations"
+    ON conversations FOR INSERT
+    WITH CHECK (auth.uid() = user1_id OR auth.uid() = user2_id);
+
+CREATE POLICY "Users can update their own conversations"
+    ON conversations FOR UPDATE
+    USING (auth.uid() = user1_id OR auth.uid() = user2_id);
+
+CREATE POLICY "Users can delete their own conversations"
+    ON conversations FOR DELETE
+    USING (auth.uid() = user1_id OR auth.uid() = user2_id);
+
+-- ============================================================================
+-- PART 9: RLS POLICIES — MESSAGES
+-- ============================================================================
+
+CREATE POLICY "Users can view messages in their conversations"
+    ON messages FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM conversations
+            WHERE id = messages.conversation_id
+              AND (auth.uid() = user1_id OR auth.uid() = user2_id)
+        )
+    );
+
+CREATE POLICY "Users can send messages to their conversations"
+    ON messages FOR INSERT
+    WITH CHECK (
+        auth.uid() = sender_id
+        AND EXISTS (
+            SELECT 1 FROM conversations
+            WHERE id = conversation_id
+              AND (auth.uid() = user1_id OR auth.uid() = user2_id)
+        )
+    );
+
+-- ============================================================================
+-- FIX: Two separate UPDATE policies replace the old broken single policy.
+--
+-- Policy 1 — "Senders can edit their own messages"
+-- Covers: edit message content, soft-delete (is_deleted), hard-delete triggers.
+-- Restricted to: the message sender only (auth.uid() = sender_id).
+--
+-- Policy 2 — "Participants can mark messages as read"
+-- Covers: markMessagesAsRead() — sets is_read = TRUE on messages sent by
+-- the OTHER user that the current user received.
+-- Restricted to: conversation participants who are NOT the sender.
+-- The WITH CHECK (is_read = TRUE) ensures recipients can ONLY flip is_read
+-- and cannot modify any other column (content, sender_id, type, etc.).
+-- ============================================================================
+
+CREATE POLICY "Senders can edit their own messages"
+    ON messages FOR UPDATE
+    USING (auth.uid() = sender_id);
+
+CREATE POLICY "Participants can mark messages as read"
+    ON messages FOR UPDATE
+    USING (
+        -- Must be in the conversation
+        EXISTS (
+            SELECT 1 FROM conversations
+            WHERE id = messages.conversation_id
+              AND (auth.uid() = user1_id OR auth.uid() = user2_id)
+        )
+        -- But NOT the sender (recipients mark messages as read, not senders)
+        AND auth.uid() != sender_id
+    )
+    WITH CHECK (
+        -- Recipients may ONLY set is_read = TRUE — no other column changes allowed
+        is_read = TRUE
+    );
+
+CREATE POLICY "Users can delete their own messages"
+    ON messages FOR DELETE
+    USING (auth.uid() = sender_id);
+
+-- ============================================================================
+-- PART 10: RLS POLICIES — USER_DELETED_MESSAGES
+-- ============================================================================
+
+CREATE POLICY "Users can view their deleted messages"
+    ON user_deleted_messages FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete messages for themselves"
+    ON user_deleted_messages FOR INSERT
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can manage their deleted messages"
+    ON user_deleted_messages FOR DELETE
+    USING (auth.uid() = user_id);
+
+-- ============================================================================
+-- PART 11: TRIGGERS & FUNCTIONS
+-- ============================================================================
+
+-- Generic: auto-update updated_at timestamps
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_conversations_updated_at ON conversations;
+CREATE TRIGGER update_conversations_updated_at
+    BEFORE UPDATE ON conversations
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Conversation: update last_message + last_message_time on message creation
+CREATE OR REPLACE FUNCTION update_conversation_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' AND NEW.is_deleted = FALSE THEN
+        UPDATE conversations
+        SET last_message      = NEW.content,
+            last_message_time = NEW.created_at,
+            updated_at        = NOW()
+        WHERE id = NEW.conversation_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_conversation_on_message ON messages;
+CREATE TRIGGER update_conversation_on_message
+    AFTER INSERT ON messages
+    FOR EACH ROW
+    EXECUTE FUNCTION update_conversation_timestamp();
+
+-- FIX: Drop the function first to avoid return type conflict
+DROP FUNCTION IF EXISTS cleanup_soft_deletes() CASCADE;
+
+-- Messages: cleanup user_deleted_messages when message is hard-deleted
+CREATE OR REPLACE FUNCTION cleanup_soft_deletes()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM user_deleted_messages WHERE message_id = OLD.id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Self-service account deletion
+CREATE OR REPLACE FUNCTION delete_user()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+    _user_id UUID := auth.uid();
+    _email   TEXT;
+BEGIN
+    IF _user_id IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated';
+    END IF;
+
+    SELECT email INTO _email FROM auth.users WHERE id = _user_id;
+
+    -- Delete user data
+    DELETE FROM user_deleted_messages WHERE user_id = _user_id;
+    DELETE FROM messages              WHERE sender_id = _user_id;
+    DELETE FROM conversations         WHERE user1_id = _user_id OR user2_id = _user_id;
+
+    -- Delete from auth.users
+    DELETE FROM auth.users WHERE id = _user_id;
+
+    RAISE NOTICE 'User % (%) deleted', _user_id, _email;
+END;
+$$;
+
+-- ============================================================================
+-- PART 12: ATTACH CLEANUP TRIGGER
+-- ============================================================================
+
+DROP TRIGGER IF EXISTS cleanup_soft_deletes_on_hard_delete ON messages;
+CREATE TRIGGER cleanup_soft_deletes_on_hard_delete
+    BEFORE DELETE ON messages
+    FOR EACH ROW
+    EXECUTE FUNCTION cleanup_soft_deletes();
+
+-- ============================================================================
+-- PART 13: GRANTS
+-- ============================================================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON conversations        TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON messages              TO authenticated;
+GRANT SELECT, INSERT, DELETE          ON user_deleted_messages TO authenticated;
+
+GRANT EXECUTE ON FUNCTION update_updated_at_column()       TO authenticated;
+GRANT EXECUTE ON FUNCTION update_conversation_timestamp()  TO authenticated;
+GRANT EXECUTE ON FUNCTION cleanup_soft_deletes()           TO authenticated;
+GRANT EXECUTE ON FUNCTION delete_user()                    TO authenticated;
+
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMENT ON TABLE conversations          IS 'Two-user private conversations keyed by (user1_id, user2_id) where user1 < user2';
+COMMENT ON TABLE messages                IS 'Individual chat messages. is_deleted=true means sender hard-deleted for both; user_deleted_messages is soft-delete per-user';
+COMMENT ON TABLE user_deleted_messages   IS 'Per-user soft-delete of messages. Users can hide messages individually without removing them for the other party';
+
+COMMENT ON FUNCTION update_updated_at_column()      IS 'Generic trigger function to set updated_at = NOW()';
+COMMENT ON FUNCTION update_conversation_timestamp() IS 'Updates conversation.last_message and last_message_time when a new message is inserted';
+COMMENT ON FUNCTION cleanup_soft_deletes()          IS 'Cleans up user_deleted_messages when a message is hard-deleted (both parties)';
+COMMENT ON FUNCTION delete_user()                   IS 'Self-service account deletion — removes all user data and auth record (SECURITY DEFINER)';
+
+
+-- ============================================================================
+-- PART 14: get_user_conversations() RPC
+-- Replaces the N+1 Dart query loop in ChatRemoteDataSource.getConversations().
+-- Was O(3n) DB queries (3 calls per conversation). Now O(1) — one server-side
+-- SQL statement returns all conversations with participant info, property
+-- snippet and per-conversation unread count.
+--
+-- Flutter usage:
+--   final data = await supabase.rpc('get_user_conversations',
+--       params: {'p_user_id': userId});
+-- ============================================================================
+
+-- Drop ALL overloads of get_user_conversations (handles the case where
+-- previous failed runs left behind multiple versions with different signatures).
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN
+        SELECT oid::regprocedure::text AS sig
+        FROM   pg_proc
+        WHERE  proname        = 'get_user_conversations'
+          AND  pronamespace   = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+    LOOP
+        EXECUTE 'DROP FUNCTION IF EXISTS ' || r.sig || ' CASCADE';
+    END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION get_user_conversations(p_user_id UUID)
+RETURNS TABLE (
+    id                  UUID,
+    user1_id            UUID,
+    user2_id            UUID,
+    property_id         UUID,
+    last_message        TEXT,
+    last_message_time   TIMESTAMPTZ,
+    updated_at          TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ,
+    other_user_id       UUID,
+    other_user_name     TEXT,
+    other_user_avatar   TEXT,
+    property_title      TEXT,
+    property_image      TEXT,
+    unread_count        BIGINT
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT
+        c.id,
+        c.user1_id,
+        c.user2_id,
+        c.property_id,
+        c.last_message,
+        c.last_message_time,
+        c.updated_at,
+        c.created_at,
+
+        -- Other participant
+        other_u.id          AS other_user_id,
+        other_u.full_name   AS other_user_name,
+        other_u.avatar_url  AS other_user_avatar,
+
+        -- Property snippet (NULL for direct-message conversations)
+        p.title             AS property_title,
+        p.images[1]         AS property_image,   -- images is TEXT[], use [1] not ->>
+
+        -- Unread count: messages not from caller, unread, not soft-deleted by caller
+        COALESCE((
+            SELECT COUNT(*)
+            FROM   messages m
+            LEFT JOIN user_deleted_messages udm
+                   ON udm.message_id = m.id
+                  AND udm.user_id    = p_user_id
+            WHERE  m.conversation_id = c.id
+              AND  m.sender_id      <> p_user_id
+              AND  m.is_read         = FALSE
+              AND  udm.message_id   IS NULL
+        ), 0)               AS unread_count
+
+    FROM  conversations c
+
+    JOIN  users other_u
+          ON  other_u.id = CASE
+                  WHEN c.user1_id = p_user_id THEN c.user2_id
+                  ELSE c.user1_id
+              END
+
+    LEFT JOIN properties p ON p.id = c.property_id
+
+    WHERE (c.user1_id = p_user_id OR c.user2_id = p_user_id)
+    ORDER BY c.updated_at DESC;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_user_conversations(UUID) TO authenticated;
+
+COMMENT ON FUNCTION get_user_conversations IS
+    'Returns all conversations for a user in a single query with other-user '
+    'info, property snippet, and per-conversation unread count. '
+    'Replaces the N+1 Dart loop that was responsible for >100 GB egress.';
+
+-- ============================================================================
+-- STORAGE CACHE-CONTROL REMINDER
+-- Supabase cache headers are set per-upload in Flutter, not via SQL.
+-- Every storage upload call must include:
+--
+--   fileOptions: const FileOptions(cacheControl: '31536000', upsert: false)
+--
+-- This tells the Supabase CDN to cache files for 1 year at the edge,
+-- eliminating repeat origin fetches which were the #1 egress driver.
+-- Buckets: property_images, property_videos, advertisements
+-- ============================================================================
+
+-- ============================================================================
+-- PART 15: APP CONFIG
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key        TEXT        PRIMARY KEY,
+    value      TEXT        NOT NULL DEFAULT '',
+    description TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Auto-update timestamp on change
+CREATE OR REPLACE FUNCTION _update_app_config_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS app_config_updated_at ON app_config;
+CREATE TRIGGER app_config_updated_at
+    BEFORE UPDATE ON app_config
+    FOR EACH ROW EXECUTE FUNCTION _update_app_config_timestamp();
+
+-- Seed default rows (safe to re-run — ON CONFLICT DO NOTHING)
+INSERT INTO app_config (key, value, description) VALUES
+    ('claude_api_key', '', 'Claude Haiku API key from console.anthropic.com — set this to enable AI validation'),
+    ('ai_validation_enabled', 'true', 'Master switch: set to false to disable AI and use rules-only fallback'),
+    ('manual_review_notify_email', '', 'Admin email to notify when items enter the manual review queue')
+ON CONFLICT (key) DO NOTHING;
+
+-- RLS: authenticated users (app clients) can READ config values
+ALTER TABLE app_config ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated users can read app config" ON app_config;
+DROP POLICY IF EXISTS "Service role manages app config"         ON app_config;
+
+CREATE POLICY "Authenticated users can read app config"
+    ON app_config FOR SELECT
+    TO authenticated
+    USING (TRUE);
+
+CREATE POLICY "Service role manages app config"
+    ON app_config FOR ALL
+    TO service_role
+    USING (TRUE) WITH CHECK (TRUE);
+
+GRANT SELECT ON app_config TO authenticated;
+GRANT ALL    ON app_config TO service_role;
+
+COMMENT ON TABLE  app_config             IS 'Runtime admin configuration. Set claude_api_key here to enable AI validation.';
+COMMENT ON COLUMN app_config.key         IS 'Unique config key (e.g. claude_api_key)';
+COMMENT ON COLUMN app_config.value       IS 'Config value. For claude_api_key: paste your sk-ant-api03-... key here.';
+COMMENT ON COLUMN app_config.description IS 'Human-readable description of what this setting does';
+
+
+-- ============================================================================
+-- PART X: PROPERTY STORAGE BUCKETS
+-- ============================================================================
+
+-- Images bucket
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'property_images',
+    'property_images',
+    TRUE,
+    20971520,  -- 20 MB per image
+    ARRAY['image/jpeg','image/jpg','image/png','image/webp','image/heic','image/heif']
+)
+ON CONFLICT (id) DO UPDATE SET
+    public             = TRUE,
+    file_size_limit    = 20971520,
+    allowed_mime_types = ARRAY['image/jpeg','image/jpg','image/png','image/webp','image/heic','image/heif'];
+
+-- Videos bucket
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'property_videos',
+    'property_videos',
+    TRUE,
+    52428800,  -- 50 MB per video
+    ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv']
+)
+ON CONFLICT (id) DO UPDATE SET
+    public             = TRUE,
+    file_size_limit    = 52428800,
+    allowed_mime_types = ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv'];
+
+-- ── RLS Policies: property_images ────────────────────────────────────────────
+DROP POLICY IF EXISTS "Property owners can upload images"    ON storage.objects;
+DROP POLICY IF EXISTS "Anyone can view property images"      ON storage.objects;
+DROP POLICY IF EXISTS "Property owners can update images"    ON storage.objects;
+DROP POLICY IF EXISTS "Property owners can delete images"    ON storage.objects;
+
+CREATE POLICY "Property owners can upload images"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'property_images');
+
+CREATE POLICY "Anyone can view property images"
+    ON storage.objects FOR SELECT TO public
+    USING (bucket_id = 'property_images');
+
+CREATE POLICY "Property owners can update images"
+    ON storage.objects FOR UPDATE TO authenticated
+    USING (bucket_id = 'property_images'
+       AND auth.uid()::text = (storage.foldername(name))[1]);
+
+CREATE POLICY "Property owners can delete images"
+    ON storage.objects FOR DELETE TO authenticated
+    USING (bucket_id = 'property_images'
+       AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- ── RLS Policies: property_videos ────────────────────────────────────────────
+DROP POLICY IF EXISTS "Property owners can upload videos"    ON storage.objects;
+DROP POLICY IF EXISTS "Anyone can view property videos"      ON storage.objects;
+DROP POLICY IF EXISTS "Property owners can update videos"    ON storage.objects;
+DROP POLICY IF EXISTS "Property owners can delete videos"    ON storage.objects;
+
+CREATE POLICY "Property owners can upload videos"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'property_videos');
+
+CREATE POLICY "Anyone can view property videos"
+    ON storage.objects FOR SELECT TO public
+    USING (bucket_id = 'property_videos');
+
+CREATE POLICY "Property owners can update videos"
+    ON storage.objects FOR UPDATE TO authenticated
+    USING (bucket_id = 'property_videos'
+       AND auth.uid()::text = (storage.foldername(name))[1]);
+
+CREATE POLICY "Property owners can delete videos"
+    ON storage.objects FOR DELETE TO authenticated
+    USING (bucket_id = 'property_videos'
+       AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- ============================================================================
+-- VERIFICATION
+-- ============================================================================
+DO $$
+DECLARE
+    v_conv              INT;
+    v_msg               INT;
+    v_pol               INT;
+    v_cfg               INT;
+    v_buckets           INT;
+    v_read_policy_exists    BOOLEAN;
+    v_rpc_exists            BOOLEAN;
+    v_idx_lookup_exists     BOOLEAN;
+BEGIN
+    SELECT COUNT(*) INTO v_conv FROM conversations;
+    SELECT COUNT(*) INTO v_msg  FROM messages;
+    SELECT COUNT(*) INTO v_pol  FROM pg_policies
+        WHERE tablename IN ('conversations','messages','user_deleted_messages','objects');
+    SELECT COUNT(*) INTO v_cfg  FROM app_config;
+    SELECT COUNT(*) INTO v_buckets FROM storage.buckets
+        WHERE id IN ('property_images','property_videos');
+
+    -- Verify the critical read-receipt policy was created
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename  = 'messages'
+          AND policyname = 'Participants can mark messages as read'
+          AND schemaname = 'public'
+    ) INTO v_read_policy_exists;
+
+    -- Verify get_user_conversations() RPC
+    SELECT EXISTS (
+        SELECT 1 FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.proname = 'get_user_conversations' AND n.nspname = 'public'
+    ) INTO v_rpc_exists;
+
+    -- Verify new lookup index
+    SELECT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE indexname = 'idx_user_deleted_messages_lookup'
+    ) INTO v_idx_lookup_exists;
+
+    RAISE NOTICE '=== FILE 1: CORE DATABASE SETUP COMPLETE ===';
+    RAISE NOTICE '  Conversations: %  Messages: %  RLS policies: %', v_conv, v_msg, v_pol;
+    RAISE NOTICE '  app_config rows: %  (set claude_api_key value to enable AI)', v_cfg;
+    RAISE NOTICE '  Storage buckets (property_images + property_videos): %/2', v_buckets;
+    RAISE NOTICE '  Read-receipt RLS policy     : %',
+        CASE WHEN v_read_policy_exists
+             THEN '✅ CREATED — markMessagesAsRead() will now work correctly'
+             ELSE '❌ MISSING — unread badge bug will persist!' END;
+    RAISE NOTICE '  get_user_conversations RPC  : %',
+        CASE WHEN v_rpc_exists THEN '✅ CREATED' ELSE '❌ MISSING — re-run' END;
+    RAISE NOTICE '  idx_user_deleted_messages_lookup : %',
+        CASE WHEN v_idx_lookup_exists THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  IMPORTANT: set FileOptions(cacheControl:''31536000'') on ALL storage uploads in Flutter';
+
+    IF NOT v_read_policy_exists THEN
+        RAISE WARNING '❌ "Participants can mark messages as read" policy is missing! Re-run this file.';
+    END IF;
+    IF NOT v_rpc_exists THEN
+        RAISE WARNING '❌ get_user_conversations() RPC is missing — egress optimisation not active.';
+    END IF;
+END $$;
+-- ============================================================================
+-- EXTENSION A: CRASH REPORTING, ANALYTICS & PROPERTY TRACKING
+-- (Appended to sql6 — runs after chat/storage setup above)
+-- ============================================================================
+
+-- ── App Error Logging ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS app_errors (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    error_type    TEXT        NOT NULL,
+    error_message TEXT        NOT NULL,
+    stack_trace   TEXT,
+    device_info   JSONB       DEFAULT '{}'::JSONB,
+    app_version   TEXT,
+    severity      TEXT        DEFAULT 'error'
+                      CHECK (severity IN ('debug','info','warning','error','critical')),
+    resolved      BOOLEAN     DEFAULT FALSE,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_app_errors_severity   ON app_errors(severity);
+CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON app_errors(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_errors_user_id    ON app_errors(user_id);
+
+ALTER TABLE app_errors ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users insert own errors"  ON app_errors;
+DROP POLICY IF EXISTS "Admins view all errors"   ON app_errors;
+CREATE POLICY "Users insert own errors"  ON app_errors FOR INSERT WITH CHECK (
+    auth.uid() = user_id OR user_id IS NULL);
+CREATE POLICY "Admins view all errors"   ON app_errors FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role IN ('admin','super_admin')));
+
+-- ── Analytics Events ─────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    event_name  TEXT        NOT NULL,
+    properties  JSONB       DEFAULT '{}'::JSONB,
+    session_id  TEXT,
+    platform    TEXT,
+    app_version TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_event_name ON analytics_events(event_name);
+CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_user_id    ON analytics_events(user_id);
+
+-- Auto-cleanup: keep only 180 days of analytics data
+CREATE OR REPLACE FUNCTION cleanup_old_analytics() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    DELETE FROM analytics_events WHERE created_at < NOW() - INTERVAL '180 days';
+    DELETE FROM app_errors        WHERE created_at < NOW() - INTERVAL '90 days' AND resolved = TRUE;
+END $$;
+
+ALTER TABLE analytics_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users insert own analytics"  ON analytics_events;
+DROP POLICY IF EXISTS "Admins read analytics"        ON analytics_events;
+CREATE POLICY "Users insert own analytics"  ON analytics_events FOR INSERT WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
+CREATE POLICY "Admins read analytics"        ON analytics_events FOR SELECT USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role IN ('admin','super_admin')));
+
+-- ── Property Views (track unique views for "X people viewed today") ──────────
+CREATE TABLE IF NOT EXISTS property_views (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    viewer_id   UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    viewer_ip   TEXT,
+    platform    TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_property_views_property_id ON property_views(property_id);
+CREATE INDEX IF NOT EXISTS idx_property_views_created_at  ON property_views(created_at DESC);
+
+-- Deduplicated view counter (1 view per user per property per hour)
+CREATE OR REPLACE FUNCTION record_property_view(p_property_id UUID, p_viewer_id UUID DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    -- Skip if this user viewed in the last hour
+    IF p_viewer_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM property_views
+        WHERE property_id = p_property_id
+          AND viewer_id   = p_viewer_id
+          AND created_at  > NOW() - INTERVAL '1 hour'
+    ) THEN RETURN; END IF;
+
+    INSERT INTO property_views(property_id, viewer_id)
+    VALUES (p_property_id, p_viewer_id);
+END $$;
+
+-- Get view count for a property today
+CREATE OR REPLACE FUNCTION get_property_view_count(p_property_id UUID, p_hours INT DEFAULT 24)
+RETURNS BIGINT LANGUAGE SQL STABLE AS $$
+    SELECT COUNT(*) FROM property_views
+    WHERE property_id = p_property_id
+      AND created_at  > NOW() - (p_hours || ' hours')::INTERVAL;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_property_view(UUID, UUID) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION get_property_view_count(UUID, INT) TO authenticated, anon;
+
+ALTER TABLE property_views ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Anyone can record view" ON property_views;
+DROP POLICY IF EXISTS "Owners see own property views" ON property_views;
+CREATE POLICY "Anyone can record view" ON property_views FOR INSERT WITH CHECK (TRUE);
+CREATE POLICY "Owners see own property views" ON property_views FOR SELECT USING (
+    EXISTS (SELECT 1 FROM properties WHERE id = property_id AND owner_id = auth.uid())
+);
+
+-- ── Recently Viewed (per-user history, max 20) ────────────────────────────────
+CREATE TABLE IF NOT EXISTS recently_viewed (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    property_id UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    viewed_at   TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, property_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recently_viewed_user ON recently_viewed(user_id, viewed_at DESC);
+
+CREATE OR REPLACE FUNCTION upsert_recently_viewed(p_user_id UUID, p_property_id UUID)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    INSERT INTO recently_viewed(user_id, property_id, viewed_at)
+    VALUES (p_user_id, p_property_id, NOW())
+    ON CONFLICT (user_id, property_id)
+    DO UPDATE SET viewed_at = NOW();
+
+    -- Keep only most recent 20 per user
+    DELETE FROM recently_viewed
+    WHERE user_id = p_user_id
+      AND id NOT IN (
+          SELECT id FROM recently_viewed
+          WHERE user_id = p_user_id
+          ORDER BY viewed_at DESC
+          LIMIT 20
+      );
+END $$;
+
+GRANT EXECUTE ON FUNCTION upsert_recently_viewed(UUID, UUID) TO authenticated;
+
+ALTER TABLE recently_viewed ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own recently viewed" ON recently_viewed;
+CREATE POLICY "Users manage own recently viewed" ON recently_viewed
+    USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+

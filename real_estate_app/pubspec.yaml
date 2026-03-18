@@ -1,7 +1,7 @@
 name: patamjengo_app
 description: A real estate application for buying, selling, and renting properties
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -103,6 +103,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.1
+  flutter_launcher_icons: ^0.14.3
   mockito: ^5.4.4
   build_runner: ^2.4.8
   freezed: ^2.4.5
@@ -110,12 +111,18 @@ dev_dependencies:
   riverpod_generator: ^2.3.9
   import_sorter: ^4.6.0
 
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/ic_launcher.png"
+  web:
+    generate: true
+    image_path: "assets/images/ic_launcher.png"
+
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/
     - assets/icons/
     - assets/.env
     - assets/docs/
-    - assets/store/
