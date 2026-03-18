@@ -1,7 +1,7 @@
 name: patamjengo_app
 description: A real estate application for buying, selling, and renting properties
 publish_to: 'none'
-version: 1.0.0+2
+version: 1.0.0+7
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

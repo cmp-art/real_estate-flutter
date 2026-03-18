@@ -5,7 +5,8 @@
     FIX M-6: Removed CALL_PHONE — dangerous permission rejected by Play Store without justification.
              Use url_launcher with tel: URI instead (no permission needed).
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <!-- ── Core network ─────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -149,9 +150,8 @@
         </provider>
     </application>
 
-    <!-- Required for flutter_local_notifications on Android 12+ -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
-                     android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Explicitly remove exact alarm permissions injected by plugins -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" tools:node="remove" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
 
 </manifest>
