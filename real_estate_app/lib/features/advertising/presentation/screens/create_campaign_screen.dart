@@ -480,12 +480,8 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
 
   Widget _buildStep1Details() {
     final objectives = [
-      ('brand_awareness',    Icons.visibility_rounded,   'Brand Awareness',
-          'Increase visibility — best with CPM bidding'),
-      ('property_inquiries', Icons.home_rounded,          'Property Inquiries',
-          'Drive direct inquiries on your listings — best with CPC'),
-      ('website_visits',     Icons.open_in_browser_rounded, 'Website / WhatsApp Visits',
-          'Send people to your website or WhatsApp number'),
+      ('brand_awareness', Icons.visibility_rounded, 'Brand Awareness',
+          'Get your listings seen — includes property inquiries, website and WhatsApp visits'),
     ];
 
     return Column(
@@ -635,13 +631,24 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           ],
         ),
         SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
+        // Bid label row
         Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Bid Amount: ${_currencyFmt.format(_bidAmount)} / ${_biddingStrategy == "cpm" ? "1K views" : "click"}',
-              style: TextStyle(
-                  color: ThemeConfig.getTextSecondaryColor(context),
-                  fontSize: 13),
+              _biddingStrategy == 'cpm' ? 'Per 1,000 views' : 'Per click',
+              style: TextStyle(color: ThemeConfig.getTextSecondaryColor(context), fontSize: 12),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: ThemeConfig.getPrimaryColor(context),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${_currencyFmt.format(_bidAmount)} / ${_biddingStrategy == "cpm" ? "1K views" : "click"}',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
             ),
           ],
         ),
@@ -651,13 +658,14 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           max: _biddingStrategy == 'cpm' ? 3000 : 500,
           divisions: _biddingStrategy == 'cpm' ? 25 : 45,
           activeColor: ThemeConfig.getPrimaryColor(context),
-          inactiveColor:
-              ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
+          inactiveColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
           onChanged: (v) {
             setState(() => _bidAmount = v);
             _recalcEstimate();
           },
         ),
+        // Live impact preview — always visible, uses actual budget or TSh 50,000 example
+        _buildBidImpactPreview(),
         SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
 
         // Dates
@@ -713,11 +721,89 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           ],
         ),
 
-        // Estimate card
-        if (_estimate != null) ...[
-          SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
-          _buildEstimateCard(),
+      ],
+    );
+  }
+
+  /// Live impact preview shown directly below the bid slider.
+  /// Uses the actual total budget if entered, otherwise shows a TSh 50,000 example.
+  Widget _buildBidImpactPreview() {
+    final enteredBudget = double.tryParse(_totalBudgetController.text) ?? 0;
+    final previewBudget = enteredBudget > 0 ? enteredBudget : 50000.0;
+    final isExample    = enteredBudget <= 0;
+    final days = _endDate.difference(_startDate).inDays.clamp(1, 999);
+
+    final algo = ref.read(directAdAlgorithmProvider);
+    final est  = algo.estimateCampaignRevenue(
+      totalBudget: previewBudget,
+      bidAmount: _bidAmount,
+      biddingStrategy: _biddingStrategy,
+      estimatedDays: days,
+    );
+
+    final impressionsFmt = NumberFormat.compact().format(est.estimatedImpressions);
+    final clicksFmt      = NumberFormat.compact().format(est.estimatedClicks);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: ThemeConfig.getPrimaryColor(context).withOpacity(0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: ThemeConfig.getPrimaryColor(context).withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_graph_rounded, size: 15, color: ThemeConfig.getPrimaryColor(context)),
+              const SizedBox(width: 6),
+              Text(
+                isExample
+                    ? 'Example with TSh 50,000 budget'
+                    : 'Estimated results for your budget',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: ThemeConfig.getTextSecondaryColor(context),
+                  fontStyle: isExample ? FontStyle.italic : FontStyle.normal,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _impactStat(impressionsFmt, 'Views'),
+              _impactStat(clicksFmt, 'Clicks'),
+              _impactStat('${est.ctr.toStringAsFixed(1)}%', 'CTR'),
+              _impactStat('${days}d', 'Duration'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Higher bid → wins more auctions → more people see your ad',
+            style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context)),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _impactStat(String value, String label) {
+    return Column(
+      children: [
+        Text(value,
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: ThemeConfig.getPrimaryColor(context))),
+        const SizedBox(height: 2),
+        Text(label,
+            style: TextStyle(
+                fontSize: 10,
+                color: ThemeConfig.getTextSecondaryColor(context))),
       ],
     );
   }
