@@ -13,7 +13,8 @@ import '../../../users/presentation/screens/user_profileview_screen.dart';
 import '../../presentation/screens/property_detail_screen.dart';
 import '../providers/video_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
-import '../../../../core/utils/app_localizations.dart';
+import '../../../settings/presentation/screens/app_translations.dart';
+import '../../../settings/presentation/providers/app_providers.dart';
 
 /// Widget for displaying direct ads in property listings
 /// - Native-style design that matches the app theme
@@ -166,6 +167,8 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = ref.watch(languageProvider).languageCode;
+    String t(String key) => AppTranslations.translate(key, lang);
 
     // Wrap in NotificationListener so impression fires only when ad is visible.
     // Using addPostFrameCallback on every scroll event + initial layout check.
@@ -224,7 +227,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                       ),
                       SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                       Text(
-                        AppLocalizations.of(context)?.translate('sponsored') ?? 'Sponsored',
+                        t('sponsored'),
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11),
                           fontWeight: FontWeight.w600,
@@ -476,7 +479,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                         const Icon(Icons.videocam_rounded,
                             color: Colors.white, size: 12),
                         const SizedBox(width: 3),
-                        Text(AppLocalizations.of(context)?.translate('video_ad') ?? 'VIDEO AD',
+                        Text(t('video_ad'),
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
@@ -534,7 +537,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
               Text(
-                AppLocalizations.of(context)?.translate('ad_media_unavailable') ?? 'Ad media unavailable',
+                t('ad_media_unavailable'),
                 style: TextStyle(
                   color: ThemeConfig.getTextSecondaryColor(context),
                   fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
@@ -550,7 +553,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
 }
 
 /// Compact banner version for alternate placement
-class DirectAdBanner extends StatefulWidget {
+class DirectAdBanner extends ConsumerStatefulWidget {
   final DirectAd ad;
   final VoidCallback onImpression;
   final VoidCallback onClick;
@@ -563,10 +566,10 @@ class DirectAdBanner extends StatefulWidget {
   });
 
   @override
-  State<DirectAdBanner> createState() => _DirectAdBannerState();
+  ConsumerState<DirectAdBanner> createState() => _DirectAdBannerState();
 }
 
-class _DirectAdBannerState extends State<DirectAdBanner> {
+class _DirectAdBannerState extends ConsumerState<DirectAdBanner> {
   bool _hasRecordedImpression = false;
 
   @override
@@ -632,6 +635,8 @@ class _DirectAdBannerState extends State<DirectAdBanner> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = ref.watch(languageProvider).languageCode;
+    String t(String key) => AppTranslations.translate(key, lang);
 
     return Card(
       elevation: 1,
@@ -705,7 +710,7 @@ class _DirectAdBannerState extends State<DirectAdBanner> {
                         ),
                         SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                         Text(
-                          AppLocalizations.of(context)?.translate('sponsored') ?? 'Sponsored',
+                          t('sponsored'),
                           style: TextStyle(
                             fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
                             fontWeight: FontWeight.w600,

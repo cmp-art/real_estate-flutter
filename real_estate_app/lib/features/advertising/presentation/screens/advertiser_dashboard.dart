@@ -6,7 +6,8 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/config/theme_config.dart';
-import '../../../../core/utils/app_localizations.dart';
+import '../../../../features/settings/presentation/screens/app_translations.dart';
+import '../../../../features/settings/presentation/providers/app_providers.dart';
       // ← single source of truth
 import '../../../../core/services/direct_ad_models.dart';
 import '../provider/ad_providers.dart';
@@ -31,6 +32,9 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
   bool _isLoading = true;
   String? _errorMessage;
 
+  String _t(String key) => AppTranslations.translate(
+      key, ref.read(languageProvider).languageCode);
+
   @override
   void initState() {
     super.initState();
@@ -53,7 +57,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (supabaseUser == null) {
         setState(() {
           _isLoading = false;
-          _errorMessage = AppLocalizations.of(context)?.translate('user_not_authenticated') ?? 'User not authenticated. Please sign in.';
+          _errorMessage = _t('user_not_authenticated');
         });
         return;
       }
@@ -68,7 +72,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (advertiser == null) {
         setState(() {
           _isLoading = false;
-          _errorMessage = AppLocalizations.of(context)?.translate('unable_create_advertiser') ?? 'Unable to create advertiser account';
+          _errorMessage = _t('unable_to_create_advertiser_account');
         });
         return;
       }
@@ -90,7 +94,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = AppLocalizations.of(context)?.translate('unable_load_advertiser') ?? 'Unable to load advertiser data';
+          _errorMessage = _t('unable_to_load_advertiser_data');
         });
       }
     }
@@ -103,7 +107,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(AppLocalizations.of(ctx)?.translate('delete_campaign_title') ?? 'Delete Campaign?'),
+        title: Text(_t('delete_campaign_title')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -120,15 +124,15 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 border: Border.all(
                     color: ThemeConfig.infoColor.withOpacity(0.3)),
               ),
-              child: const Row(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.info_outline_rounded,
+                  const Icon(Icons.info_outline_rounded,
                       size: 16, color: ThemeConfig.infoColor),
-                  SizedBox(width: 8),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      AppLocalizations.of(ctx)?.translate('delete_campaign_history') ?? 'All spend, impressions and click history are preserved for billing records.',
+                      _t('delete_campaign_history'),
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
@@ -173,7 +177,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (result.success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(AppLocalizations.of(context)?.translate('campaign_deleted') ?? 'Campaign deleted successfully'),
+            content: Text(_t('campaign_deleted')),
             backgroundColor: ThemeConfig.successColor,
           ),
         );
@@ -264,7 +268,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       backgroundColor: ThemeConfig.getBackgroundColor(context),
       appBar: AppBar(
         title: Text(
-          AppLocalizations.of(context)?.translate('advertiser_dashboard') ?? 'Advertiser Dashboard',
+          t('advertiser_dashboard'),
           style: TextStyle(
             color: ThemeConfig.getColor(
               context,
@@ -301,7 +305,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ? FloatingActionButton.extended(
                   onPressed: _navigateToCreateCampaign,
                   icon: const Icon(Icons.add_rounded),
-                  label: Text(AppLocalizations.of(context)?.translate('new_campaign') ?? 'New Campaign'),
+                  label: Text(_t('new_campaign')),
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
                 )
@@ -314,13 +318,13 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
   // ---------------------------------------------------------------------------
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text(AppLocalizations.of(context)?.translate('loading_dashboard') ?? 'Loading Dashboard...'),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(_t('loading_dashboard')),
           ],
         ),
       );
@@ -348,7 +352,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ElevatedButton.icon(
                 onPressed: _loadDashboardData,
                 icon: const Icon(Icons.refresh_rounded),
-                label: Text(AppLocalizations.of(context)?.translate('retry') ?? 'Retry'),
+                label: Text(_t('retry')),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
@@ -361,7 +365,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
     }
 
     if (_advertiser == null) {
-      return Center(child: Text(AppLocalizations.of(context)?.translate('unable_load_advertiser') ?? 'Unable to load advertiser data'));
+      return Center(child: Text(_t('unable_to_load_advertiser_data')));
     }
 
     return RefreshIndicator(
@@ -440,13 +444,13 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                       color: ThemeConfig.warningColor,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.warning_rounded,
+                        const Icon(Icons.warning_rounded,
                             color: Colors.white, size: 16),
-                        SizedBox(width: 4),
+                        const SizedBox(width: 4),
                         Text(
-                          AppLocalizations.of(context)?.translate('low_balance') ?? 'Low Balance',
+                          _t('low_balance'),
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -460,7 +464,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
             ),
             const SizedBox(height: 16),
             Text(
-              AppLocalizations.of(context)?.translate('account_balance') ?? 'Account Balance',
+              _t('account_balance'),
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 14,
@@ -480,7 +484,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
             ),
             const SizedBox(height: 16),
             Text(
-              '${AppLocalizations.of(context)?.translate('total_spent') ?? 'Total Spent'}: ${formatter.format(_advertiser!.totalSpent)}',
+              '${_t('total_spent')}: ${formatter.format(_advertiser!.totalSpent)}',
               style: TextStyle(
                 color: Colors.white.withOpacity(0.9),
                 fontSize: 13,
@@ -515,7 +519,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              AppLocalizations.of(context)?.translate('quick_actions') ?? 'Quick Actions',
+              _t('quick_actions'),
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -528,7 +532,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildActionButton(
                     icon: Icons.add_card_rounded,
-                    label: AppLocalizations.of(context)?.translate('add_funds') ?? 'Add Funds',
+                    label: _t('add_funds'),
                     color: ThemeConfig.successColor,
                     onTap: _navigateToAddFunds,
                   ),
@@ -537,7 +541,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildActionButton(
                     icon: Icons.receipt_long_rounded,
-                    label: AppLocalizations.of(context)?.translate('billing_history') ?? 'Billing History',
+                    label: _t('billing_history'),
                     color: ThemeConfig.infoColor,
                     onTap: _viewBillingHistory,
                   ),
@@ -609,7 +613,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              AppLocalizations.of(context)?.translate('performance_overview') ?? 'Performance Overview',
+              _t('performance_overview'),
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -622,28 +626,28 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildStatCell(
                     Icons.visibility_outlined,
-                    AppLocalizations.of(context)?.translate('impressions') ?? 'Impressions',
+                    _t('impressions'),
                     NumberFormat.compact().format(stats.totalImpressions),
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.touch_app_outlined,
-                    AppLocalizations.of(context)?.translate('clicks') ?? 'Clicks',
+                    _t('clicks'),
                     NumberFormat.compact().format(stats.totalClicks),
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.campaign_outlined,
-                    AppLocalizations.of(context)?.translate('active') ?? 'Active',
+                    _t('active'),
                     '${stats.activeCampaigns}',
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.trending_up_rounded,
-                    AppLocalizations.of(context)?.translate('avg_ctr') ?? 'Avg CTR',
+                    _t('avg_ctr'),
                     '${stats.averageCtr.toStringAsFixed(2)}%',
                   ),
                 ),
@@ -689,7 +693,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          AppLocalizations.of(context)?.translate('my_campaigns') ?? 'My Campaigns',
+          _t('my_campaigns'),
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -736,7 +740,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ),
               const SizedBox(height: 16),
               Text(
-                AppLocalizations.of(context)?.translate('no_campaigns_yet') ?? 'No campaigns yet',
+                _t('no_campaigns_yet'),
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -745,7 +749,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ),
               const SizedBox(height: 8),
               Text(
-                AppLocalizations.of(context)?.translate('create_first_campaign') ?? 'Create your first campaign to start advertising',
+                _t('create_first_campaign'),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
@@ -756,7 +760,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ElevatedButton.icon(
                 onPressed: _navigateToCreateCampaign,
                 icon: const Icon(Icons.add_rounded),
-                label: Text(AppLocalizations.of(context)?.translate('create_campaign') ?? 'Create Campaign'),
+                label: Text(_t('create_campaign')),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
@@ -838,15 +842,15 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                     onSelected: (value) {
                       if (value == 'delete') _deleteCampaign(campaign);
                     },
-                    itemBuilder: (_) => const [
+                    itemBuilder: (_) => [
                       PopupMenuItem<String>(
                         value: 'delete',
                         child: Row(
                           children: [
-                            Icon(Icons.delete_forever_rounded,
+                            const Icon(Icons.delete_forever_rounded,
                                 color: Colors.red, size: 20),
-                            SizedBox(width: 10),
-                            Text(AppLocalizations.of(context)?.translate('delete_campaign') ?? 'Delete Campaign',
+                            const SizedBox(width: 10),
+                            Text(_t('delete_campaign'),
                                 style: const TextStyle(color: Colors.red)),
                           ],
                         ),
@@ -867,9 +871,9 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               Row(
                 children: [
                   _buildMiniMetric(
-                      AppLocalizations.of(context)?.translate('budget') ?? 'Budget', formatter.format(campaign.totalBudget)),
+                      _t('budget'), formatter.format(campaign.totalBudget)),
                   _buildMiniMetric(
-                      AppLocalizations.of(context)?.translate('impressions') ?? 'Impressions',
+                      _t('impressions'),
                       NumberFormat.compact()
                           .format(campaign.impressionsCount)),
                   _buildMiniMetric(
@@ -930,15 +934,15 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
 
     if (approved) {
       icon = Icons.verified_rounded;
-      label = AppLocalizations.of(context)?.translate('ad_approved') ?? 'Ad Approved';
+      label = _t('ad_approved');
       color = ThemeConfig.successColor;
     } else if (rejected) {
       icon = Icons.cancel_rounded;
-      label = AppLocalizations.of(context)?.translate('ad_rejected') ?? 'Ad Rejected';
+      label = _t('ad_rejected');
       color = ThemeConfig.errorColor;
     } else {
       icon = Icons.hourglass_top_rounded;
-      label = AppLocalizations.of(context)?.translate('pending_review') ?? 'Pending Admin Review';
+      label = _t('pending_review');
       color = ThemeConfig.warningColor;
     }
 
