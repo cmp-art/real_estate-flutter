@@ -126,6 +126,7 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
         tier: _mapAmountToTier(amount),
         billingCycle: 'once', // One-time payment for ad funds
         paymentMethod: _paymentMethod,
+        amountOverride: amount.toInt(), // Send actual TSh amount, not tier price
       );
 
       if (result.success) {

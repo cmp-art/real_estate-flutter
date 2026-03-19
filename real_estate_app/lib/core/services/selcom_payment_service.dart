@@ -6,7 +6,11 @@ import '../config/payment_config.dart';
 import '../utils/logger.dart';
 
 class SelcomPaymentService {
-  /// Process payment with Selcom
+  /// Process payment with Selcom.
+  ///
+  /// Pass [amountOverride] for one-off payments (e.g. ad fund top-ups) where
+  /// the amount is chosen by the user rather than derived from a subscription tier.
+  /// If omitted the amount is looked up from [PaymentConfig] for the given [tier].
   Future<PaymentResult> processPayment({
     required String userId,
     required String userEmail,
@@ -14,6 +18,7 @@ class SelcomPaymentService {
     required SubscriptionTier tier,
     required String billingCycle,
     required String? paymentMethod,
+    int? amountOverride,
   }) async {
     try {
       logger.d('Processing Selcom payment - User: $userId, Tier: ${tier.name}, Method: $paymentMethod');
@@ -24,8 +29,8 @@ class SelcomPaymentService {
         return await _simulatePayment(userId, tier, billingCycle, paymentMethod);
       }
 
-      // Get price
-      final amount = PaymentConfig.getPrice(tier.name);
+      // Amount: use override (ad funds) or tier price (subscription).
+      final amount = amountOverride ?? PaymentConfig.getPrice(tier.name);
       final orderId = 'SUB_${userId}_${DateTime.now().millisecondsSinceEpoch}';
 
       // Get Selcom method code

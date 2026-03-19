@@ -277,6 +277,7 @@ class SubscriptionNotifier extends StateNotifier<AsyncValue<UserSubscription?>> 
   Future<bool> upgrade({
     required SubscriptionTier tier,
     required String paymentProviderId,
+    String billingCycle = 'monthly',
   }) async {
     state = const AsyncValue.loading();
     try {
@@ -284,6 +285,7 @@ class SubscriptionNotifier extends StateNotifier<AsyncValue<UserSubscription?>> 
         userId: userId,
         newTier: tier,
         paymentProviderId: paymentProviderId,
+        billingCycle: billingCycle,
       );
       state = AsyncValue.data(subscription);
       return subscription != null;

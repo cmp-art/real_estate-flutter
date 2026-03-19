@@ -494,6 +494,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
               .upgrade(
                 tier: widget.tier,
                 paymentProviderId: result.paymentId!,
+                billingCycle: widget.billingCycle,
               );
           if (mounted) Navigator.of(context).pop(true);
         }

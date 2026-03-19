@@ -62,7 +62,6 @@ class AdNotification {
     );
   }
 
-  void operator [](String other) {}
 }
 
 /// Holds the parameters for a single queued impression.
@@ -318,13 +317,13 @@ class DirectAdService {
       );
       if (response == null) {
         return const AdDeleteResult(
-            success: false, message: '', error: 'No response from server');
+            success: false, message: 'Delete failed. Please try again.', error: 'No response from server');
       }
       return AdDeleteResult.fromJson(
           Map<String, dynamic>.from(response as Map));
     } catch (e) {
       debugPrint('Error soft-deleting campaign: $e');
-      return AdDeleteResult(success: false, message: '', error: e.toString());
+      return AdDeleteResult(success: false, message: 'Could not delete campaign. Please try again.', error: e.toString());
     }
   }
 
@@ -345,13 +344,13 @@ class DirectAdService {
       );
       if (response == null) {
         return const AdDeleteResult(
-            success: false, message: '', error: 'No response from server');
+            success: false, message: 'Delete failed. Please try again.', error: 'No response from server');
       }
       return AdDeleteResult.fromJson(
           Map<String, dynamic>.from(response as Map));
     } catch (e) {
       debugPrint('Error soft-deleting creative: $e');
-      return AdDeleteResult(success: false, message: '', error: e.toString());
+      return AdDeleteResult(success: false, message: 'Could not delete creative. Please try again.', error: e.toString());
     }
   }
 

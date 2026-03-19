@@ -410,7 +410,7 @@ class ChatRemoteDataSource {
           .from(AppConstants.messagesTable)
           .update({
             'content': newContent,
-            'is_edited': true,
+            'edited': true,
             'edited_at': DateTime.now().toIso8601String(),
           })
           .eq('id', messageId)

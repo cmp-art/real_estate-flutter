@@ -132,12 +132,17 @@ class SubscriptionService {
     required String userId,
     required SubscriptionTier newTier,
     required String paymentProviderId,
+    String billingCycle = 'monthly',
   }) async {
     try {
-      logger.d('[$_tag] Updating subscription for user: $userId to tier: ${newTier.name}');
-      
+      logger.d('[$_tag] Updating subscription for user: $userId to tier: ${newTier.name}, cycle: $billingCycle');
+
+      final duration = billingCycle == 'yearly'
+          ? const Duration(days: 365)
+          : const Duration(days: 30);
+
       final currentSub = await getUserSubscription(userId);
-      
+
       // If no active subscription, create new one
       if (currentSub == null) {
         logger.d('[$_tag] No active subscription found, creating new one');
@@ -145,6 +150,7 @@ class SubscriptionService {
           userId: userId,
           tier: newTier,
           paymentProviderId: paymentProviderId,
+          duration: duration,
         );
       }
 
@@ -156,6 +162,7 @@ class SubscriptionService {
           .single();
 
       final tierId = tierResponse['id'] as String;
+      final expiresAt = DateTime.now().add(duration);
 
       // Update subscription
       final response = await _supabase
@@ -163,6 +170,7 @@ class SubscriptionService {
           .update({
             'tier_id': tierId,
             'payment_provider_id': paymentProviderId,
+            'expires_at': expiresAt.toIso8601String(),
             'updated_at': DateTime.now().toIso8601String(),
           })
           .eq('id', currentSub.id)

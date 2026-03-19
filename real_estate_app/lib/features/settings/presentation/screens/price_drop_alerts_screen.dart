@@ -2,10 +2,10 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/services/price_drop_alert_service.dart';
 import '../../../../core/utils/currency_utils.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
+import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 final priceDropAlertServiceProvider = Provider<PriceDropAlertService>((ref) {
@@ -126,8 +126,7 @@ class _PriceDropAlertsScreenState extends ConsumerState<PriceDropAlertsScreen>
   }
 
   String? _getCurrentUserId() {
-    // TODO: Get from your auth provider
-    return null;
+    return ref.read(authNotifierProvider).value?.id;
   }
 
   void _showCreateAlertDialog(BuildContext context, String userId) {
@@ -594,5 +593,3 @@ class _NotificationCard extends ConsumerWidget {
   }
 }
 
-// Mock provider - replace with your actual provider
-final supabaseProvider = Provider<SupabaseClient>((ref) => throw UnimplementedError());
