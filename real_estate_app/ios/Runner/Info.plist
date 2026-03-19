@@ -103,10 +103,6 @@
         </dict>
 
         <!-- Google Sign-In reversed client ID -->
-        <!-- FIX iOS-3: Replace REPLACE_WITH_REVERSED_CLIENT_ID with your actual
-             reversed client ID from GoogleService-Info.plist, e.g.:
-             com.googleusercontent.apps.123456789-abcdefghijklmnopqrstuvwxyz012345
-        -->
         <dict>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
@@ -114,7 +110,7 @@
             <string>google-signin</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>REPLACE_WITH_REVERSED_CLIENT_ID</string>
+                <string>com.googleusercontent.apps.445099974533-oel8r3kqgn6pa4mg5u983rk3e9p1fpir</string>
             </array>
         </dict>
     </array>
