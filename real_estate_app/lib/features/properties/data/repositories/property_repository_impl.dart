@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'package:dartz/dartz.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../../core/errors/exceptions.dart';
 import '../../../../core/errors/failures.dart';
 import '../../domain/entities/property_entity.dart';
@@ -117,7 +117,7 @@ class PropertyRepositoryImpl implements PropertyRepository {
   @override
   Future<Either<Failure, List<String>>> uploadImages(
     String propertyId,
-    List<File> images,
+    List<XFile> images,
   ) async {
     try {
       final urls = await remoteDataSource.uploadImages(propertyId, images);

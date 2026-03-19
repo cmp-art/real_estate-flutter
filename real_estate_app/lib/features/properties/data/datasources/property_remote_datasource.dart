@@ -2,7 +2,8 @@
 // OPTIMIZED FOR EGRESS - Uses property_list_view for list queries
 // FIXED: Added null/empty response handling
 
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/config/supabase_config.dart';
@@ -303,7 +304,7 @@ class PropertyRemoteDataSource {
   /// OPTIMIZED: Upload images with compression
   /// NOTE: Images should be compressed on client-side BEFORE upload
   /// Max size: 5MB per image (enforced by storage bucket)
-  Future<List<String>> uploadImages(String propertyId, List<File> images) async {
+  Future<List<String>> uploadImages(String propertyId, List<XFile> images) async {
     try {
       final userId = supabaseClient.auth.currentUser?.id;
       if (userId == null) {
@@ -313,25 +314,29 @@ class PropertyRemoteDataSource {
       final List<String> uploadedUrls = [];
 
       for (int i = 0; i < images.length; i++) {
-        final file = images[i];
-        
+        final xfile = images[i];
+
+        // Read bytes — works on both web (blob URL) and native (file path)
+        final bytes = await xfile.readAsBytes();
+
         // Check file size (5MB limit)
-        final fileSize = await file.length();
-        if (fileSize > 5 * 1024 * 1024) {
+        if (bytes.length > 5 * 1024 * 1024) {
           throw ServerException('Image ${i + 1} exceeds 5MB limit. Please compress before upload.');
         }
-        
+
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final fileName = '${propertyId}_${timestamp}_$i.jpg';
         final filePath = '$userId/$fileName';
 
+        // uploadBinary accepts Uint8List — works on web and native
         await supabaseClient.storage
             .from(SupabaseConfig.propertyImagesBucket)
-            .upload(
+            .uploadBinary(
               filePath,
-              file,
+              bytes,
               fileOptions: const FileOptions(
-                cacheControl: '31536000', // 1 year — enables CDN edge caching
+                contentType: 'image/jpeg',
+                cacheControl: '31536000',
                 upsert: false,
               ),
             );

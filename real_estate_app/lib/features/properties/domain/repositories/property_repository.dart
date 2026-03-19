@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'package:dartz/dartz.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../../core/errors/failures.dart';
 import '../entities/property_entity.dart';
 import '../entities/property_filter_entity.dart';
@@ -38,7 +38,7 @@ abstract class PropertyRepository {
   // Upload property images
   Future<Either<Failure, List<String>>> uploadImages(
     String propertyId,
-    List<File> images,
+    List<XFile> images,
   );
 
   // Delete property image

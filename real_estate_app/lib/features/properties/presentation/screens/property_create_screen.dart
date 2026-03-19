@@ -623,6 +623,17 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     );
     if (picked == null) return;
 
+    // Video upload not supported on web — compression and thumbnail libs are native-only
+    if (kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Video upload is not supported on web. Use the Android app.'),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
     final file = File(picked.path);
 
     // ── Duration check (90-second max) ───────────────────────────────
@@ -874,11 +885,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       },
       (createdProperty) async {
         if (_selectedImages.isNotEmpty) {
-          // Convert XFile → File for the upload layer (native only; web upload handled separately)
-          final uploadFiles = _selectedImages.map((x) => File(x.path)).toList();
           final uploadResult = await repository.uploadImages(
             createdProperty.id,
-            uploadFiles,
+            _selectedImages,
           );
 
           await uploadResult.fold(
@@ -905,7 +914,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         // ── Upload video (non-fatal) ─────────────────────────────────
         // PropertyEntity doesn't have a videos field — we write the URL
         // directly to the properties.videos column via Supabase.
-        if (_selectedVideos.isNotEmpty) {
+        if (_selectedVideos.isNotEmpty && !kIsWeb) {
           try {
             final video  = _selectedVideos.first;
             final ts     = DateTime.now().millisecondsSinceEpoch;

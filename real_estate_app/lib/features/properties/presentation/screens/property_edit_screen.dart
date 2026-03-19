@@ -233,10 +233,9 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           PropertyEntity finalProperty = savedProperty;
 
           if (_selectedImages.isNotEmpty) {
-            final uploadFiles = _selectedImages.map((x) => File(x.path)).toList();
             final uploadResult = await repository.uploadImages(
               savedProperty.id,
-              uploadFiles,
+              _selectedImages,
             );
 
             await uploadResult.fold(
