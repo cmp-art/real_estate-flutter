@@ -4,11 +4,14 @@
   PRODUCTION FIXES:
     FIX iOS-1: Added NSCameraUsageDescription       — app CRASHES on iOS if missing when camera is accessed.
     FIX iOS-2: Added NSPhotoLibraryUsageDescription — app CRASHES on iOS if missing when photo library accessed.
-    FIX iOS-3: Replaced placeholder Google reversed client ID with correct format note.
-               Search for REPLACE_WITH_REVERSED_CLIENT_ID and substitute your actual value.
+    FIX iOS-3: Google Sign-In configured with GIDClientID + reversed URL scheme.
 -->
 <plist version="1.0">
 <dict>
+    <!-- ── Google Sign-In (iOS native — reads client ID directly from plist) ── -->
+    <key>GIDClientID</key>
+    <string>445099974533-f5u50e9n73ldq9a70sdvvi5ufmjdgk6o.apps.googleusercontent.com</string>
+
     <!-- ── Flutter ─────────────────────────────────────────────────────── -->
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -110,7 +113,7 @@
             <string>google-signin</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.googleusercontent.apps.445099974533-oel8r3kqgn6pa4mg5u983rk3e9p1fpir</string>
+                <string>com.googleusercontent.apps.445099974533-f5u50e9n73ldq9a70sdvvi5ufmjdgk6o</string>
             </array>
         </dict>
     </array>
