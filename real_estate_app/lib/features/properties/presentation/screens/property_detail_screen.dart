@@ -29,6 +29,7 @@ import '../../../chat/presentation/screens/chat_helper.dart';
 import '../../../settings/presentation/screens/app_translations.dart';
 import '../providers/property_providers.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
+import '../../../../core/services/price_drop_alert_service.dart';
 import '../../domain/entities/property_entity.dart';
 import '../providers/video_providers.dart';
 import 'property_edit_screen.dart';
@@ -530,6 +531,13 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               ),
               child: FavoriteButton(propertyId: propertyId),
             ),
+            // Price drop alert button — only for non-owners who are logged in
+            if (user != null && !isOwner)
+              _PriceAlertButton(
+                propertyId: propertyId,
+                propertyPrice: property.price,
+                userId: user.id,
+              ),
             // Owner Actions Menu
             if (isOwner)
               Container(
@@ -1719,6 +1727,184 @@ class _CalcResult extends StatelessWidget {
               ?.copyWith(color: Colors.grey.shade500, fontSize: 11),
           textAlign: TextAlign.center),
     ]);
+  }
+}
+
+// ── Price drop alert button ───────────────────────────────────────────────────
+class _PriceAlertButton extends StatefulWidget {
+  final String propertyId;
+  final double propertyPrice;
+  final String userId;
+
+  const _PriceAlertButton({
+    required this.propertyId,
+    required this.propertyPrice,
+    required this.userId,
+  });
+
+  @override
+  State<_PriceAlertButton> createState() => _PriceAlertButtonState();
+}
+
+class _PriceAlertButtonState extends State<_PriceAlertButton> {
+  PriceDropAlert? _existingAlert;
+  bool _loading = true;
+
+  PriceDropAlertService get _service =>
+      PriceDropAlertService(Supabase.instance.client);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAlert();
+  }
+
+  Future<void> _loadAlert() async {
+    final alert = await _service.getAlertForProperty(
+      userId: widget.userId,
+      propertyId: widget.propertyId,
+    );
+    if (mounted) setState(() { _existingAlert = alert; _loading = false; });
+  }
+
+  Future<void> _onTap() async {
+    if (_existingAlert != null) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Remove Price Alert'),
+          content: const Text('Stop tracking price drops for this property?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true && mounted) {
+        await _service.deleteAlert(_existingAlert!.id);
+        if (mounted) setState(() => _existingAlert = null);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Price alert removed')),
+          );
+        }
+      }
+    } else {
+      await _showSetAlertDialog();
+    }
+  }
+
+  Future<void> _showSetAlertDialog() async {
+    final controller = TextEditingController(text: '10');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set Price Drop Alert'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Alert me when the price drops by:'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                suffixText: '%',
+                border: OutlineInputBorder(),
+                helperText: 'e.g. 10 = notify when price drops 10%',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Set Alert'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final threshold = double.tryParse(controller.text.trim()) ?? 10.0;
+    final result = await _service.createAlert(
+      userId: widget.userId,
+      propertyId: widget.propertyId,
+      threshold: threshold,
+      originalPrice: widget.propertyPrice,
+    );
+
+    if (!mounted) return;
+
+    if (result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Alert set! You\'ll be notified when the price drops ${threshold.toStringAsFixed(0)}%.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _loadAlert();
+    } else if (result.error == PriceDropAlertError.subscriptionRequired) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Price drop alerts require a Pro subscription.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message ?? 'Failed to set alert'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const SizedBox(width: 48);
+
+    final hasAlert = _existingAlert != null && _existingAlert!.isActive;
+
+    return Container(
+      margin: const EdgeInsets.only(right: 4),
+      decoration: BoxDecoration(
+        color: hasAlert
+            ? Colors.orange.withOpacity(0.9)
+            : Colors.grey.shade800.withOpacity(0.9),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: IconButton(
+        icon: Icon(
+          hasAlert ? Icons.notifications_active : Icons.notifications_none,
+          color: Colors.white,
+          size: 20,
+        ),
+        tooltip: hasAlert ? 'Remove price alert' : 'Set price drop alert',
+        onPressed: _onTap,
+      ),
+    );
   }
 }
 
