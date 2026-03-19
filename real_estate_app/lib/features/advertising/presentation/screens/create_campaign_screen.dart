@@ -725,66 +725,184 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
     );
   }
 
-  /// Live impact preview shown directly below the bid slider.
-  /// Uses the actual total budget if entered, otherwise shows a TSh 50,000 example.
+  /// Live auction impact preview shown directly below the bid slider.
+  ///
+  /// The auction trade-off explained:
+  ///   Higher bid → your ad beats competitors → shown in more slots
+  ///   Higher bid → budget depletes faster → fewer total views for same budget
+  ///
+  /// Both effects are shown side by side so the user understands the choice.
   Widget _buildBidImpactPreview() {
     final enteredBudget = double.tryParse(_totalBudgetController.text) ?? 0;
     final previewBudget = enteredBudget > 0 ? enteredBudget : 50000.0;
-    final isExample    = enteredBudget <= 0;
-    final days = _endDate.difference(_startDate).inDays.clamp(1, 999);
+    final isExample     = enteredBudget <= 0;
+    final days          = _endDate.difference(_startDate).inDays.clamp(1, 999);
+    final minBid        = _biddingStrategy == 'cpm' ? 500.0 : 50.0;
 
     final algo = ref.read(directAdAlgorithmProvider);
-    final est  = algo.estimateCampaignRevenue(
-      totalBudget: previewBudget,
-      bidAmount: _bidAmount,
-      biddingStrategy: _biddingStrategy,
-      estimatedDays: days,
+
+    // Estimate at CURRENT bid (what user selected)
+    final current = algo.estimateCampaignRevenue(
+      totalBudget:      previewBudget,
+      bidAmount:        _bidAmount,
+      biddingStrategy:  _biddingStrategy,
+      estimatedDays:    days,
     );
 
-    final impressionsFmt = NumberFormat.compact().format(est.estimatedImpressions);
-    final clicksFmt      = NumberFormat.compact().format(est.estimatedClicks);
+    // Estimate at MINIMUM bid (baseline for comparison)
+    final baseline = algo.estimateCampaignRevenue(
+      totalBudget:      previewBudget,
+      bidAmount:        minBid,
+      biddingStrategy:  _biddingStrategy,
+      estimatedDays:    days,
+    );
+
+    // Auction rank: what % of advertisers this bid beats
+    // Min bid = 0%, Max slider bid = 100% of typical range
+    final maxBid      = _biddingStrategy == 'cpm' ? 3000.0 : 500.0;
+    final auctionRank = ((_bidAmount - minBid) / (maxBid - minBid) * 100).clamp(0.0, 100.0);
+    final rankLabel   = auctionRank < 33 ? 'Low' : auctionRank < 66 ? 'Medium' : 'High';
+    final rankColor   = auctionRank < 33 ? Colors.orange : auctionRank < 66 ? Colors.blue : Colors.green;
+
+    // Views change vs baseline
+    final viewsDiff = current.estimatedImpressions - baseline.estimatedImpressions;
+    // viewsDiff is negative when bid is higher (budget depletes faster = fewer total views)
 
     return Container(
       margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: ThemeConfig.getPrimaryColor(context).withOpacity(0.07),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: ThemeConfig.getPrimaryColor(context).withOpacity(0.2)),
+        color:        ThemeConfig.getPrimaryColor(context).withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border:       Border.all(color: ThemeConfig.getPrimaryColor(context).withOpacity(0.2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header
           Row(
             children: [
-              Icon(Icons.auto_graph_rounded, size: 15, color: ThemeConfig.getPrimaryColor(context)),
+              Icon(Icons.gavel_rounded, size: 14, color: ThemeConfig.getPrimaryColor(context)),
               const SizedBox(width: 6),
               Text(
-                isExample
-                    ? 'Example with TSh 50,000 budget'
-                    : 'Estimated results for your budget',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: ThemeConfig.getTextSecondaryColor(context),
-                  fontStyle: isExample ? FontStyle.italic : FontStyle.normal,
+                isExample ? 'Auction preview (example: TSh 50,000 budget)' : 'Auction preview for your budget',
+                style: TextStyle(fontSize: 11, color: ThemeConfig.getTextSecondaryColor(context),
+                    fontStyle: isExample ? FontStyle.italic : FontStyle.normal),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Two-column layout: Reach vs Auction Power
+          Row(
+            children: [
+              // Left: Reach (total views/clicks for the budget)
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('📊 Total Reach', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      Text(
+                        NumberFormat.compact().format(current.estimatedImpressions),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
+                            color: ThemeConfig.getPrimaryColor(context)),
+                      ),
+                      Text('views', style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context))),
+                      const SizedBox(height: 4),
+                      Text(
+                        NumberFormat.compact().format(current.estimatedClicks),
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                      Text('clicks', style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context))),
+                      // Show vs baseline
+                      if (_bidAmount > minBid) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          viewsDiff < 0
+                              ? '${NumberFormat.compact().format(viewsDiff.abs())} fewer views vs min bid'
+                              : '+${NumberFormat.compact().format(viewsDiff)} more views',
+                          style: TextStyle(
+                              fontSize: 9,
+                              color: viewsDiff < 0 ? Colors.orange[700] : Colors.green[700]),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Right: Auction Power (how competitive this bid is)
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: rankColor.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: rankColor.withOpacity(0.25)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('🏆 Auction Power', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      Text(rankLabel,
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: rankColor)),
+                      Text('bid strength', style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context))),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value:            auctionRank / 100,
+                          backgroundColor:  rankColor.withOpacity(0.15),
+                          valueColor:       AlwaysStoppedAnimation(rankColor),
+                          minHeight:        6,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        auctionRank < 33
+                            ? 'Your ad may lose to higher bids'
+                            : auctionRank < 66
+                                ? 'Competes well against most advertisers'
+                                : 'Your ad beats most competitors',
+                        style: TextStyle(fontSize: 9, color: rankColor),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _impactStat(impressionsFmt, 'Views'),
-              _impactStat(clicksFmt, 'Clicks'),
-              _impactStat('${est.ctr.toStringAsFixed(1)}%', 'CTR'),
-              _impactStat('${days}d', 'Duration'),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Higher bid → wins more auctions → more people see your ad',
-            style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context)),
+          const SizedBox(height: 10),
+
+          // Trade-off explanation
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: Colors.amber.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                const Text('⚖️', style: TextStyle(fontSize: 12)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Higher bid = beats competitors but budget runs faster (fewer total views).\n'
+                    'Lower bid = more total views but may lose to higher-paying advertisers.',
+                    style: TextStyle(fontSize: 10, color: ThemeConfig.getTextSecondaryColor(context), height: 1.4),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),

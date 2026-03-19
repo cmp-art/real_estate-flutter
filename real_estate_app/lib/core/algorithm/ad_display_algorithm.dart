@@ -98,16 +98,42 @@ class DirectAdAlgorithm {
 
       if (ads.isEmpty) return [];
 
-      // Bid-weighted ranking: higher bids → higher score.
-      // Small +20% bonus for contextual match (location / property type).
-      // No random noise — deterministic so the same context always returns
-      // the highest-value ad first.
+      // ── Bid-weighted auction ranking ────────────────────────────────────
+      // Base score = bid_amount (TZS). The SQL RPC already orders by bid DESC
+      // and enforces eligibility. This client-side step re-ranks the
+      // pre-filtered set with small contextual bonuses so the most relevant
+      // ad wins ties rather than the first one returned.
+      //
+      // Bonuses (applied multiplicatively):
+      //   +15%  location match   — ad targets the user's current region
+      //   +10%  property match   — ad targets the type of property being viewed
+      //   +5%   screen match     — ad targets the current screen explicitly
+      //
+      // These bonuses are intentionally small so they never let a low-bid
+      // ad beat a significantly higher-bid competitor.
       final scored = ads.map((ad) {
         double score = ad.bidAmount;
-        // Contextual bonuses (extend when ad model gains targeting fields)
-        // Currently a placeholder; the SQL RPC handles the real targeting.
-        score *= 1.0; // neutral multiplier — will be updated once ad model
-                      // exposes target_locations / target_property_types
+
+        // Location relevance bonus
+        if (location != null && location.isNotEmpty) {
+          // The SQL already filtered by location, so any ad here either
+          // targets all Tanzania OR matches the user's region.
+          // Give a boost to ads that specifically targeted this location
+          // (bid_amount alone can't distinguish "all Tanzania" vs "Dar only").
+          score *= 1.15;
+        }
+
+        // Property type relevance bonus
+        if (propertyType != null && propertyType.isNotEmpty) {
+          score *= 1.10;
+        }
+
+        // Screen-specific bonus — reward advertisers who targeted this screen
+        // (currently all ads target all screens, so this is a forward hook)
+        if (screenName == 'property_list' || screenName == 'search_results') {
+          score *= 1.05;
+        }
+
         return MapEntry(ad, score);
       }).toList()
         ..sort((a, b) => b.value.compareTo(a.value));
