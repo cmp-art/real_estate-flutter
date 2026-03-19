@@ -21,6 +21,7 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   SubscriptionTier? _selectedTier;
   bool _isLoading = false;
+  bool _yearlyBilling = false; // toggle monthly ↔ yearly
   List<SubscriptionTierInfo> _tiers = [];
   UserSubscription? _currentSubscription;
 
@@ -62,38 +63,32 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     }
   }
 
-  // ✅ NEW METHOD - Navigate to payment scre
   Future<void> _navigateToPayment(SubscriptionTier tier) async {
-  // Import at top: import 'auto_payment_screen.dart';
-  
-  final result = await Navigator.push<bool>(
-    context,
-    MaterialPageRoute(
-      builder: (context) => AutoPaymentScreen(
-        tier: tier,
-        billingCycle: 'monthly',
-      ),
-    ),
-  );
-
-  // Reload subscription data if payment was successful
-  if (result == true && mounted) {
-    await _loadSubscriptionData();
-    
-    // Show success message
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Subscription activated successfully!'),
-        backgroundColor: Colors.green,
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AutoPaymentScreen(
+          tier: tier,
+          billingCycle: _yearlyBilling ? 'yearly' : 'monthly',
+        ),
       ),
     );
+
+    if (result == true && mounted) {
+      await _loadSubscriptionData();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Usajili umewashwa! — Subscription activated!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
-}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Subscription Plans'),
+        title: const Text('Mipango ya Usajili'),
         elevation: 0,
       ),
       body: _isLoading
@@ -105,10 +100,9 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   Widget _buildContent() {
     return Column(
       children: [
-        // Current subscription banner
         if (_currentSubscription != null) _buildCurrentSubscriptionBanner(),
-        
-        // Tier cards
+        // Monthly / Yearly toggle
+        _buildBillingToggle(),
         Expanded(
           child: ListView(
             padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
@@ -125,6 +119,43 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     );
   }
 
+  Widget _buildBillingToggle() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+      color: Colors.grey[100],
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('Kila Mwezi', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(width: 12),
+          Switch(
+            value: _yearlyBilling,
+            onChanged: (v) => setState(() => _yearlyBilling = v),
+            activeColor: Colors.green,
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Kila Mwaka', style: TextStyle(fontWeight: FontWeight.w600)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  'Okoa 33%',
+                  style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCurrentSubscriptionBanner() {
     final sub   = _currentSubscription!;
     final tier  = sub.tier;
@@ -133,11 +164,11 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     final expiresAt  = sub.expiresAt;
     final daysLeft   = expiresAt.difference(DateTime.now()).inDays;
     final expiryText = daysLeft > 365
-        ? 'Active — no expiry'
+        ? 'Hai — bila muda'
         : daysLeft > 0
-            ? 'Expires in $daysLeft day${daysLeft == 1 ? '' : 's'} '
+            ? 'Inaisha siku $daysLeft ${daysLeft == 1 ? 'iliyobaki' : 'zilizobaki'} '
               '(${expiresAt.day}/${expiresAt.month}/${expiresAt.year})'
-            : 'Subscription expired';
+            : 'Usajili umeisha muda';
     final expiryColor = daysLeft <= 7
         ? Colors.red.shade600
         : daysLeft <= 30
@@ -154,7 +185,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
       child: Column(
         children: [
           Text(
-            'Current Plan',
+            'Mpango Wako wa Sasa',
             style: TextStyle(
               color: color,
               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
@@ -238,7 +269,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                         borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
                       ),
                       child: Text(
-                        'CURRENT',
+                        'SASA HIVI',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
@@ -257,7 +288,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                         borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
                       ),
                       child: Text(
-                        'POPULAR',
+                        'MAARUFU',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
@@ -274,7 +305,9 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '\$${tier.monthlyPrice.toStringAsFixed(2)}',
+                    tier == SubscriptionTier.free
+                        ? 'Bure'
+                        : 'TSh ${_yearlyBilling ? _fmt(tier.yearlyPriceTzs) : _fmt(tier.monthlyPriceTzs)}',
                     style: TextStyle(
                       fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 32),
                       fontWeight: FontWeight.bold,
@@ -285,7 +318,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                     Padding(
                       padding: const EdgeInsets.only(left: 4, bottom: 6),
                       child: Text(
-                        '/month',
+                        _yearlyBilling ? '/mwaka' : '/mwezi',
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14),
                           color: Colors.grey[600],
@@ -294,6 +327,18 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                     ),
                 ],
               ),
+              // Yearly savings note
+              if (tier != SubscriptionTier.free && _yearlyBilling) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Sawa na TSh ${_fmt(tier.yearlyPriceTzs ~/ 12)}/mwezi — okoa TSh ${_fmt(tier.monthlyPriceTzs * 12 - tier.yearlyPriceTzs)}',
+                  style: TextStyle(
+                    fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
+                    color: Colors.green[700],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
               
               // Description
@@ -324,7 +369,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       ),
                     ),
                     child: const Text(
-                      'Subscribe Now',
+                      'Jiandikishe Sasa',
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -365,31 +410,39 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         .toList();
   }
 
+  /// Format number with thousands separator e.g. 120000 → "120,000"
+  String _fmt(int n) {
+    return n.toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (m) => ',',
+    );
+  }
+
   List<String> _getFeatures(SubscriptionTier tier) {
     switch (tier) {
       case SubscriptionTier.free:
         return [
-          'Browse unlimited properties',
-          'Create up to 10 image-only listings',
-          'No video listings (Pro required)',
-          'Save up to 5 favorites',
-          'Send up to 20 messages per day',
-          'Basic search filters',
-          'With advertisements',
+          'Tazama mali bila kikomo',
+          'Unda hadi matangazo 3 ya picha',
+          'Video haitumiki (inahitaji Pro)',
+          'Hifadhi hadi vipendwa 5',
+          'Tuma hadi ujumbe 20 kwa siku',
+          'Vichujio vya msingi vya utafutaji',
+          'Ina matangazo ya wengine',
         ];
       case SubscriptionTier.pro:
         return [
-          'Browse unlimited properties',
-          'Unlimited image property listings',
-          'Unlimited video property listings',
-          'Unlimited favorites',
-          'Unlimited messages',
-          'Advanced search filters',
-          'No advertisements',
-          'Priority listing placement',
-          'Featured property badges',
-          'Advanced analytics & insights',
-          'Priority customer support',
+          'Tazama mali bila kikomo',
+          'Matangazo ya picha bila kikomo',
+          'Matangazo ya video bila kikomo',
+          'Vipendwa bila kikomo',
+          'Ujumbe bila kikomo',
+          'Vichujio vya hali ya juu',
+          'Hakuna matangazo ya wengine',
+          'Nafasi ya kwanza katika matokeo',
+          'Beji ya tangazo lililoangaziwa',
+          'Takwimu za kina za tangazo lako',
+          'Msaada wa kipaumbele',
         ];
     }
   }

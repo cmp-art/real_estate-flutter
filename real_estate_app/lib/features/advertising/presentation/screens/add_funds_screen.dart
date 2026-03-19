@@ -272,21 +272,21 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
           children: [
             Icon(Icons.check_circle, color: Colors.green, size: ResponsiveHelper.getResponsiveIconSize(context)),
             const SizedBox(width: 12),
-            const Text('Payment Successful!'),
+            const Text('Malipo Yamefanikiwa!'),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'TZS ${amount.toStringAsFixed(0)}',
+              'TSh ${amount.toStringAsFixed(0)}',
               style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 24), fontWeight: FontWeight.bold),
             ),
             SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-            const Text('has been added to your account'),
+            const Text('imeongezwa kwenye akaunti yako'),
             SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
             Text(
-              'New Balance: TZS ${(widget.advertiser.accountBalance + amount).toStringAsFixed(0)}',
+              'Salio Jipya: TSh ${(widget.advertiser.accountBalance + amount).toStringAsFixed(0)}',
               style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14), color: Colors.grey),
             ),
           ],
@@ -315,7 +315,7 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add Funds'),
+        title: const Text('Ongeza Fedha'),
       ),
       body: SingleChildScrollView(
         // Responsive container for better layout on larger screens
@@ -337,7 +337,7 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Current Balance',
+                            'Salio la Sasa',
                             style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14), color: Colors.grey),
                           ),
                           const SizedBox(height: 4),
@@ -360,7 +360,7 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
 
               // Quick Amount Selection
               Text(
-                'Quick Amounts',
+                'Kiasi cha Haraka',
                 style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w600),
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
@@ -398,7 +398,7 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
 
               // Custom Amount
               Text(
-                'Or Enter Custom Amount',
+                'Au Ingiza Kiasi Chako',
                 style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w600),
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
@@ -430,21 +430,21 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
 
               // Payment Method
               Text(
-                'Payment Method',
+                'Njia ya Malipo',
                 style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w600),
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
               _buildPaymentMethodCard(
                 icon: Icons.phone_android,
-                title: 'Mobile Money',
-                subtitle: 'M-Pesa, Tigo Pesa, Airtel Money',
+                title: 'Pesa ya Simu',
+                subtitle: 'M-Pesa, Tigo Pesa, Airtel Money, Halopesa',
                 value: 'mobile_money',
                 color: Colors.green,
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
               _buildPaymentMethodCard(
                 icon: Icons.credit_card,
-                title: 'Credit/Debit Card',
+                title: 'Kadi ya Benki',
                 subtitle: 'Visa, Mastercard',
                 value: 'card',
                 color: Colors.blue,
@@ -452,8 +452,8 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
               _buildPaymentMethodCard(
                 icon: Icons.account_balance,
-                title: 'Bank Transfer',
-                subtitle: 'CRDB, NMB, etc.',
+                title: 'Benki',
+                subtitle: 'CRDB, NMB, n.k.',
                 value: 'bank',
                 color: Colors.orange,
               ),
@@ -533,17 +533,17 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
                           Icon(Icons.info_outline, color: Colors.blue[700]),
                           SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
                           const Text(
-                            'Payment Information',
+                            'Maelezo ya Malipo',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ],
                       ),
                       SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-                      const Text('• Payments powered by Selcom'),
-                      const Text('• Funds available immediately after payment'),
-                      const Text('• Minimum deposit: TZS 10,000'),
-                      const Text('• All transactions are secure and encrypted'),
-                      const Text('• Unused funds are non-refundable'),
+                      const Text('• Malipo yanafanywa na Selcom'),
+                      const Text('• Fedha zinapatikana mara moja baada ya malipo'),
+                      const Text('• Kiwango cha chini: TSh 10,000'),
+                      const Text('• Miamala yote ni salama na imesimbwa'),
+                      const Text('• Fedha ambazo hazijatumika hazirejeshewe'),
                     ],
                   ),
                 ),

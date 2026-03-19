@@ -10,7 +10,7 @@ enum SubscriptionTier {
   String get displayName {
     switch (this) {
       case SubscriptionTier.free:
-        return 'Free';
+        return 'Bure';
       case SubscriptionTier.pro:
         return 'Pro';
     }
@@ -19,20 +19,34 @@ enum SubscriptionTier {
   String get description {
     switch (this) {
       case SubscriptionTier.free:
-        return 'Up to 10 image listings, with ads';
+        return 'Matangazo hadi 3, na matangazo ya wengine';
       case SubscriptionTier.pro:
-        return 'Unlimited listings (image & video), no ads, priority support';
+        return 'Matangazo yasio na kikomo (picha & video), bila matangazo, msaada wa kwanza';
     }
   }
 
-  double get monthlyPrice {
+  /// Bei ya kila mwezi kwa TZS
+  int get monthlyPriceTzs {
     switch (this) {
       case SubscriptionTier.free:
-        return 0.0;
+        return 0;
       case SubscriptionTier.pro:
-        return 29.99;
+        return 10000; // TZS 10,000/mwezi
     }
   }
+
+  /// Bei ya kila mwaka kwa TZS (akiba ya miezi 2)
+  int get yearlyPriceTzs {
+    switch (this) {
+      case SubscriptionTier.free:
+        return 0;
+      case SubscriptionTier.pro:
+        return 120000; // TZS 120,000/mwaka
+    }
+  }
+
+  // Keep for backward compat — maps to TZS now
+  double get monthlyPrice => monthlyPriceTzs.toDouble();
 }
 
 /// User subscription model

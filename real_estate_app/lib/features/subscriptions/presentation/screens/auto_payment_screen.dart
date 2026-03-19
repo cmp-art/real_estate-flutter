@@ -60,9 +60,19 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
     super.dispose();
   }
 
+  String _fmt(int n) => n.toString().replaceAllMapped(
+        RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
+
+  int get _price => widget.billingCycle == 'yearly'
+      ? widget.tier.yearlyPriceTzs
+      : widget.tier.monthlyPriceTzs;
+
+  String get _cycleLabel =>
+      widget.billingCycle == 'yearly' ? 'mwaka' : 'mwezi';
+
   @override
   Widget build(BuildContext context) {
-    final price = PaymentConfig.getPrice(widget.tier.name);
+    final price = _price;
 
     return Scaffold(
       appBar: AppBar(
@@ -92,7 +102,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
                 ),
                 SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
                 Text(
-                  '${PaymentConfig.currencySymbol} ${price.toStringAsFixed(0)}',
+                  'TSh ${_fmt(price)}',
                   style: TextStyle(
                     fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 48),
                     fontWeight: FontWeight.bold,
@@ -100,7 +110,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
                   ),
                 ),
                 Text(
-                  '/${widget.billingCycle}',
+                  '/$_cycleLabel',
                   style: TextStyle(
                     fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
                     color: Colors.white.withOpacity(0.9),
@@ -116,7 +126,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
               padding: const EdgeInsets.all(20),
               children: [
                 Text(
-                  'Select Payment Method',
+                  'Chagua Njia ya Malipo',
                   style: TextStyle(
                     fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 18),
                     fontWeight: FontWeight.bold,
@@ -162,7 +172,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
                         ),
                       )
                     : Text(
-                        'Pay ${PaymentConfig.currencySymbol} ${price.toStringAsFixed(0)}',
+                        'Lipa TSh ${_fmt(price)}',
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 18),
                           fontWeight: FontWeight.bold,
@@ -260,7 +270,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
         return [
           const Divider(height: 32),
           Text(
-            'Enter Mobile Number',
+            'Ingiza Nambari ya Simu',
             style: TextStyle(
               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
               fontWeight: FontWeight.w600,
@@ -287,7 +297,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
           ),
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
           Text(
-            'Works with M-Pesa, Tigo Pesa, Airtel Money, Halopesa',
+            'Inafanya kazi na M-Pesa, Tigo Pesa, Airtel Money, Halopesa',
             style: TextStyle(
               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
               color: Colors.grey[600],
@@ -299,7 +309,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
         return [
           const Divider(height: 32),
           Text(
-            'Enter Card Details',
+            'Ingiza Maelezo ya Kadi',
             style: TextStyle(
               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
               fontWeight: FontWeight.w600,
@@ -388,7 +398,7 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
                 SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
                 Expanded(
                   child: Text(
-                    'You will be redirected to your bank to complete the payment',
+                    'Utaelekezwa kwenye benki yako ili kukamilisha malipo',
                     style: TextStyle(
                       fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
                       color: Colors.blue[900],

@@ -46,17 +46,42 @@ class AdConfig {
   static const int adPoolRefreshMinutes = 15;
 
   // ══════════════════════════════════════════════════════════════════════════
-  // PRICING BENCHMARKS  (for estimate UI only — not used for billing)
+  // PRICING — Bei za Matangazo (TZS)
+  // Awali ya uzinduzi — bei za chini ili kuvutia watangazaji wa kwanza.
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Conservative CTR for Tanzania real-estate audience (1.5%).
+  /// CTR ya Tanzania kwa mali (kadirio la kihafidhina: 1.5%).
   static const double estimatedCtrPercent = 1.5;
 
-  /// Minimum CPM bid in TZS.
-  static const double minBidCpm = 1500.0;
+  // ── CPM / CPC — Banner Ads ───────────────────────────────────────────────
+  /// Bei ya chini ya CPM (kwa maonyesho 1,000) — TZS 1,000 (uzinduzi).
+  static const double minBidCpm = 1000.0;  // TSh 1,000 / maonyesho 1,000
 
-  /// Minimum CPC bid in TZS.
-  static const double minBidCpc = 400.0;
+  /// Bei ya chini ya CPC (kwa kila kubonyeza) — TZS 300.
+  static const double minBidCpc = 300.0;   // TSh 300 / click
+
+  // ── Packages za Biashara — Ad Packages ──────────────────────────────────
+  /// Starter: TSh 50,000/mwezi → maonyesho 50,000
+  static const int packageStarterPrice      = 50000;
+  static const int packageStarterImpressions = 50000;
+
+  /// Growth: TSh 150,000/mwezi → maonyesho 200,000
+  static const int packageGrowthPrice        = 150000;
+  static const int packageGrowthImpressions  = 200000;
+
+  /// Premium: TSh 400,000/mwezi → maonyesho 600,000
+  static const int packagePremiumPrice       = 400000;
+  static const int packagePremiumImpressions = 600000;
+
+  // ── Boosted Listings — Tangazo Lililoangaziwa ───────────────────────────
+  /// Kuimarisha tangazo kwa siku 7 — TSh 5,000
+  static const int boostWeeklyPrice    = 5000;
+
+  /// Kuimarisha tangazo kwa siku 30 — TSh 15,000
+  static const int boostMonthlyPrice   = 15000;
+
+  /// Nafasi ya juu ya utafutaji kwa wiki 1 — TSh 10,000
+  static const int topSearchWeeklyPrice = 10000;
 
   // ══════════════════════════════════════════════════════════════════════════
   // SCREEN PLACEMENT RULES

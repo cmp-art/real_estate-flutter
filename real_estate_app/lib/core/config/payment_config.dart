@@ -55,11 +55,18 @@ class PaymentConfig {
   //      SELCOM_API_SECRET=your_api_secret
   //    That file lives only on your backend server, never shipped in the app.
 
-  // ── Pricing in Tanzanian Shillings (TZS) ─────────────────────────────────
+  // ── Bei za Usajili (TZS) — Subscription Pricing ──────────────────────────
+  // Pro ya Mwezi: TZS 10,000  (~$4)
+  // Pro ya Mwaka: TZS 120,000 (~$46) — akiba ya miezi 2
+  static const int proMonthlyPrice  = 10000;   // TZS 10,000/mwezi
+  static const int proYearlyPrice   = 120000;  // TZS 120,000/mwaka (save 33%)
+  static const int freePrice        = 0;
+
   static const Map<String, int> pricing = {
-    'free': 0,
-    'basic': 25000,  // 25,000 TZS/month
-    'pro': 75000,    // 75,000 TZS/month
+    'free':          freePrice,
+    'pro':           proMonthlyPrice,
+    'pro_monthly':   proMonthlyPrice,
+    'pro_yearly':    proYearlyPrice,
   };
 
   static int getPrice(String tier) => pricing[tier.toLowerCase()] ?? 0;
@@ -70,23 +77,23 @@ class PaymentConfig {
   // ── Selcom payment methods ────────────────────────────────────────────────
   static const Map<String, Map<String, String>> paymentMethods = {
     'mobile_money': {
-      'name': 'Mobile Money',
+      'name': 'Pesa ya Simu',
       'icon': '📱',
-      'description': 'Pay with M-Pesa, Tigo Pesa, Airtel Money, or Halopesa',
+      'description': 'Lipa kwa M-Pesa, Tigo Pesa, Airtel Money au Halopesa',
       'code': 'MOBILE',
       'type': 'mobile',
     },
     'bank': {
-      'name': 'Bank Transfer',
+      'name': 'Benki',
       'icon': '🏦',
-      'description': 'Pay directly from your bank account',
+      'description': 'Lipa moja kwa moja kutoka benki yako (CRDB, NMB, n.k.)',
       'code': 'BANK',
       'type': 'bank',
     },
     'card': {
-      'name': 'Debit/Credit Card',
+      'name': 'Kadi ya Benki',
       'icon': '💳',
-      'description': 'Pay with Visa or Mastercard',
+      'description': 'Lipa kwa Visa au Mastercard',
       'code': 'CARD',
       'type': 'card',
     },
