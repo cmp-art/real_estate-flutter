@@ -58,14 +58,14 @@ class PaymentConfig {
   // ── Bei za Usajili (TZS) — Subscription Pricing ──────────────────────────
   // Pro ya Mwezi: TZS 10,000  (~$4)
   // Pro ya Mwaka: TZS 120,000 (~$46) — akiba ya miezi 2
-  static const int proMonthlyPrice  = 10000;   // TZS 10,000/mwezi
+  static const int proMonthlyPrice  = 15000;   // TSh 15,000/month
   static const int proYearlyPrice   = 120000;  // TZS 120,000/mwaka (save 33%)
   static const int freePrice        = 0;
 
   static const Map<String, int> pricing = {
     'free':          freePrice,
-    'pro':           proMonthlyPrice,
-    'pro_monthly':   proMonthlyPrice,
+    'pro':          proMonthlyPrice,
+    'pro_monthly':  proMonthlyPrice,
     'pro_yearly':    proYearlyPrice,
   };
 

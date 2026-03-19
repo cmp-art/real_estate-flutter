@@ -54,11 +54,11 @@ class AdConfig {
   static const double estimatedCtrPercent = 1.5;
 
   // ── CPM / CPC — Banner Ads ───────────────────────────────────────────────
-  /// Bei ya chini ya CPM (kwa maonyesho 1,000) — TZS 1,000 (uzinduzi).
-  static const double minBidCpm = 1000.0;  // TSh 1,000 / maonyesho 1,000
+  /// Minimum CPM bid (per 1,000 impressions) — TSh 500 (launch phase).
+  static const double minBidCpm = 500.0;   // TSh 500 / 1,000 impressions
 
-  /// Bei ya chini ya CPC (kwa kila kubonyeza) — TZS 100.
-  static const double minBidCpc = 100.0;   // TSh 100 / click
+  /// Minimum CPC bid (per click) — TSh 50 (launch phase).
+  static const double minBidCpc = 50.0;    // TSh 50 / click
 
   // ── Packages za Biashara — Ad Packages ──────────────────────────────────
   /// Starter: TSh 50,000/mwezi → maonyesho 50,000

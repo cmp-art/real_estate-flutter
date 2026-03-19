@@ -25,23 +25,23 @@ enum SubscriptionTier {
     }
   }
 
-  /// Bei ya kila mwezi kwa TZS
+  /// Monthly price in TZS
   int get monthlyPriceTzs {
     switch (this) {
       case SubscriptionTier.free:
         return 0;
       case SubscriptionTier.pro:
-        return 10000; // TZS 10,000/mwezi
+        return 15000; // TSh 15,000/month
     }
   }
 
-  /// Bei ya kila mwaka kwa TZS (akiba ya miezi 2)
+  /// Yearly price in TZS — saves 2 months vs monthly (TSh 180,000 → TSh 120,000)
   int get yearlyPriceTzs {
     switch (this) {
       case SubscriptionTier.free:
         return 0;
       case SubscriptionTier.pro:
-        return 120000; // TZS 120,000/mwaka
+        return 120000; // TSh 120,000/year (save TSh 60,000)
     }
   }
 

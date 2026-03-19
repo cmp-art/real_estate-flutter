@@ -46,7 +46,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
   final _dailyBudgetController = TextEditingController();
   final _totalBudgetController = TextEditingController();
   String _biddingStrategy = 'cpm';
-  double _bidAmount = 2000.0;
+  double _bidAmount = 500.0; // TSh 500 CPM default (launch phase)
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now().add(const Duration(days: 30));
 
@@ -177,12 +177,12 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
       case 1:
         final daily = double.tryParse(_dailyBudgetController.text) ?? 0;
         final total = double.tryParse(_totalBudgetController.text) ?? 0;
-        if (daily <= 0) {
-          _snackError('Enter a valid daily budget.');
+        if (daily < 2000) {
+          _snackError('Minimum daily budget is TSh 2,000.');
           return false;
         }
-        if (total <= 0) {
-          _snackError('Enter a valid total budget.');
+        if (total < 5000) {
+          _snackError('Minimum total budget is TSh 5,000.');
           return false;
         }
         if (daily > total) {
@@ -480,9 +480,12 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
 
   Widget _buildStep1Details() {
     final objectives = [
-      
-      ('brand_awareness', Icons.visibility_rounded, 'Brand Awareness',
-          'Get your name out there'), 
+      ('brand_awareness',    Icons.visibility_rounded,   'Brand Awareness',
+          'Increase visibility — best with CPM bidding'),
+      ('property_inquiries', Icons.home_rounded,          'Property Inquiries',
+          'Drive direct inquiries on your listings — best with CPC'),
+      ('website_visits',     Icons.open_in_browser_rounded, 'Website / WhatsApp Visits',
+          'Send people to your website or WhatsApp number'),
     ];
 
     return Column(
@@ -534,25 +537,35 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
 
         _sectionTitle('Daily Budget (TSh)'),
-        const SizedBox(height: 10),
+        const SizedBox(height: 6),
+        Text(
+          'Minimum: TSh 2,000/day — controls how fast your budget is spent',
+          style: TextStyle(fontSize: 12, color: ThemeConfig.getTextSecondaryColor(context)),
+        ),
+        const SizedBox(height: 8),
         TextFormField(
           controller: _dailyBudgetController,
           keyboardType: TextInputType.number,
           style: TextStyle(color: ThemeConfig.getTextPrimaryColor(context)),
           decoration: _inputDeco(
-              hint: 'e.g. 10,000', icon: Icons.calendar_today_rounded),
+              hint: 'e.g. 5,000', icon: Icons.calendar_today_rounded),
           onChanged: (_) => _recalcEstimate(),
         ),
         const SizedBox(height: 20),
 
-        _sectionTitle('Total Budget (TSh)'),
-        const SizedBox(height: 10),
+        _sectionTitle('Total Campaign Budget (TSh)'),
+        const SizedBox(height: 6),
+        Text(
+          'Minimum: TSh 5,000 — your ad stops when this is used up',
+          style: TextStyle(fontSize: 12, color: ThemeConfig.getTextSecondaryColor(context)),
+        ),
+        const SizedBox(height: 8),
         TextFormField(
           controller: _totalBudgetController,
           keyboardType: TextInputType.number,
           style: TextStyle(color: ThemeConfig.getTextPrimaryColor(context)),
           decoration:
-              _inputDeco(hint: 'e.g. 300,000', icon: Icons.savings_rounded),
+              _inputDeco(hint: 'e.g. 50,000', icon: Icons.savings_rounded),
           onChanged: (_) => _recalcEstimate(),
         ),
 
@@ -591,13 +604,13 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
             Expanded(
               child: _BidCard(
                 label: 'CPM',
-                description: 'Pay per 1,000 views',
+                description: 'Pay per 1,000 views\nMin: TSh 500',
                 icon: Icons.visibility_rounded,
                 isSelected: _biddingStrategy == 'cpm',
                 onTap: () {
                   setState(() {
                     _biddingStrategy = 'cpm';
-                    _bidAmount = 2000;
+                    _bidAmount = 500;
                   });
                   _recalcEstimate();
                 },
@@ -607,13 +620,13 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
             Expanded(
               child: _BidCard(
                 label: 'CPC',
-                description: 'Pay per click',
+                description: 'Pay per click\nMin: TSh 50',
                 icon: Icons.touch_app_rounded,
                 isSelected: _biddingStrategy == 'cpc',
                 onTap: () {
                   setState(() {
                     _biddingStrategy = 'cpc';
-                    _bidAmount = 500;
+                    _bidAmount = 50;
                   });
                   _recalcEstimate();
                 },
@@ -634,9 +647,9 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         ),
         Slider(
           value: _bidAmount,
-          min: _biddingStrategy == 'cpm' ? 1500 : 400,
-          max: _biddingStrategy == 'cpm' ? 5000 : 1500,
-          divisions: 10,
+          min: _biddingStrategy == 'cpm' ? 500 : 50,
+          max: _biddingStrategy == 'cpm' ? 3000 : 500,
+          divisions: _biddingStrategy == 'cpm' ? 25 : 45,
           activeColor: ThemeConfig.getPrimaryColor(context),
           inactiveColor:
               ThemeConfig.getPrimaryColor(context).withOpacity(0.2),

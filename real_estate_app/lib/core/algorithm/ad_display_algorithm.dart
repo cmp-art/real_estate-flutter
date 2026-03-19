@@ -20,9 +20,9 @@ class DirectAdAlgorithm {
   final DirectAdService _adService;
   final SubscriptionService _subscriptionService;
 
-  // ── Pricing constants (TZS) ───────────────────────────────────────────────
-  static const double minBidCpm = 1500.0;  // minimum CPM bid
-  static const double minBidCpc = 400.0;   // minimum CPC bid
+  // ── Pricing constants (TZS) — launch phase ───────────────────────────────
+  static const double minBidCpm = 500.0;   // TSh 500 minimum CPM bid
+  static const double minBidCpc = 50.0;    // TSh 50 minimum CPC bid
 
   // ── Ad frequency per tier ─────────────────────────────────────────────────
   // Must stay in sync with DirectAdService.getAdFrequencyForUser().
@@ -257,17 +257,17 @@ class DirectAdAlgorithm {
   }) {
     if (biddingStrategy == 'cpm') {
       switch (campaignObjective) {
-        case 'brand_awareness':    return 1800.0;
-        case 'property_inquiries': return 2500.0;
-        case 'website_visits':     return 2000.0;
-        default:                   return 2000.0;
+        case 'brand_awareness':    return 500.0;
+        case 'property_inquiries': return 800.0;
+        case 'website_visits':     return 600.0;
+        default:                   return 500.0;
       }
     } else {
       switch (campaignObjective) {
-        case 'brand_awareness':    return 400.0;
-        case 'property_inquiries': return 600.0;
-        case 'website_visits':     return 500.0;
-        default:                   return 500.0;
+        case 'brand_awareness':    return 50.0;
+        case 'property_inquiries': return 100.0;
+        case 'website_visits':     return 75.0;
+        default:                   return 50.0;
       }
     }
   }
