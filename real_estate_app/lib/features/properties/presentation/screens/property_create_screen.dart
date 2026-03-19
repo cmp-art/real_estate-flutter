@@ -586,6 +586,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           ListTile(
             leading: const Icon(Icons.videocam_rounded),
             title: Text(s.videoOption),
+            subtitle: const Text('Max 90 seconds',
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
             onTap: () async {
               Navigator.pop(ctx);
               await _pickVideo();
@@ -632,11 +634,23 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       await probe.dispose();
       if (dur > const Duration(seconds: 90)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Video must be 90 seconds or shorter.'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ));
+          await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Video Too Long'),
+              content: Text(
+                'Your video is ${dur.inSeconds} seconds long.\n\n'
+                'Maximum allowed is 90 seconds. '
+                'Please trim it and try again.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
         }
         return;
       }
