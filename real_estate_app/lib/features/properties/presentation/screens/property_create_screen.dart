@@ -7,6 +7,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:video_compress/video_compress.dart';
+import '../../../../core/utils/video_web_utils.dart'
+    if (dart.library.io) '../../../../core/utils/video_web_utils_stub.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
@@ -321,7 +323,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   PropertyStatus _selectedStatus = PropertyStatus.available;
   RentDuration _selectedRentDuration = RentDuration.monthly;
   List<XFile> _selectedImages = [];
-  final List<File> _selectedVideos  = [];
+  final List<XFile> _selectedVideos  = [];
   final Map<String, dynamic> _videoThumbnails = {};
   bool _isLoading    = false;
   bool _isValidating = false;
@@ -619,28 +621,16 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     final picker = ImagePicker();
     final XFile? picked = await picker.pickVideo(
       source: ImageSource.gallery,
-      maxDuration: const Duration(seconds: 90), // enforce 90-sec limit at picker level
+      maxDuration: const Duration(seconds: 90),
     );
     if (picked == null) return;
 
-    // Video upload not supported on web — compression and thumbnail libs are native-only
-    if (kIsWeb) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Video upload is not supported on web. Use the Android app.'),
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-      return;
-    }
-    final file = File(picked.path);
-
     // ── Duration check (90-second max) ───────────────────────────────
-    // image_picker's maxDuration is advisory on some Android versions,
-    // so we verify with VideoPlayerController before accepting the file.
+    // Web: use networkUrl with blob URL. Native: use file().
     try {
-      final probe = VideoPlayerController.file(file);
+      final probe = kIsWeb
+          ? VideoPlayerController.networkUrl(Uri.parse(picked.path))
+          : VideoPlayerController.file(File(picked.path));
       await probe.initialize();
       final dur = probe.value.duration;
       await probe.dispose();
@@ -667,15 +657,20 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         return;
       }
     } catch (_) {
-      // If we can't read duration, continue — compression will still apply
+      // Can't read duration — continue
     }
 
-    final bytes = await file.length();
-    const maxBytes = 500 * 1024 * 1024; // 500 MB raw limit before compression
-    if (bytes > maxBytes) {
+    // ── Size check ────────────────────────────────────────────────────
+    // Web: no compression available, so limit is 200 MB.
+    // Native: allow up to 500 MB (compressed to ~10 MB afterwards).
+    final fileSize = await picked.length();
+    final maxBytes = kIsWeb ? 200 * 1024 * 1024 : 500 * 1024 * 1024;
+    if (fileSize > maxBytes) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Video is too large. Please choose a shorter video.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(kIsWeb
+              ? 'Video is too large (max 200 MB on web). Please choose a shorter video.'
+              : 'Video is too large. Please choose a shorter video.'),
           backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating,
         ));
@@ -683,50 +678,50 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       return;
     }
 
-    // Show compression progress
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Row(
-          children: [
-            const SizedBox(width: 20, height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-            SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-            const Text('Compressing video to 720p...'),
-          ],
-        ),
-        duration: const Duration(seconds: 30),
-        backgroundColor: Colors.black87,
-      ));
-    }
-
-    File compressedFile = file;
-    try {
-      // Compress to 720p — reduces 4K video from ~100MB to ~10MB
-      // This prevents OOM crashes on older/low-memory devices
-      final MediaInfo? info = await VideoCompress.compressVideo(
-        picked.path,
-        quality: VideoQuality.Res1280x720Quality,
-        deleteOrigin: false,
-        includeAudio: true,
-      );
-      if (info?.file != null) {
-        compressedFile = info!.file!;
-        debugPrint('Video compressed: ${await file.length()}B → ${await compressedFile.length()}B');
+    // ── Compression (native only) ─────────────────────────────────────
+    XFile finalVideo = picked;
+    if (!kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(
+            children: [
+              const SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+              SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+              const Text('Compressing video to 720p...'),
+            ],
+          ),
+          duration: const Duration(seconds: 30),
+          backgroundColor: Colors.black87,
+        ));
       }
-    } catch (e) {
-      debugPrint('Video compression failed, using original: $e');
-      compressedFile = file; // fallback to original
+      try {
+        final MediaInfo? info = await VideoCompress.compressVideo(
+          picked.path,
+          quality: VideoQuality.Res1280x720Quality,
+          deleteOrigin: false,
+          includeAudio: true,
+        );
+        if (info?.file != null) {
+          finalVideo = XFile(info!.file!.path);
+          debugPrint('Video compressed: ${fileSize}B → ${await finalVideo.length()}B');
+        }
+      } catch (e) {
+        debugPrint('Video compression failed, using original: $e');
+      }
+      if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
     }
 
-    // Dismiss compression snackbar
-    if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    // ── Thumbnail ────────────────────────────────────────────────────
+    // Web: capture frame via canvas (dart:html). Native: video_thumbnail package.
+    final Uint8List? thumb = kIsWeb
+        ? await captureVideoThumbnailWeb(picked.path)
+        : await _generateVideoThumbnail(finalVideo.path);
 
-    // Pre-generate thumbnail for display
-    final thumb = await _generateVideoThumbnail(compressedFile.path);
     if (mounted) {
       setState(() {
-        _selectedVideos.add(compressedFile);
-        _videoThumbnails[compressedFile.path] = thumb;
+        _selectedVideos.add(finalVideo);
+        _videoThumbnails[finalVideo.path] = thumb;
       });
     }
   }
@@ -817,9 +812,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       bathrooms:   bathrooms,
       area:        double.tryParse(_areaController.text) ?? 0,
       images:      _selectedImages.isNotEmpty ? _selectedImages : null,
-      videos:      _selectedVideos.isNotEmpty
-          ? _selectedVideos.map((f) => XFile(f.path)).toList()
-          : null,
+      videos:      _selectedVideos.isNotEmpty ? _selectedVideos : null,
       submittedBy: user.id,
     );
 
@@ -914,22 +907,28 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         // ── Upload video (non-fatal) ─────────────────────────────────
         // PropertyEntity doesn't have a videos field — we write the URL
         // directly to the properties.videos column via Supabase.
-        if (_selectedVideos.isNotEmpty && !kIsWeb) {
+        if (_selectedVideos.isNotEmpty) {
           try {
             final video  = _selectedVideos.first;
             final ts     = DateTime.now().millisecondsSinceEpoch;
-            final ext    = video.path.split('.').last.toLowerCase();
+            final name   = video.name.isNotEmpty ? video.name : video.path.split('/').last;
+            final ext    = name.split('.').last.toLowerCase();
             final path   = '${user.id}/${createdProperty.id}_$ts.$ext';
-            await Supabase.instance.client.storage
-                .from('property_videos')
-                .upload(
-                  path,
-                  video,
-                  fileOptions: const FileOptions(
-                    cacheControl: '31536000', // 1 year — CDN edge caching
-                    upsert: false,
-                  ),
-                );
+            if (kIsWeb) {
+              final videoBytes = await video.readAsBytes();
+              await Supabase.instance.client.storage
+                  .from('property_videos')
+                  .uploadBinary(path, videoBytes,
+                      fileOptions: const FileOptions(cacheControl: '31536000', upsert: false));
+            } else {
+              await Supabase.instance.client.storage
+                  .from('property_videos')
+                  .upload(path, File(video.path),
+                      fileOptions: const FileOptions(
+                        cacheControl: '31536000',
+                        upsert: false,
+                      ));
+            }
             final videoUrl = Supabase.instance.client.storage
                 .from('property_videos')
                 .getPublicUrl(path);
