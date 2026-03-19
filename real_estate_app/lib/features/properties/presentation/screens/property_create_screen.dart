@@ -616,13 +616,13 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     final picker = ImagePicker();
     final XFile? picked = await picker.pickVideo(
       source: ImageSource.gallery,
-      maxDuration: const Duration(minutes: 2), // enforce 2-min limit at picker level
+      maxDuration: const Duration(seconds: 90), // enforce 90-sec limit at picker level
     );
     if (picked == null) return;
 
     final file = File(picked.path);
 
-    // ── Duration check (2-minute max) ────────────────────────────────
+    // ── Duration check (90-second max) ───────────────────────────────
     // image_picker's maxDuration is advisory on some Android versions,
     // so we verify with VideoPlayerController before accepting the file.
     try {
@@ -630,10 +630,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       await probe.initialize();
       final dur = probe.value.duration;
       await probe.dispose();
-      if (dur > const Duration(minutes: 2)) {
+      if (dur > const Duration(seconds: 90)) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Video must be 2 minutes or shorter.'),
+            content: Text('Video must be 90 seconds or shorter.'),
             backgroundColor: Colors.red,
             behavior: SnackBarBehavior.floating,
           ));
