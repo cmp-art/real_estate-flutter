@@ -838,6 +838,26 @@ BEGIN
 
     DELETE FROM notification_rate_limits
     WHERE created_at < NOW() - INTERVAL '7 days';
+
+    -- property_price_history: keep 1 year — older records are rarely queried
+    DELETE FROM property_price_history
+    WHERE created_at < NOW() - INTERVAL '1 year';
+END $$;
+
+-- Schedule nightly at 3:30 AM UTC (offset from other crons to spread DB load)
+DO $$
+BEGIN
+    PERFORM cron.unschedule('cleanup-processed-notifications')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup-processed-notifications');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('cleanup-processed-notifications', '30 3 * * *',
+        'SELECT cleanup_processed_notifications()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — notification cleanup cron skipped. Enable pg_cron in Supabase Dashboard.';
 END $$;
 
 -- Enable Realtime on user_notifications (safe guard — won't fail if already added)

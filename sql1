@@ -573,12 +573,12 @@ VALUES (
     'property_images',
     'property_images',
     TRUE,
-    20971520,  -- 20 MB per image
+    5242880,   -- 5 MB per image (matches AppConstants.maxImageSize in Flutter)
     ARRAY['image/jpeg','image/jpg','image/png','image/webp','image/heic','image/heif']
 )
 ON CONFLICT (id) DO UPDATE SET
     public             = TRUE,
-    file_size_limit    = 20971520,
+    file_size_limit    = 5242880,
     allowed_mime_types = ARRAY['image/jpeg','image/jpg','image/png','image/webp','image/heic','image/heif'];
 
 -- Videos bucket
@@ -587,12 +587,12 @@ VALUES (
     'property_videos',
     'property_videos',
     TRUE,
-    52428800,  -- 50 MB per video
+    20971520,  -- 20 MB per video (reduced from 50 MB to cut egress)
     ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv']
 )
 ON CONFLICT (id) DO UPDATE SET
     public             = TRUE,
-    file_size_limit    = 52428800,
+    file_size_limit    = 20971520,
     allowed_mime_types = ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv'];
 
 -- ── RLS Policies: property_images ────────────────────────────────────────────
@@ -758,6 +758,24 @@ LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
     DELETE FROM analytics_events WHERE created_at < NOW() - INTERVAL '180 days';
     DELETE FROM app_errors        WHERE created_at < NOW() - INTERVAL '90 days' AND resolved = TRUE;
+    -- property_views: keep only 90 days (deduplicated hourly inserts grow very fast)
+    DELETE FROM property_views    WHERE created_at < NOW() - INTERVAL '90 days';
+END $$;
+
+-- Schedule nightly cleanup at 2 AM UTC
+DO $$
+BEGIN
+    PERFORM cron.unschedule('cleanup-old-analytics')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup-old-analytics');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('cleanup-old-analytics', '0 2 * * *',
+        'SELECT cleanup_old_analytics()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — analytics cleanup cron skipped. Enable pg_cron in Supabase Dashboard.';
 END $$;
 
 ALTER TABLE analytics_events ENABLE ROW LEVEL SECURITY;
