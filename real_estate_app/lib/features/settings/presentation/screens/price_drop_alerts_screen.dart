@@ -7,6 +7,7 @@ import '../../../../core/utils/currency_utils.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../properties/presentation/screens/property_list_screen.dart';
 
 final priceDropAlertServiceProvider = Provider<PriceDropAlertService>((ref) {
   // Get supabase from your provider
@@ -130,23 +131,29 @@ class _PriceDropAlertsScreenState extends ConsumerState<PriceDropAlertsScreen>
   }
 
   void _showCreateAlertDialog(BuildContext context, String userId) {
-    // TODO: Implement property selection dialog
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Create Price Drop Alert'),
-        content: const Text('Select a property to track price drops'),
+        content: const Text(
+          'Browse properties and tap the 🔔 bell icon on any property to set a price drop alert.',
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context);
-              // Navigate to property selection screen
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PropertyListScreen(),
+                ),
+              );
             },
-            child: const Text('Select Property'),
+            child: const Text('Browse Properties'),
           ),
         ],
       ),
