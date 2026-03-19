@@ -466,7 +466,22 @@ BEGIN
               AND  fi.created_at >= CURRENT_DATE::TIMESTAMPTZ
         )
 
-    ORDER BY c.bid_amount DESC, RANDOM()
+    -- ── Weighted-random auction ────────────────────────────────────────────────
+    -- RANDOM() * bid_amount gives each ad a score proportional to its bid.
+    -- A TSh 2,000 campaign is ~4× more likely to win than a TSh 500 campaign,
+    -- but lower bidders still get impressions — their budget is not wasted.
+    --
+    -- Pure ORDER BY bid_amount DESC (strict auction) meant the highest bidder
+    -- won every single slot. An advertiser with TSh 600 bid would never appear
+    -- while a TSh 2,000 bidder had budget remaining. This is unfair and means
+    -- small advertisers never get any value from their spend.
+    --
+    -- With RANDOM() * bid_amount:
+    --   TSh 2,000 bid → avg score ≈ 1,000   (wins ~57% of slots vs TSh 1,500)
+    --   TSh 1,500 bid → avg score ≈ 750    (wins ~43% of slots vs TSh 2,000)
+    --   TSh 500  bid → avg score ≈ 250    (still wins when random is favorable)
+    -- Higher budgets still dominate, but every eligible advertiser gets exposure.
+    ORDER BY RANDOM() * c.bid_amount DESC
     LIMIT p_limit;
 END;
 $$;

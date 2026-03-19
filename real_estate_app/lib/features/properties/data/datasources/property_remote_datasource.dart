@@ -71,8 +71,7 @@ class PropertyRemoteDataSource {
       }
 
       final data = await query
-          .order('owner_tier_rank', ascending: true)   // pro → free
-          .order('created_at', ascending: false)        // newest within tier
+          .order('boost_score', ascending: false)  // weighted: Pro +7d boost, Free +0
           .range((page - 1) * limit, page * limit - 1);
 
       // ✅ FIX: Check for null or empty response

@@ -8,6 +8,7 @@ import '../../../../core/services/selcom_payment_service.dart';
 import '../../../../core/config/payment_config.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../data/models/subscription_model.dart';
+import '../../../../features/settings/presentation/providers/app_providers.dart';
 import 'payment_webview_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
@@ -486,7 +487,15 @@ class _AutoPaymentScreenState extends ConsumerState<AutoPaymentScreen> {
         );
 
         if (success == true && mounted) {
-          Navigator.of(context).pop(true);
+          // Activate the subscription in Supabase now that payment is confirmed.
+          // Without this call the user stays on the Free tier despite paying.
+          await ref
+              .read(subscriptionNotifierProvider(user.id).notifier)
+              .upgrade(
+                tier: widget.tier,
+                paymentProviderId: result.paymentId!,
+              );
+          if (mounted) Navigator.of(context).pop(true);
         }
       } else {
         _showError(result.message ?? 'Payment initialization failed');

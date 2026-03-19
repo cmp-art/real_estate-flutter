@@ -1369,8 +1369,23 @@ NOTIFY pgrst, 'reload schema';
 
 DROP VIEW IF EXISTS property_list_view CASCADE;
 
+-- ── Weighted-recency boost ────────────────────────────────────────────────────
+-- Pro listings receive a 7-day virtual age bonus so they surface higher than
+-- Free listings of the same real age — but without dominating every page.
+--
+-- Ranking examples:
+--   Pro  created today       → boost_score = NOW() + 7 days  (ranks #1)
+--   Free created today       → boost_score = NOW()            (ranks after fresh Pro)
+--   Pro  created 6 days ago  → boost_score = NOW() + 1 day   (still above fresh Free)
+--   Pro  created 8 days ago  → boost_score = NOW() - 1 day   (fresh Free beats this)
+--   Free created 3 days ago  → boost_score = NOW() - 3 days
+--
+-- App orders by: .order('boost_score', ascending: false)
+-- Result: Pro properties appear prominently but don't bury Free listings forever.
+-- ─────────────────────────────────────────────────────────────────────────────
+
 CREATE VIEW property_list_view WITH (security_invoker = off) AS
-SELECT 
+SELECT
     p.id,
     p.title,
     p.description,
@@ -1383,30 +1398,33 @@ SELECT
     p.bedrooms,
     p.bathrooms,
     p.area,
-    p.images[1] as thumbnail_url,
-    array_length(p.images, 1) as total_images,
+    p.images[1]              AS thumbnail_url,
+    array_length(p.images,1) AS total_images,
     p.owner_id,
     p.status,
     p.is_featured,
     p.views_count,
     p.created_at,
     p.updated_at,
-    CASE 
-        WHEN st.name = 'pro' THEN 1 
-        ELSE 2 
-    END AS owner_tier_rank,
+    CASE WHEN st.name = 'pro' THEN 1 ELSE 2 END AS owner_tier_rank,
+    -- Weighted recency: Pro gets +7 days, Free gets +0.
+    -- Order by this DESC to get fair interleaving instead of all-Pro-first.
+    p.created_at + CASE
+        WHEN st.name = 'pro' THEN INTERVAL '7 days'
+        ELSE                       INTERVAL '0'
+    END                      AS boost_score,
     p.images,
     p.videos,
     p.property_type,
     p.deleted_at,
-    COALESCE(up.full_name, au.email, 'Unknown Owner') as owner_name,
-    up.avatar_url as owner_avatar,
+    COALESCE(up.full_name, au.email, 'Unknown Owner') AS owner_name,
+    up.avatar_url            AS owner_avatar,
     p.rent_duration
-FROM properties p
-LEFT JOIN user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'
-LEFT JOIN subscription_tiers st ON st.id = us.tier_id
-LEFT JOIN user_profiles up ON up.id = p.owner_id
-LEFT JOIN auth.users au ON au.id = p.owner_id;
+FROM       properties        p
+LEFT JOIN  user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'
+LEFT JOIN  subscription_tiers st ON st.id = us.tier_id
+LEFT JOIN  user_profiles      up ON up.id = p.owner_id
+LEFT JOIN  auth.users         au ON au.id = p.owner_id;
 
 GRANT SELECT ON property_list_view TO authenticated, anon, service_role;
 
