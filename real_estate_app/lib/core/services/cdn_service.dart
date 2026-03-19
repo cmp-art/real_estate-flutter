@@ -13,6 +13,8 @@
 //
 // Docs: https://supabase.com/docs/guides/storage/serving/image-transformations
 
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
@@ -22,6 +24,20 @@ class CdnService {
 
   /// Returns true when Supabase URL is available.
   static bool get isCdnEnabled => _supabaseUrl.isNotEmpty;
+
+  /// Returns the best image format for the current platform.
+  /// WebP is supported on Web, Android, and iOS 14+.
+  /// Falls back to jpeg for iOS 13 (universally supported, still smaller than PNG/HEIC).
+  static String get _imageFormat {
+    if (kIsWeb) return 'webp';
+    if (Platform.isIOS) {
+      // Platform.operatingSystemVersion on iOS: "Version 13.5 (Build 17F75)"
+      final match = RegExp(r'Version (\d+)').firstMatch(Platform.operatingSystemVersion);
+      final major = int.tryParse(match?.group(1) ?? '14') ?? 14;
+      return major >= 14 ? 'webp' : 'jpeg';
+    }
+    return 'webp'; // Android and other platforms fully support WebP
+  }
 
   // ── Image URL helpers ────────────────────────────────────────────────────
 
@@ -49,17 +65,17 @@ class CdnService {
     return Uri.parse(base).replace(queryParameters: params).toString();
   }
 
-  /// Thumbnail (300 × 200, quality 70, WebP). Used in property list cards.
+  /// Thumbnail (300 × 200, quality 70). Used in property list cards.
   static String getThumbnailUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 300, height: 200, quality: 70, format: 'webp');
+      getOptimizedImageUrl(storageUrlOrPath, width: 300, height: 200, quality: 70, format: _imageFormat);
 
-  /// Medium (800 × 600, quality 75, WebP). Used in property detail hero.
+  /// Medium (800 × 600, quality 75). Used in property detail hero.
   static String getMediumUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 800, height: 600, quality: 75, format: 'webp');
+      getOptimizedImageUrl(storageUrlOrPath, width: 800, height: 600, quality: 75, format: _imageFormat);
 
-  /// Full-size (1280 × 960, quality 80, WebP). Used in photo gallery.
+  /// Full-size (1280 × 960, quality 80). Used in photo gallery.
   static String getFullSizeUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 1280, height: 960, quality: 80, format: 'webp');
+      getOptimizedImageUrl(storageUrlOrPath, width: 1280, height: 960, quality: 80, format: _imageFormat);
 
   // ── Internal helpers ─────────────────────────────────────────────────────
 
