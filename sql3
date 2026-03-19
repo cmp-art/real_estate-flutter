@@ -28,7 +28,9 @@ BEGIN
     DROP FUNCTION IF EXISTS record_ad_impression(UUID,UUID,UUID,UUID,TEXT,UUID,DECIMAL) CASCADE;
     DROP FUNCTION IF EXISTS record_ad_click(UUID,UUID,UUID,UUID,UUID,DECIMAL)          CASCADE;
     DROP FUNCTION IF EXISTS process_advertiser_payment(UUID,DECIMAL,TEXT,TEXT,TEXT)    CASCADE;
+    DROP FUNCTION IF EXISTS process_advertiser_payment(UUID,NUMERIC,TEXT,TEXT,TEXT)    CASCADE;
     DROP FUNCTION IF EXISTS verify_and_complete_payment(TEXT,TEXT,DECIMAL,UUID)        CASCADE;
+    DROP FUNCTION IF EXISTS verify_and_complete_payment(TEXT,TEXT,NUMERIC,UUID)        CASCADE;
     DROP FUNCTION IF EXISTS soft_delete_campaign(UUID,UUID,TEXT)                       CASCADE;
     DROP FUNCTION IF EXISTS soft_delete_creative(UUID,UUID,TEXT)                       CASCADE;
 
@@ -632,20 +634,46 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION record_ad_click(UUID,UUID,UUID,UUID,UUID,DECIMAL) TO authenticated, anon;
 
 CREATE OR REPLACE FUNCTION process_advertiser_payment(
-    p_advertiser_id UUID, p_amount DECIMAL, p_transaction_id TEXT,
-    p_payment_method TEXT, p_provider_reference TEXT DEFAULT NULL
+    p_advertiser_id      UUID,
+    p_amount             DECIMAL,
+    p_transaction_id     TEXT,
+    p_payment_method     TEXT,
+    p_provider_reference TEXT DEFAULT NULL
 )
 RETURNS UUID AS $$
 DECLARE v_payment_id UUID;
 BEGIN
-    INSERT INTO advertiser_payments (advertiser_id, amount, transaction_id, payment_method,
-        provider_reference, status, completed_at)
-    VALUES (p_advertiser_id, p_amount, p_transaction_id, p_payment_method,
-            p_provider_reference, 'completed', NOW())
+    -- Idempotency guard: don't credit the same transaction twice.
+    -- The UNIQUE constraint on advertiser_payments.transaction_id would also
+    -- catch this, but an explicit check gives a clean no-op return instead of
+    -- raising an exception.
+    SELECT id INTO v_payment_id
+    FROM   advertiser_payments
+    WHERE  transaction_id = p_transaction_id AND status = 'completed';
+
+    IF FOUND THEN
+        RETURN v_payment_id; -- already processed — return existing id
+    END IF;
+
+    INSERT INTO advertiser_payments (
+        advertiser_id, amount, currency, transaction_id, payment_method,
+        provider_reference, status, payment_date, completed_at
+    )
+    VALUES (
+        p_advertiser_id, p_amount, 'TZS', p_transaction_id, p_payment_method,
+        p_provider_reference, 'completed', NOW(), NOW()
+    )
+    ON CONFLICT (transaction_id) DO NOTHING
     RETURNING id INTO v_payment_id;
 
-    UPDATE advertisers SET account_balance = account_balance + p_amount, updated_at = NOW()
-    WHERE id = p_advertiser_id;
+    -- Credit balance only when a new payment row was inserted
+    IF v_payment_id IS NOT NULL THEN
+        UPDATE advertisers
+        SET    account_balance = account_balance + p_amount,
+               total_spent     = total_spent,          -- balance top-up, not a spend
+               updated_at      = NOW()
+        WHERE  id = p_advertiser_id;
+    END IF;
 
     RETURN v_payment_id;
 END;
@@ -1187,7 +1215,7 @@ BEGIN
     );
     RAISE NOTICE '=== FILE 3: ADVERTISEMENT SYSTEM COMPLETE ===';
     RAISE NOTICE '  Ad tables: %  AI validation tables: %  Advertisers: %  Functions: %', v_tbl, v_ai_tbl, v_adv, v_fn;
-    RAISE NOTICE '  Fixes: targeting, daily budget, CPM billing, fraud detection, frequency cap, webhook payment';
+    RAISE NOTICE '  Fixes: targeting, daily budget, CPM billing, fraud detection, frequency cap, webhook payment, idempotent payments';
     RAISE NOTICE '  AI: ai_validation_logs, manual_review_queue, get_validation_stats(), get_pending_review_count(), ai_approved columns';
     RAISE NOTICE '  AI validates: property photos, property videos (thumbnail), ad images, ad videos (thumbnail)';
 END $$;
