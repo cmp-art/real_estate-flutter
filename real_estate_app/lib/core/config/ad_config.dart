@@ -57,8 +57,8 @@ class AdConfig {
   /// Bei ya chini ya CPM (kwa maonyesho 1,000) — TZS 1,000 (uzinduzi).
   static const double minBidCpm = 1000.0;  // TSh 1,000 / maonyesho 1,000
 
-  /// Bei ya chini ya CPC (kwa kila kubonyeza) — TZS 300.
-  static const double minBidCpc = 300.0;   // TSh 300 / click
+  /// Bei ya chini ya CPC (kwa kila kubonyeza) — TZS 100.
+  static const double minBidCpc = 100.0;   // TSh 100 / click
 
   // ── Packages za Biashara — Ad Packages ──────────────────────────────────
   /// Starter: TSh 50,000/mwezi → maonyesho 50,000
