@@ -6,8 +6,8 @@ class CustomCacheManager {
   static CacheManager instance = CacheManager(
     Config(
       key,
-      stalePeriod: const Duration(days: 7),
-      maxNrOfCacheObjects: 200,
+      stalePeriod: const Duration(days: 30),
+      maxNrOfCacheObjects: 500,
       repo: JsonCacheInfoRepository(databaseName: key),
       fileService: HttpFileService(),
     ),

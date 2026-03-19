@@ -331,14 +331,11 @@ class PriceDropAlertService {
     return _supabase
         .from('price_drop_alerts')
         .stream(primaryKey: ['id'])
+        .eq('user_id', userId)
         .order('created_at', ascending: false)
-        .map((data) {
-          // Filter in-memory since stream doesn't support eq() in newer versions
-          return data
-              .where((json) => json['user_id'] == userId)
-              .map((json) => PriceDropAlert.fromJson(json))
-              .toList();
-        });
+        .map((data) => data
+            .map((json) => PriceDropAlert.fromJson(json))
+            .toList());
   }
 
   /// Stream of price drop notifications for a user
@@ -346,16 +343,12 @@ class PriceDropAlertService {
     return _supabase
         .from('notification_queue')
         .stream(primaryKey: ['id'])
+        .eq('user_id', userId)
         .order('created_at', ascending: false)
-        .map((data) {
-          // Filter in-memory since stream doesn't support eq() in newer versions
-          return data
-              .where((json) => 
-                  json['user_id'] == userId && 
-                  json['notification_type'] == 'price_drop')
-              .map((json) => PriceDropNotification.fromJson(json))
-              .toList();
-        });
+        .map((data) => data
+            .where((json) => json['notification_type'] == 'price_drop')
+            .map((json) => PriceDropNotification.fromJson(json))
+            .toList());
   }
 
   /// Get count of unread notifications

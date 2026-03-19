@@ -322,11 +322,9 @@ class NotificationFilterService {
     return _supabase
         .from('notification_property_filters')
         .stream(primaryKey: ['id'])
-        .map((data) {
-          return data
-              .where((json) => json['user_id'] == userId)
-              .map((json) => NotificationFilter.fromJson(json))
-              .toList();
-        });
+        .eq('user_id', userId)
+        .map((data) => data
+            .map((json) => NotificationFilter.fromJson(json))
+            .toList());
   }
 }
