@@ -661,19 +661,38 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     }
 
     // ── Size check ────────────────────────────────────────────────────
-    // Web: no compression available, so limit is 200 MB.
+    // Web: no compression available, so limit is 50 MB to avoid egress costs.
     // Native: allow up to 500 MB (compressed to ~10 MB afterwards).
     final fileSize = await picked.length();
-    final maxBytes = kIsWeb ? 200 * 1024 * 1024 : 500 * 1024 * 1024;
+    final maxBytes = kIsWeb ? 50 * 1024 * 1024 : 500 * 1024 * 1024;
     if (fileSize > maxBytes) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(kIsWeb
-              ? 'Video is too large (max 200 MB on web). Please choose a shorter video.'
-              : 'Video is too large. Please choose a shorter video.'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ));
+        if (kIsWeb) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Video Too Large'),
+              content: const Text(
+                'Web uploads are limited to 50 MB to keep the app fast for everyone.\n\n'
+                'For best results:\n'
+                '• Compress your video using a free tool before uploading, or\n'
+                '• Download the Patamjengo app from the Play Store — it compresses videos automatically.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Video is too large (max 500 MB). Please choose a shorter clip.'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
       }
       return;
     }
