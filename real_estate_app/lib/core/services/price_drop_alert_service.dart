@@ -30,19 +30,22 @@ class PriceDropAlert {
   });
 
   factory PriceDropAlert.fromJson(Map<String, dynamic> json) {
+    // DB columns: target_price, alert_threshold, last_alerted_price, last_alerted_at
+    // originalPrice maps to target_price (the price the alert fires at)
+    // currentPrice maps to last_alerted_price (price at last notification)
     return PriceDropAlert(
       id: json['id'] as String,
       userId: json['user_id'] as String,
       propertyId: json['property_id'] as String,
-      alertThreshold: (json['alert_threshold'] as num).toDouble(),
-      originalPrice: (json['original_price'] as num).toDouble(),
-      currentPrice: json['current_price'] != null 
-          ? (json['current_price'] as num).toDouble() 
+      alertThreshold: (json['alert_threshold'] as num? ?? 5).toDouble(),
+      originalPrice: (json['target_price'] as num?)?.toDouble() ?? 0.0,
+      currentPrice: json['last_alerted_price'] != null
+          ? (json['last_alerted_price'] as num).toDouble()
           : null,
-      lastNotifiedAt: json['last_notified_at'] != null
-          ? DateTime.parse(json['last_notified_at'] as String)
+      lastNotifiedAt: json['last_alerted_at'] != null
+          ? DateTime.parse(json['last_alerted_at'] as String)
           : null,
-      isActive: json['is_active'] as bool,
+      isActive: json['is_active'] as bool? ?? true,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -114,7 +117,9 @@ class PriceDropAlertService {
 
   PriceDropAlertService(this._supabase);
 
-  /// Create a price drop alert (Pro feature only)
+  /// Create a price drop alert (Pro feature only).
+  /// [threshold] is the percentage drop to watch for (e.g. 10 = 10%).
+  /// [originalPrice] is used to compute [p_target_price] for the DB.
   Future<PriceDropAlertResult> createAlert({
     required String userId,
     required String propertyId,
@@ -122,13 +127,18 @@ class PriceDropAlertService {
     required double originalPrice,
   }) async {
     try {
+      // Compute the target price from the threshold percentage.
+      // alert_type 'target_price' fires when price drops to/below target_price.
+      final targetPrice = threshold > 0 && originalPrice > 0
+          ? originalPrice * (1 - threshold / 100)
+          : null;
       final response = await _supabase.rpc(
         'create_price_drop_alert',
         params: {
           'p_user_id': userId,
           'p_property_id': propertyId,
-          'p_threshold': threshold,
-          'p_original_price': originalPrice,
+          'p_target_price': targetPrice,
+          'p_alert_type': targetPrice != null ? 'target_price' : 'any_drop',
         },
       );
 
@@ -273,11 +283,12 @@ class PriceDropAlertService {
     bool unreadOnly = false,
   }) async {
     try {
+      // Notifications are written to user_notifications (type='price_drop')
       var query = _supabase
-          .from('notification_queue')
+          .from('user_notifications')
           .select()
           .eq('user_id', userId)
-          .eq('notification_type', 'price_drop');
+          .eq('type', 'price_drop');
 
       if (unreadOnly) {
         query = query.eq('is_read', false);
@@ -298,10 +309,10 @@ class PriceDropAlertService {
   Future<bool> markNotificationAsRead(String notificationId) async {
     try {
       await _supabase
-          .from('notification_queue')
-          .update({'is_read': true})
+          .from('user_notifications')
+          .update({'is_read': true, 'read_at': DateTime.now().toIso8601String()})
           .eq('id', notificationId);
-      
+
       return true;
     } catch (e) {
       debugPrint('Error marking notification as read: $e');
@@ -313,12 +324,12 @@ class PriceDropAlertService {
   Future<bool> markAllAsRead(String userId) async {
     try {
       await _supabase
-          .from('notification_queue')
-          .update({'is_read': true})
+          .from('user_notifications')
+          .update({'is_read': true, 'read_at': DateTime.now().toIso8601String()})
           .eq('user_id', userId)
-          .eq('notification_type', 'price_drop')
+          .eq('type', 'price_drop')
           .eq('is_read', false);
-      
+
       return true;
     } catch (e) {
       debugPrint('Error marking all as read: $e');
@@ -341,12 +352,12 @@ class PriceDropAlertService {
   /// Stream of price drop notifications for a user
   Stream<List<PriceDropNotification>> notificationsStream(String userId) {
     return _supabase
-        .from('notification_queue')
+        .from('user_notifications')
         .stream(primaryKey: ['id'])
         .eq('user_id', userId)
         .order('created_at', ascending: false)
         .map((data) => data
-            .where((json) => json['notification_type'] == 'price_drop')
+            .where((json) => json['type'] == 'price_drop')
             .map((json) => PriceDropNotification.fromJson(json))
             .toList());
   }
@@ -355,13 +366,12 @@ class PriceDropAlertService {
   Future<int> getUnreadCount(String userId) async {
     try {
       final response = await _supabase
-          .from('notification_queue')
+          .from('user_notifications')
           .select('id')
           .eq('user_id', userId)
-          .eq('notification_type', 'price_drop')
+          .eq('type', 'price_drop')
           .eq('is_read', false);
 
-      // Response is a List, so we just count the items
       return (response as List).length;
     } catch (e) {
       debugPrint('Error fetching unread count: $e');
