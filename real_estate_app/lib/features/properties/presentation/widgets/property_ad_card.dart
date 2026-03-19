@@ -43,6 +43,9 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
   bool _isVideoInitialized = false;
   bool _isVideoLoading = false;
 
+  String _t(String key) => AppTranslations.translate(
+      key, ref.read(languageProvider).languageCode);
+
   @override
   void initState() {
     super.initState();
@@ -167,8 +170,6 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final lang = ref.watch(languageProvider).languageCode;
-    String t(String key) => AppTranslations.translate(key, lang);
 
     // Wrap in NotificationListener so impression fires only when ad is visible.
     // Using addPostFrameCallback on every scroll event + initial layout check.
@@ -227,7 +228,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                       ),
                       SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                       Text(
-                        t('sponsored'),
+                        _t('sponsored'),
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11),
                           fontWeight: FontWeight.w600,
@@ -479,7 +480,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                         const Icon(Icons.videocam_rounded,
                             color: Colors.white, size: 12),
                         const SizedBox(width: 3),
-                        Text(t('video_ad'),
+                        Text(_t('video_ad'),
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
@@ -537,7 +538,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
               Text(
-                t('ad_media_unavailable'),
+                _t('ad_media_unavailable'),
                 style: TextStyle(
                   color: ThemeConfig.getTextSecondaryColor(context),
                   fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
