@@ -615,7 +615,11 @@ class AdminService {
 
   Future<List<Map<String, dynamic>>> getPendingReview() async {
     try {
-      return await _supabase.from('admin_pending_review').select();
+      return await _supabase
+          .from('admin_pending_review')
+          .select()
+          .limit(100)
+          .order('created_at', ascending: false);
     } catch (e) {
       debugPrint('Error getting pending review: $e');
       return [];

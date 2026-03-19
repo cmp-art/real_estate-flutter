@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/services/cdn_service.dart';
 import '../../../../core/services/direct_ad_models.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../users/presentation/screens/user_profileview_screen.dart';
@@ -250,7 +251,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                             ClipRRect(
                               borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
                               child: CachedNetworkImage(
-                                imageUrl: widget.ad.logoUrl!,
+                                imageUrl: CdnService.getThumbnailUrl(widget.ad.logoUrl!),
                                 width: 28,
                                 height: 28,
                                 fit: BoxFit.cover,
@@ -355,7 +356,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                 children: [
                   // Poster frame — ad image with slight dark overlay
                   CachedNetworkImage(
-                    imageUrl: widget.ad.imageUrl,
+                    imageUrl: CdnService.getMediumUrl(widget.ad.imageUrl),
                     fit: BoxFit.cover,
                     color: Colors.black.withOpacity(0.35),
                     colorBlendMode: BlendMode.darken,
@@ -497,7 +498,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
         topRight: Radius.circular(12),
       ),
       child: CachedNetworkImage(
-        imageUrl: widget.ad.imageUrl,
+        imageUrl: CdnService.getMediumUrl(widget.ad.imageUrl),
         width: double.infinity,
         height: 200, // Fixed 200px
         fit: BoxFit.cover,
@@ -656,7 +657,7 @@ class _DirectAdBannerState extends State<DirectAdBanner> {
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
                 child: CachedNetworkImage(
-                  imageUrl: widget.ad.imageUrl,
+                  imageUrl: CdnService.getThumbnailUrl(widget.ad.imageUrl),
                   width: 90,
                   height: 90,
                   fit: BoxFit.cover,

@@ -1,5 +1,7 @@
 // lib/core/services/direct_ad_service.dart
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -63,9 +65,38 @@ class AdNotification {
   void operator [](String other) {}
 }
 
+/// Holds the parameters for a single queued impression.
+class _QueuedImpression {
+  final String campaignId;
+  final String creativeId;
+  final String advertiserId;
+  final String userId;
+  final String screenName;
+  final String? propertyId;
+  final double cost;
+
+  const _QueuedImpression({
+    required this.campaignId,
+    required this.creativeId,
+    required this.advertiserId,
+    required this.userId,
+    required this.screenName,
+    this.propertyId,
+    required this.cost,
+  });
+}
+
 class DirectAdService {
   final SupabaseClient _supabase;
   final SubscriptionService _subscriptionService;
+
+  // ── Impression batch queue ────────────────────────────────────────────────
+  // Impressions are collected locally and flushed to Supabase every 10 items
+  // OR every 30 seconds (whichever comes first). This reduces RPC call volume.
+  final List<_QueuedImpression> _impressionQueue = [];
+  Timer? _impressionFlushTimer;
+  static const int _batchFlushSize = 10;
+  static const Duration _batchFlushInterval = Duration(seconds: 30);
 
   DirectAdService(this._supabase, this._subscriptionService);
 
@@ -159,7 +190,10 @@ class DirectAdService {
   // IMPRESSION & CLICK TRACKING
   // ============================================================
 
-  /// Record an ad impression. Returns the impression UUID or null on error.
+  /// Record an ad impression.
+  /// Impressions are queued locally and flushed in batches of 10 or every 30 s.
+  /// Returns null immediately (fire-and-forget); actual RPC happens in flush.
+  ///
   /// Cost calculation (pass via impressionCost getter on DirectAd):
   ///   CPC campaigns → cost = 0.0 (charged only on click)
   ///   CPM campaigns → cost = bidAmount / 1000
@@ -172,23 +206,63 @@ class DirectAdService {
     String? propertyId,
     required double cost,
   }) async {
-    try {
-      final response = await _supabase.rpc(
-        'record_ad_impression',
-        params: {
-          'p_campaign_id': campaignId,
-          'p_creative_id': creativeId,
-          'p_advertiser_id': advertiserId,
-          'p_user_id': userId,
-          'p_screen_name': screenName,
-          'p_property_id': propertyId,
-          'p_cost': cost,
-        },
-      );
-      return response as String?;
-    } catch (e) {
-      debugPrint('Error recording impression: $e');
-      return null;
+    _impressionQueue.add(_QueuedImpression(
+      campaignId: campaignId,
+      creativeId: creativeId,
+      advertiserId: advertiserId,
+      userId: userId,
+      screenName: screenName,
+      propertyId: propertyId,
+      cost: cost,
+    ));
+
+    // Start periodic flush timer on first enqueue.
+    _impressionFlushTimer ??= Timer.periodic(_batchFlushInterval, (_) {
+      flushImpressions();
+    });
+
+    // Flush immediately once the batch size threshold is reached.
+    if (_impressionQueue.length >= _batchFlushSize) {
+      await flushImpressions();
+    }
+
+    return null;
+  }
+
+  /// Flush all queued impressions to Supabase.
+  /// Call this on app pause or screen dispose to ensure nothing is lost.
+  Future<void> flushImpressions() async {
+    if (_impressionQueue.isEmpty) return;
+
+    // Drain the queue atomically so concurrent calls don't double-send.
+    final toFlush = List<_QueuedImpression>.from(_impressionQueue);
+    _impressionQueue.clear();
+
+    for (final imp in toFlush) {
+      try {
+        await _supabase.rpc(
+          'record_ad_impression',
+          params: {
+            'p_campaign_id': imp.campaignId,
+            'p_creative_id': imp.creativeId,
+            'p_advertiser_id': imp.advertiserId,
+            'p_user_id': imp.userId,
+            'p_screen_name': imp.screenName,
+            'p_property_id': imp.propertyId,
+            'p_cost': imp.cost,
+          },
+        );
+      } catch (e) {
+        debugPrint('Error flushing impression: $e');
+        // Re-queue failed impression so it is retried on the next flush.
+        _impressionQueue.add(imp);
+      }
+    }
+
+    // Cancel the timer when the queue is fully drained.
+    if (_impressionQueue.isEmpty) {
+      _impressionFlushTimer?.cancel();
+      _impressionFlushTimer = null;
     }
   }
 
@@ -374,7 +448,8 @@ class DirectAdService {
           .select()
           .eq('advertiser_id', advertiserId)
           .isFilter('deleted_at', null)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .limit(50);
       return response.map((json) => AdCampaign.fromJson(json)).toList();
     } catch (e) {
       debugPrint('Error getting campaigns: $e');
@@ -463,7 +538,8 @@ class DirectAdService {
           .select()
           .eq('campaign_id', campaignId)
           .isFilter('deleted_at', null)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .limit(50);
       return response.map((json) => AdCreative.fromJson(json)).toList();
     } catch (e) {
       debugPrint('Error getting creatives: $e');
@@ -586,7 +662,8 @@ class DirectAdService {
           .from('advertiser_payments')
           .select()
           .eq('advertiser_id', advertiserId)
-          .order('payment_date', ascending: false);
+          .order('created_at', ascending: false)
+          .limit(50);
       return response
           .map((json) => AdvertiserPayment.fromJson(json))
           .toList();
