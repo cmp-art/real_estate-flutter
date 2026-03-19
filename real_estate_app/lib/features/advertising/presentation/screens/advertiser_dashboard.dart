@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/config/theme_config.dart';
+import '../../../../core/utils/app_localizations.dart';
       // ← single source of truth
 import '../../../../core/services/direct_ad_models.dart';
 import '../provider/ad_providers.dart';
@@ -52,7 +53,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (supabaseUser == null) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'User not authenticated. Please sign in.';
+          _errorMessage = AppLocalizations.of(context)?.translate('user_not_authenticated') ?? 'User not authenticated. Please sign in.';
         });
         return;
       }
@@ -67,7 +68,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (advertiser == null) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Unable to create advertiser account';
+          _errorMessage = AppLocalizations.of(context)?.translate('unable_create_advertiser') ?? 'Unable to create advertiser account';
         });
         return;
       }
@@ -89,7 +90,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Unable to load advertiser data';
+          _errorMessage = AppLocalizations.of(context)?.translate('unable_load_advertiser') ?? 'Unable to load advertiser data';
         });
       }
     }
@@ -102,7 +103,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Campaign?'),
+        title: Text(AppLocalizations.of(ctx)?.translate('delete_campaign_title') ?? 'Delete Campaign?'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,8 +128,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'All spend, impressions and click history are '
-                      'preserved for billing records.',
+                      AppLocalizations.of(ctx)?.translate('delete_campaign_history') ?? 'All spend, impressions and click history are preserved for billing records.',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
@@ -172,8 +172,8 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
 
       if (result.success) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Campaign deleted successfully'),
+          SnackBar(
+            content: Text(AppLocalizations.of(context)?.translate('campaign_deleted') ?? 'Campaign deleted successfully'),
             backgroundColor: ThemeConfig.successColor,
           ),
         );
@@ -264,7 +264,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       backgroundColor: ThemeConfig.getBackgroundColor(context),
       appBar: AppBar(
         title: Text(
-          'Advertiser Dashboard',
+          AppLocalizations.of(context)?.translate('advertiser_dashboard') ?? 'Advertiser Dashboard',
           style: TextStyle(
             color: ThemeConfig.getColor(
               context,
@@ -301,7 +301,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ? FloatingActionButton.extended(
                   onPressed: _navigateToCreateCampaign,
                   icon: const Icon(Icons.add_rounded),
-                  label: const Text('New Campaign'),
+                  label: Text(AppLocalizations.of(context)?.translate('new_campaign') ?? 'New Campaign'),
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
                 )
@@ -320,7 +320,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('Loading Dashboard...'),
+            Text(AppLocalizations.of(context)?.translate('loading_dashboard') ?? 'Loading Dashboard...'),
           ],
         ),
       );
@@ -348,7 +348,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ElevatedButton.icon(
                 onPressed: _loadDashboardData,
                 icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
+                label: Text(AppLocalizations.of(context)?.translate('retry') ?? 'Retry'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
@@ -361,7 +361,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
     }
 
     if (_advertiser == null) {
-      return const Center(child: Text('Unable to load advertiser data'));
+      return Center(child: Text(AppLocalizations.of(context)?.translate('unable_load_advertiser') ?? 'Unable to load advertiser data'));
     }
 
     return RefreshIndicator(
@@ -446,7 +446,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                             color: Colors.white, size: 16),
                         SizedBox(width: 4),
                         Text(
-                          'Low Balance',
+                          AppLocalizations.of(context)?.translate('low_balance') ?? 'Low Balance',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -459,8 +459,8 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ],
             ),
             const SizedBox(height: 16),
-            const Text(
-              'Account Balance',
+            Text(
+              AppLocalizations.of(context)?.translate('account_balance') ?? 'Account Balance',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 14,
@@ -480,7 +480,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Total Spent: ${formatter.format(_advertiser!.totalSpent)}',
+              '${AppLocalizations.of(context)?.translate('total_spent') ?? 'Total Spent'}: ${formatter.format(_advertiser!.totalSpent)}',
               style: TextStyle(
                 color: Colors.white.withOpacity(0.9),
                 fontSize: 13,
@@ -515,7 +515,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Quick Actions',
+              AppLocalizations.of(context)?.translate('quick_actions') ?? 'Quick Actions',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -528,7 +528,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildActionButton(
                     icon: Icons.add_card_rounded,
-                    label: 'Add Funds',
+                    label: AppLocalizations.of(context)?.translate('add_funds') ?? 'Add Funds',
                     color: ThemeConfig.successColor,
                     onTap: _navigateToAddFunds,
                   ),
@@ -537,7 +537,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildActionButton(
                     icon: Icons.receipt_long_rounded,
-                    label: 'Billing History',
+                    label: AppLocalizations.of(context)?.translate('billing_history') ?? 'Billing History',
                     color: ThemeConfig.infoColor,
                     onTap: _viewBillingHistory,
                   ),
@@ -609,7 +609,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Performance Overview',
+              AppLocalizations.of(context)?.translate('performance_overview') ?? 'Performance Overview',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -622,28 +622,28 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                 Expanded(
                   child: _buildStatCell(
                     Icons.visibility_outlined,
-                    'Impressions',
+                    AppLocalizations.of(context)?.translate('impressions') ?? 'Impressions',
                     NumberFormat.compact().format(stats.totalImpressions),
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.touch_app_outlined,
-                    'Clicks',
+                    AppLocalizations.of(context)?.translate('clicks') ?? 'Clicks',
                     NumberFormat.compact().format(stats.totalClicks),
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.campaign_outlined,
-                    'Active',
+                    AppLocalizations.of(context)?.translate('active') ?? 'Active',
                     '${stats.activeCampaigns}',
                   ),
                 ),
                 Expanded(
                   child: _buildStatCell(
                     Icons.trending_up_rounded,
-                    'Avg CTR',
+                    AppLocalizations.of(context)?.translate('avg_ctr') ?? 'Avg CTR',
                     '${stats.averageCtr.toStringAsFixed(2)}%',
                   ),
                 ),
@@ -689,7 +689,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'My Campaigns',
+          AppLocalizations.of(context)?.translate('my_campaigns') ?? 'My Campaigns',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -736,7 +736,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ),
               const SizedBox(height: 16),
               Text(
-                'No campaigns yet',
+                AppLocalizations.of(context)?.translate('no_campaigns_yet') ?? 'No campaigns yet',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -745,7 +745,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Create your first campaign to start advertising',
+                AppLocalizations.of(context)?.translate('create_first_campaign') ?? 'Create your first campaign to start advertising',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
@@ -756,7 +756,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               ElevatedButton.icon(
                 onPressed: _navigateToCreateCampaign,
                 icon: const Icon(Icons.add_rounded),
-                label: const Text('Create Campaign'),
+                label: Text(AppLocalizations.of(context)?.translate('create_campaign') ?? 'Create Campaign'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConfig.getPrimaryColor(context),
                   foregroundColor: Colors.white,
@@ -846,8 +846,8 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                             Icon(Icons.delete_forever_rounded,
                                 color: Colors.red, size: 20),
                             SizedBox(width: 10),
-                            Text('Delete Campaign',
-                                style: TextStyle(color: Colors.red)),
+                            Text(AppLocalizations.of(context)?.translate('delete_campaign') ?? 'Delete Campaign',
+                                style: const TextStyle(color: Colors.red)),
                           ],
                         ),
                       ),
@@ -867,9 +867,9 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
               Row(
                 children: [
                   _buildMiniMetric(
-                      'Budget', formatter.format(campaign.totalBudget)),
+                      AppLocalizations.of(context)?.translate('budget') ?? 'Budget', formatter.format(campaign.totalBudget)),
                   _buildMiniMetric(
-                      'Impressions',
+                      AppLocalizations.of(context)?.translate('impressions') ?? 'Impressions',
                       NumberFormat.compact()
                           .format(campaign.impressionsCount)),
                   _buildMiniMetric(
@@ -930,15 +930,15 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
 
     if (approved) {
       icon = Icons.verified_rounded;
-      label = 'Ad Approved';
+      label = AppLocalizations.of(context)?.translate('ad_approved') ?? 'Ad Approved';
       color = ThemeConfig.successColor;
     } else if (rejected) {
       icon = Icons.cancel_rounded;
-      label = 'Ad Rejected';
+      label = AppLocalizations.of(context)?.translate('ad_rejected') ?? 'Ad Rejected';
       color = ThemeConfig.errorColor;
     } else {
       icon = Icons.hourglass_top_rounded;
-      label = 'Pending Admin Review';
+      label = AppLocalizations.of(context)?.translate('pending_review') ?? 'Pending Admin Review';
       color = ThemeConfig.warningColor;
     }
 

@@ -13,6 +13,7 @@ import '../../../users/presentation/screens/user_profileview_screen.dart';
 import '../../presentation/screens/property_detail_screen.dart';
 import '../providers/video_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/utils/app_localizations.dart';
 
 /// Widget for displaying direct ads in property listings
 /// - Native-style design that matches the app theme
@@ -223,7 +224,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                       ),
                       SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                       Text(
-                        'Sponsored',
+                        AppLocalizations.of(context)?.translate('sponsored') ?? 'Sponsored',
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11),
                           fontWeight: FontWeight.w600,
@@ -475,7 +476,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                         const Icon(Icons.videocam_rounded,
                             color: Colors.white, size: 12),
                         const SizedBox(width: 3),
-                        Text('VIDEO AD',
+                        Text(AppLocalizations.of(context)?.translate('video_ad') ?? 'VIDEO AD',
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
@@ -533,7 +534,7 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
               Text(
-                'Ad media unavailable',
+                AppLocalizations.of(context)?.translate('ad_media_unavailable') ?? 'Ad media unavailable',
                 style: TextStyle(
                   color: ThemeConfig.getTextSecondaryColor(context),
                   fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
@@ -704,7 +705,7 @@ class _DirectAdBannerState extends State<DirectAdBanner> {
                         ),
                         SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                         Text(
-                          'Sponsored',
+                          AppLocalizations.of(context)?.translate('sponsored') ?? 'Sponsored',
                           style: TextStyle(
                             fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
                             fontWeight: FontWeight.w600,
