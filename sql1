@@ -587,12 +587,12 @@ VALUES (
     'property_videos',
     'property_videos',
     TRUE,
-    20971520,  -- 20 MB per video (reduced from 50 MB to cut egress)
+    52428800,  -- 50 MB per video (Flutter compresses to 720p before upload, so raw 4K videos never hit this)
     ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv']
 )
 ON CONFLICT (id) DO UPDATE SET
     public             = TRUE,
-    file_size_limit    = 20971520,
+    file_size_limit    = 52428800,
     allowed_mime_types = ARRAY['video/mp4','video/quicktime','video/x-msvideo','video/webm','video/3gpp','video/x-flv'];
 
 -- ── RLS Policies: property_images ────────────────────────────────────────────
