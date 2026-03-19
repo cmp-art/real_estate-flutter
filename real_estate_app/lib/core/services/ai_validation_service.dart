@@ -29,6 +29,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
 // http package removed — all AI calls go through the Supabase Edge Function.
 // Direct Anthropic calls from client are permanently disabled (security).
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -337,6 +338,41 @@ class AiValidationService {
   // Expose health stats for the admin monitoring widget.
   Map<String, dynamic> get healthStats => _health.stats;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HEALTH CHECK
+  //
+  // Calls POST /validate_content/health on the Edge Function.
+  // Returns a map with:
+  //   ok      → bool   — true if key exists and Claude responds
+  //   stage   → String — 'all_good' | 'key_missing' | 'anthropic_error' | 'network_error'
+  //   detail  → String — human-readable message
+  //   reply   → String — Claude's reply (when ok=true)
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> checkAiHealth() async {
+    try {
+      final response = await _supabase.functions.invoke(
+        '$_edgeFn/health',
+        body: {},
+      ).timeout(_timeout);
+
+      final data = response.data;
+      if (data is Map<String, dynamic>) return data;
+      // Edge Function returned unexpected shape
+      return {
+        'ok':     false,
+        'stage':  'unexpected_response',
+        'detail': 'Edge Function returned an unexpected response format.',
+      };
+    } catch (e) {
+      return {
+        'ok':     false,
+        'stage':  'invoke_error',
+        'detail': 'Could not reach the Edge Function: $e\n'
+                  'Make sure validate_content is deployed in Supabase.',
+      };
+    }
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // PUBLIC API — PROPERTY
   // ══════════════════════════════════════════════════════════════════════════
@@ -351,8 +387,8 @@ class AiValidationService {
     required int        bedrooms,
     required int        bathrooms,
     required double     area,
-    List<File>?         images,
-    List<File>?         videos,   // optional video files — thumbnails extracted & sent to Claude
+    List<XFile>?        images,
+    List<XFile>?        videos,   // optional video files — thumbnails extracted & sent to Claude
     String?             submittedBy,
   }) async {
     // Rate limit.
@@ -376,8 +412,8 @@ class AiValidationService {
     // ── Extract thumbnails from any submitted videos and merge into images ─
     // Claude cannot decode raw video bytes — we extract a JPEG frame from
     // each video and treat it exactly like a photo for validation purposes.
-    List<File> allMedia = [...(images ?? [])];
-    final tempThumbs = <File>[]; // temp thumbnail files to clean up after validation
+    List<XFile> allMedia = [...(images ?? [])];
+    final tempThumbs = <XFile>[]; // temp thumbnail files to clean up after validation
     if (videos != null && videos.isNotEmpty) {
       for (int i = 0; i < videos.length; i++) {
         final thumb = await _extractVideoThumbnail(videos[i]);
@@ -385,6 +421,9 @@ class AiValidationService {
           allMedia.add(thumb);
           tempThumbs.add(thumb); // mark for cleanup after Claude responds
           _log('Property video ${i + 1}: thumbnail extracted → added to media set');
+        } else if (kIsWeb) {
+          // video_thumbnail not available on web — skip the frame, still validate images
+          _log('Property video ${i + 1}: web platform — skipping video thumbnail');
         } else {
           _log('Property video ${i + 1}: thumbnail extraction failed — hard rejecting');
           await _deleteTempThumbnails(tempThumbs);
@@ -489,8 +528,8 @@ class AiValidationService {
     required String companyType,
     required String campaignObjective,
     required String landingUrl,
-    File?           image,
-    File?           video,
+    XFile?          image,
+    XFile?          video,
     String?         submittedBy,
   }) async {
     // Rate limit.
@@ -513,8 +552,8 @@ class AiValidationService {
 
     // Build the full media set: image + video thumbnail (if both provided).
     // Claude analyses every frame we send — more context = better decision.
-    List<File> allAdMedia = [];
-    final adThumbsToClean = <File>[];
+    List<XFile> allAdMedia = [];
+    final adThumbsToClean = <XFile>[];
 
     // Add image directly (already a JPEG/PNG).
     if (image != null) allAdMedia.add(image);
@@ -524,7 +563,9 @@ class AiValidationService {
       if (_isVideoFile(video)) {
         _log('Ad video provided — extracting thumbnail frame for Claude');
         final thumb = await _extractVideoThumbnail(video);
-        if (thumb == null) {
+        if (thumb == null && kIsWeb) {
+          _log('Ad video: web platform — skipping video thumbnail');
+        } else if (thumb == null) {
           _log('Video thumbnail extraction failed — hard rejecting');
           return _hardReject(
             type: 'ad', submittedBy: submittedBy,
@@ -534,10 +575,11 @@ class AiValidationService {
               'Or upload a static image instead of a video.',
             ],
           );
+        } else {
+          allAdMedia.add(thumb);
+          adThumbsToClean.add(thumb);
+          _log('Ad video thumbnail extracted: ${thumb.path}');
         }
-        allAdMedia.add(thumb);
-        adThumbsToClean.add(thumb);
-        _log('Ad video thumbnail extracted: ${thumb.path}');
       } else {
         // video param was passed but looks like an image — add it directly
         allAdMedia.add(video);
@@ -632,7 +674,7 @@ class AiValidationService {
 
   Future<ValidationResult> _validateWithImages({
     required Map<String, dynamic> data,
-    required List<File>           images,
+    required List<XFile>          images,
     required String               apiKey,
     String Function(Map<String, dynamic> d, int count)? promptBuilder,
   }) async {
@@ -877,22 +919,25 @@ class AiValidationService {
   // ══════════════════════════════════════════════════════════════════════════
 
   // Detect if a file is a video based on its extension.
-  bool _isVideoFile(File file) {
-    final ext = file.path.split('.').last.toLowerCase();
+  bool _isVideoFile(XFile file) {
+    final name = file.name.isNotEmpty ? file.name : file.path;
+    final ext  = name.split('.').last.toLowerCase();
     return ['mp4', 'mov', 'avi', 'webm', 'mkv', '3gp', 'flv'].contains(ext);
   }
 
   // Delete temp thumbnail files produced by _extractVideoThumbnail.
   // Only deletes files whose path is inside the system temp directory,
   // so there is zero risk of accidentally deleting a user's original photo.
-  Future<void> _deleteTempThumbnails(List<File> files) async {
+  Future<void> _deleteTempThumbnails(List<XFile> files) async {
+    if (kIsWeb) return; // no temp files on web
     try {
       final tempDir = await getTemporaryDirectory();
-      for (final file in files) {
-        if (file.path.startsWith(tempDir.path)) {
+      for (final xfile in files) {
+        if (xfile.path.startsWith(tempDir.path)) {
           try {
-            if (await file.exists()) await file.delete();
-            _log('Cleaned up temp thumbnail: ${file.path.split('/').last}');
+            final ioFile = File(xfile.path);
+            if (await ioFile.exists()) await ioFile.delete();
+            _log('Cleaned up temp thumbnail: ${xfile.path.split('/').last}');
           } catch (e) {
             _log('Could not delete temp thumbnail: $e');
           }
@@ -904,12 +949,17 @@ class AiValidationService {
   }
 
   // Extract a single JPEG thumbnail frame from a video file.
-  // Returns null if extraction fails for any reason.
-  Future<File?> _extractVideoThumbnail(File videoFile) async {
+  // Returns null if extraction fails or on web (video_thumbnail is native-only).
+  Future<XFile?> _extractVideoThumbnail(XFile videoFile) async {
+    // video_thumbnail uses native platform channels — not available on web.
+    if (kIsWeb) {
+      _log('Web: video thumbnail extraction not supported — skipping');
+      return null;
+    }
     try {
       final tempDir = await getTemporaryDirectory();
       final thumbPath = await VideoThumbnail.thumbnailFile(
-        video:          videoFile.absolute.path,
+        video:          videoFile.path,
         thumbnailPath:  tempDir.path,
         imageFormat:    ImageFormat.JPEG,
         maxWidth:       1280,
@@ -917,8 +967,9 @@ class AiValidationService {
         timeMs:         0,     // frame at 0ms (start of video)
       );
       if (thumbPath == null) return null;
-      final thumb = File(thumbPath);
-      return await thumb.exists() ? thumb : null;
+      final thumbIo = File(thumbPath);
+      if (!await thumbIo.exists()) return null;
+      return XFile(thumbPath);
     } catch (e) {
       _log('Video thumbnail extraction error: $e');
       return null;
@@ -926,10 +977,10 @@ class AiValidationService {
   }
 
   // Pick up to [max] photos spread evenly across the whole list.
-  List<File> _pickRepresentative(List<File> files, int max) {
+  List<XFile> _pickRepresentative(List<XFile> files, int max) {
     if (files.length <= max) return files;
     final step   = files.length / max;
-    final result = <File>[];
+    final result = <XFile>[];
     for (int i = 0; i < max; i++) {
       result.add(files[(i * step).floor()]);
     }
@@ -944,7 +995,7 @@ class AiValidationService {
   //   - HEIC/HEIF: passed through to Claude (no dimension data available in header)
   //   - WebP: passed through to Claude
   // Returns rejection reason string, or null if the image looks OK.
-  Future<String?> _preflightImageCheck(File file, {int index = 1}) async {
+  Future<String?> _preflightImageCheck(XFile file, {int index = 1}) async {
     try {
       final bytes    = await file.readAsBytes();
       final fileSize = bytes.length;
@@ -1018,13 +1069,20 @@ class AiValidationService {
 
   int _readInt16(Uint8List b, int o) => (b[o] << 8) | b[o + 1];
 
-  Future<String?> _compressAndEncode(File file) async {
+  Future<String?> _compressAndEncode(XFile file) async {
     try {
-      // Aggressive compression for mobile networks.
-      // Claude only needs enough detail to identify content — not print quality.
-      // Target: each image ~40-80 KB after compression.
+      // On web: flutter_image_compress is not available — send raw bytes.
+      // On native: compress aggressively so each image is ~40-80 KB.
+      if (kIsWeb) {
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty) return null;
+        _log('Web: raw encode ${(bytes.length / 1024).toStringAsFixed(1)} KB');
+        return base64Encode(bytes);
+      }
+
+      // Native path — compress with FlutterImageCompress.
       final compressed = await FlutterImageCompress.compressWithFile(
-        file.absolute.path,
+        file.path,
         minWidth:  512,
         minHeight: 512,
         quality:   55,
@@ -1035,7 +1093,7 @@ class AiValidationService {
            '→ base64: ${(compressed.length * 4 ~/ 3 / 1024).toStringAsFixed(1)} KB');
       return base64Encode(compressed);
     } catch (e) {
-      _log('Compression failed for ${file.path}: $e — trying raw encode');
+      _log('Compression failed for ${file.name}: $e — trying raw encode');
       try {
         return base64Encode(await file.readAsBytes());
       } catch (_) {

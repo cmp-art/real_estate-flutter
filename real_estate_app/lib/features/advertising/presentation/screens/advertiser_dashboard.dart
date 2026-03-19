@@ -268,7 +268,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       backgroundColor: ThemeConfig.getBackgroundColor(context),
       appBar: AppBar(
         title: Text(
-          t('advertiser_dashboard'),
+          _t('advertiser_dashboard'),
           style: TextStyle(
             color: ThemeConfig.getColor(
               context,

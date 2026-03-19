@@ -930,8 +930,8 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
       companyType:       'advertiser',  // generic — all business types are allowed
       campaignObjective: widget.campaign.campaignObjective,
       landingUrl:        landingUrl,
-      image:             _imageFile,   // pass image for visual AI check
-      video:             _videoFile,   // pass video for visual AI check
+      image:             _imageFile != null ? XFile(_imageFile!.path) : null,
+      video:             _videoFile != null ? XFile(_videoFile!.path) : null,
       submittedBy:       user?.id,
     );
 

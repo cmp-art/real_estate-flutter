@@ -2,8 +2,10 @@
 // FIXED - Conditional validation for Land/Commercial properties
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/validators.dart';
@@ -46,7 +48,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
   RentDuration _selectedRentDuration = RentDuration.monthly;
 
   List<String> _existingImages = [];
-  final List<File> _selectedImages = [];
+  final List<XFile> _selectedImages = [];
   bool _isLoading = false;
 
   final ImageHelper _imageHelper = ImageHelper();
@@ -231,9 +233,10 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           PropertyEntity finalProperty = savedProperty;
 
           if (_selectedImages.isNotEmpty) {
+            final uploadFiles = _selectedImages.map((x) => File(x.path)).toList();
             final uploadResult = await repository.uploadImages(
               savedProperty.id,
-              _selectedImages,
+              uploadFiles,
             );
 
             await uploadResult.fold(
@@ -425,12 +428,19 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
                         children: [
                           ClipRRect(
                             borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                            child: Image.file(
-                              _selectedImages[index],
-                              height: 200,
-                              width: 200,
-                              fit: BoxFit.cover,
-                            ),
+                            child: kIsWeb
+                              ? Image.network(
+                                  _selectedImages[index].path,
+                                  height: 200,
+                                  width: 200,
+                                  fit: BoxFit.cover,
+                                )
+                              : Image.file(
+                                  File(_selectedImages[index].path),
+                                  height: 200,
+                                  width: 200,
+                                  fit: BoxFit.cover,
+                                ),
                           ),
                           Positioned(
                             top: 8,

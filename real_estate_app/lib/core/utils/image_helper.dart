@@ -81,8 +81,8 @@ class ImageHelper {
     }
   }
 
-  // Pick multiple images from gallery
-  Future<List<File>> pickMultipleImages({int maxImages = 10}) async {
+  // Pick multiple images from gallery — returns XFile (works on web + native)
+  Future<List<XFile>> pickMultipleImages({int maxImages = 10}) async {
     if (_isPickerActive) return [];     // already open — silently ignore
     _isPickerActive = true;
     try {
@@ -97,12 +97,11 @@ class ImageHelper {
       // Limit number of images
       final limitedImages = images.take(maxImages).toList();
 
-      final List<File> validImages = [];
-
+      final List<XFile> validImages = [];
       for (final image in limitedImages) {
-        final File imageFile = File(image.path);
-        if (await _isFileSizeValid(imageFile)) {
-          validImages.add(imageFile);
+        final size = await image.length();
+        if (size <= AppConstants.maxImageSize) {
+          validImages.add(image);
         }
       }
 

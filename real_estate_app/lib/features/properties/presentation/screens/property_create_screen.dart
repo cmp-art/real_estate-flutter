@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
@@ -319,7 +320,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   PropertyCategory _selectedCategory = PropertyCategory.house;
   PropertyStatus _selectedStatus = PropertyStatus.available;
   RentDuration _selectedRentDuration = RentDuration.monthly;
-  List<File> _selectedImages = [];
+  List<XFile> _selectedImages = [];
   final List<File> _selectedVideos  = [];
   final Map<String, dynamic> _videoThumbnails = {};
   bool _isLoading    = false;
@@ -805,7 +806,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       bathrooms:   bathrooms,
       area:        double.tryParse(_areaController.text) ?? 0,
       images:      _selectedImages.isNotEmpty ? _selectedImages : null,
-      videos:      _selectedVideos.isNotEmpty  ? _selectedVideos  : null,
+      videos:      _selectedVideos.isNotEmpty
+          ? _selectedVideos.map((f) => XFile(f.path)).toList()
+          : null,
       submittedBy: user.id,
     );
 
@@ -871,9 +874,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       },
       (createdProperty) async {
         if (_selectedImages.isNotEmpty) {
+          // Convert XFile → File for the upload layer (native only; web upload handled separately)
+          final uploadFiles = _selectedImages.map((x) => File(x.path)).toList();
           final uploadResult = await repository.uploadImages(
             createdProperty.id,
-            _selectedImages,
+            uploadFiles,
           );
 
           await uploadResult.fold(
@@ -1089,11 +1094,17 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                               children: [
                                 ClipRRect(
                                   borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                                  child: Image.file(
-                                    file,
-                                    height: 200, width: 200,
-                                    fit: BoxFit.cover,
-                                  ),
+                                  child: kIsWeb
+                                    ? Image.network(
+                                        file.path,
+                                        height: 200, width: 200,
+                                        fit: BoxFit.cover,
+                                      )
+                                    : Image.file(
+                                        File(file.path),
+                                        height: 200, width: 200,
+                                        fit: BoxFit.cover,
+                                      ),
                                 ),
                                 // Remove button
                                 Positioned(
