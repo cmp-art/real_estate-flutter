@@ -108,9 +108,10 @@ class _PropertyListScreenDirectAdsState
       if (permission == LocationPermission.whileInUse ||
           permission == LocationPermission.always) {
         final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.low,
-          timeLimit: const Duration(seconds: 8),
-        );
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.low,
+          ),
+        ).timeout(const Duration(seconds: 8));
 
         final placemarks = await placemarkFromCoordinates(
           position.latitude,
