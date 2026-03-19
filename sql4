@@ -243,6 +243,12 @@ ALTER TABLE properties DROP CONSTRAINT IF EXISTS properties_status_check;
 ALTER TABLE properties ADD CONSTRAINT properties_status_check
     CHECK (status IN ('available','sold','rented','under_offer','off_market','pending','deleted'));
 
+-- Enforce max 1 video per property (matches Flutter UI; prevents API bypass)
+-- array_length returns NULL for empty arrays, so IS NULL covers the {} case
+ALTER TABLE properties DROP CONSTRAINT IF EXISTS max_one_video_per_property;
+ALTER TABLE properties ADD CONSTRAINT max_one_video_per_property
+    CHECK (array_length(videos, 1) IS NULL OR array_length(videos, 1) <= 1);
+
 CREATE INDEX IF NOT EXISTS idx_properties_deleted_at ON properties(deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- ============================================================================
