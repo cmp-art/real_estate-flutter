@@ -49,17 +49,17 @@ class CdnService {
     return Uri.parse(base).replace(queryParameters: params).toString();
   }
 
-  /// Thumbnail (400 × 400, quality 75). Used in property list cards.
+  /// Thumbnail (300 × 200, quality 70, WebP). Used in property list cards.
   static String getThumbnailUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 400, height: 400, quality: 75);
+      getOptimizedImageUrl(storageUrlOrPath, width: 300, height: 200, quality: 70, format: 'webp');
 
-  /// Medium (800 × 600, quality 80). Used in property detail hero.
+  /// Medium (800 × 600, quality 75, WebP). Used in property detail hero.
   static String getMediumUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 800, height: 600, quality: 80);
+      getOptimizedImageUrl(storageUrlOrPath, width: 800, height: 600, quality: 75, format: 'webp');
 
-  /// Full-size (1920 × 1080, quality 85). Used in photo gallery.
+  /// Full-size (1280 × 960, quality 80, WebP). Used in photo gallery.
   static String getFullSizeUrl(String storageUrlOrPath) =>
-      getOptimizedImageUrl(storageUrlOrPath, width: 1920, height: 1080, quality: 85);
+      getOptimizedImageUrl(storageUrlOrPath, width: 1280, height: 960, quality: 80, format: 'webp');
 
   // ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ class CdnService {
 }
 
 // ── Custom local cache manager ───────────────────────────────────────────────
-// Keeps up to 200 images on device for 7 days.
+// Keeps up to 500 images on device for 30 days.
 // Supabase already caches on its edge; this layer handles offline support.
 
 class CustomCacheManager {
@@ -96,8 +96,8 @@ class CustomCacheManager {
   static CacheManager instance = CacheManager(
     Config(
       key,
-      stalePeriod: const Duration(days: 7),
-      maxNrOfCacheObjects: 200,
+      stalePeriod: const Duration(days: 30),
+      maxNrOfCacheObjects: 500,
       repo: JsonCacheInfoRepository(databaseName: key),
       fileService: HttpFileService(),
     ),
