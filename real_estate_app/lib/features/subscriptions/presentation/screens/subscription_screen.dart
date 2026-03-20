@@ -10,6 +10,18 @@ import 'auto_payment_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 // ✅ ADD THIS
 
+// Countries where Selcom (our payment gateway) is available
+const _kSelcomCountries = {'TZ'};
+
+String _countryNameFor(String code) {
+  const names = {
+    'TZ': 'Tanzania', 'KE': 'Kenya', 'UG': 'Uganda', 'RW': 'Rwanda',
+    'ET': 'Ethiopia', 'BI': 'Burundi', 'MZ': 'Mozambique', 'ZM': 'Zambia',
+    'ZW': 'Zimbabwe',
+  };
+  return names[code] ?? code;
+}
+
 /// Subscription management screen
 class SubscriptionScreen extends ConsumerStatefulWidget {
   const SubscriptionScreen({super.key});
@@ -63,7 +75,74 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     }
   }
 
+  /// Returns true if the current user's country supports payment via Selcom.
+  /// Users with no country set are treated as Tanzania (default market).
+  bool get _paymentAvailable {
+    final country = ref.read(authNotifierProvider).value?.country;
+    return country == null || _kSelcomCountries.contains(country);
+  }
+
+  /// Shows a friendly "coming soon" dialog for unsupported countries.
+  void _showComingSoonDialog(String? country) {
+    final countryName =
+        country != null ? _countryNameFor(country) : 'your country';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Text('🌍', style: TextStyle(fontSize: 24)),
+            SizedBox(width: 8),
+            Text('Coming Soon', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pro subscriptions are not yet available in $countryName.',
+              style: const TextStyle(fontSize: 15),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'We currently process payments via Selcom, which operates in Tanzania only.',
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                '📢  We\'re expanding to more countries soon. '
+                'You\'ll be notified when subscriptions become available in your country.',
+                style: TextStyle(fontSize: 13, color: Colors.blueAccent),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _navigateToPayment(SubscriptionTier tier) async {
+    // Block payment for unsupported countries
+    if (!_paymentAvailable) {
+      final country = ref.read(authNotifierProvider).value?.country;
+      _showComingSoonDialog(country);
+      return;
+    }
+
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -354,29 +433,62 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               // Features
               ..._buildFeaturesList(tier),
               
-              // ✅ ADD "Subscribe" button for non-current tiers
+              // Subscribe button (or Coming Soon badge) for non-current paid tiers
               if (!isCurrent && tier != SubscriptionTier.free) ...[
                 SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _navigateToPayment(tier),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: color,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                if (_paymentAvailable)
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => _navigateToPayment(tier),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(
+                              ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                        ),
+                      ),
+                      child: const Text(
+                        'Jiandikishe Sasa',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                     ),
-                    child: const Text(
-                      'Jiandikishe Sasa',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+                  )
+                else
+                  // Non-TZ user: show "coming soon" banner instead of pay button
+                  InkWell(
+                    onTap: () {
+                      final country = ref.read(authNotifierProvider).value?.country;
+                      _showComingSoonDialog(country);
+                    },
+                    borderRadius: BorderRadius.circular(
+                        ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(
+                            ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                        border: Border.all(color: Colors.grey.shade400),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('🌍', style: TextStyle(fontSize: 16)),
+                          SizedBox(width: 8),
+                          Text(
+                            'Coming Soon in Your Country',
+                            style: TextStyle(
+                              color: Colors.grey,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                ),
               ],
             ],
           ),

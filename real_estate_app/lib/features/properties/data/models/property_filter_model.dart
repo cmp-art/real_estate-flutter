@@ -15,6 +15,7 @@ class PropertyFilterModel extends PropertyFilterEntity {
     super.maxArea,
     super.location,
     super.status,
+    super.country,
   });
 
   factory PropertyFilterModel.fromEntity(PropertyFilterEntity entity) {
@@ -31,6 +32,7 @@ class PropertyFilterModel extends PropertyFilterEntity {
       maxArea: entity.maxArea,
       location: entity.location,
       status: entity.status,
+      country: entity.country,
     );
   }
 
@@ -65,6 +67,7 @@ class PropertyFilterModel extends PropertyFilterEntity {
     if (minArea != null) params['min_area'] = minArea;
     if (maxArea != null) params['max_area'] = maxArea;
     if (location != null && location!.isNotEmpty) params['location'] = location;
+    if (country != null && country!.isNotEmpty) params['country'] = country;
     if (status != null) {
       switch (status!) {
         case PropertyStatus.available:

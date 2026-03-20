@@ -12,16 +12,20 @@ import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/direct_ad_models.dart';
 import '../provider/ad_providers.dart';
 import 'create_creative_screen.dart';
+import 'refund_screen.dart';
+import 'invoice_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 class CampaignDetailsScreen extends ConsumerStatefulWidget {
   final AdCampaign campaign;
   final String advertiserId;
+  final Advertiser advertiser;
 
   const CampaignDetailsScreen({
     super.key,
     required this.campaign,
     required this.advertiserId,
+    required this.advertiser,
   });
 
   @override
@@ -412,10 +416,59 @@ class _CampaignDetailsScreenState
               ),
             PopupMenuButton<String>(
               icon: Icon(Icons.more_vert_rounded, color: appBarFg),
-              onSelected: (v) {
-                if (v == 'delete') _deleteCampaign();
+              onSelected: (v) async {
+                if (v == 'delete') {
+                  _deleteCampaign();
+                } else if (v == 'refund') {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RefundScreen(
+                        campaign: widget.campaign,
+                        advertiserId: widget.advertiserId,
+                      ),
+                    ),
+                  );
+                  if (result == true && mounted) Navigator.pop(context, true);
+                } else if (v == 'invoice') {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => InvoiceScreen(
+                        campaign: widget.campaign,
+                        advertiser: widget.advertiser,
+                      ),
+                    ),
+                  );
+                }
               },
               itemBuilder: (_) => [
+                PopupMenuItem<String>(
+                  value: 'invoice',
+                  child: Row(
+                    children: [
+                      Icon(Icons.receipt_long_rounded,
+                          color: ThemeConfig.getPrimaryColor(context),
+                          size: ResponsiveHelper.getResponsiveIconSize(context)),
+                      const SizedBox(width: 10),
+                      const Text('View Invoice'),
+                    ],
+                  ),
+                ),
+                if ((widget.campaign.totalBudget - widget.campaign.spentAmount) > 0)
+                  PopupMenuItem<String>(
+                    value: 'refund',
+                    child: Row(
+                      children: [
+                        Icon(Icons.undo_rounded,
+                            color: Colors.orange,
+                            size: ResponsiveHelper.getResponsiveIconSize(context)),
+                        const SizedBox(width: 10),
+                        const Text('Request Refund',
+                            style: TextStyle(color: Colors.orange)),
+                      ],
+                    ),
+                  ),
                 PopupMenuItem<String>(
                   value: 'delete',
                   child: Row(

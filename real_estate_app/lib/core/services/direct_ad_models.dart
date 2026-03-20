@@ -164,6 +164,7 @@ class AdCampaign {
   final String campaignObjective;
   final List<String> targetPropertyTypes;
   final List<String> targetLocations;
+  final List<String> targetCountries; // ISO codes; empty = all East Africa
   final Map<String, dynamic>? targetPriceRange;
   final List<String> targetUserInterests;
   final double dailyBudget;
@@ -189,6 +190,7 @@ class AdCampaign {
     required this.campaignObjective,
     required this.targetPropertyTypes,
     required this.targetLocations,
+    this.targetCountries = const [],
     this.targetPriceRange,
     required this.targetUserInterests,
     required this.dailyBudget,
@@ -217,6 +219,8 @@ class AdCampaign {
       targetPropertyTypes: (json['target_property_types'] as List?)
                                ?.map((e) => e.toString()).toList() ?? [],
       targetLocations:     (json['target_locations'] as List?)
+                               ?.map((e) => e.toString()).toList() ?? [],
+      targetCountries:     (json['target_countries'] as List?)
                                ?.map((e) => e.toString()).toList() ?? [],
       targetPriceRange:    json['target_price_range'] as Map<String, dynamic>?,
       targetUserInterests: (json['target_user_interests'] as List?)
@@ -488,6 +492,62 @@ enum AdFormat {
   final String value;
   final String displayName;
   const AdFormat(this.value, this.displayName);
+}
+
+// ========================================
+// REFUND REQUEST MODEL
+// ========================================
+
+class RefundRequest {
+  final String id;
+  final String advertiserId;
+  final String? campaignId;
+  final double amount;
+  final String? phone;
+  final String? reason;
+  final String type;   // 'balance' | 'cash'
+  final String status; // 'pending' | 'approved' | 'paid' | 'rejected'
+  final String? adminNotes;
+  final DateTime requestedAt;
+  final DateTime? processedAt;
+
+  RefundRequest({
+    required this.id,
+    required this.advertiserId,
+    this.campaignId,
+    required this.amount,
+    this.phone,
+    this.reason,
+    required this.type,
+    required this.status,
+    this.adminNotes,
+    required this.requestedAt,
+    this.processedAt,
+  });
+
+  factory RefundRequest.fromJson(Map<String, dynamic> json) {
+    return RefundRequest(
+      id:           json['id'] as String,
+      advertiserId: json['advertiser_id'] as String,
+      campaignId:   json['campaign_id'] as String?,
+      amount:       (json['amount'] as num).toDouble(),
+      phone:        json['phone'] as String?,
+      reason:       json['reason'] as String?,
+      type:         json['type'] as String,
+      status:       json['status'] as String,
+      adminNotes:   json['admin_notes'] as String?,
+      requestedAt:  DateTime.parse(json['requested_at'] as String),
+      processedAt:  json['processed_at'] != null
+                        ? DateTime.parse(json['processed_at'] as String)
+                        : null,
+    );
+  }
+
+  bool get isPending  => status == 'pending';
+  bool get isPaid     => status == 'paid';
+  bool get isRejected => status == 'rejected';
+  bool get isBalance  => type == 'balance';
+  bool get isCash     => type == 'cash';
 }
 
 enum CallToAction {

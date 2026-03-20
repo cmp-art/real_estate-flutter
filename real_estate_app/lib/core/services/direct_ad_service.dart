@@ -156,6 +156,7 @@ class DirectAdService {
     String? propertyId,
     String? userRegion,
     String? userPropertyType,
+    String? userCountry,
     int limit = 5,
   }) async {
     try {
@@ -171,6 +172,7 @@ class DirectAdService {
           'p_limit': limit,
           'p_user_region': userRegion,
           'p_user_property_type': userPropertyType,
+          'p_user_country': userCountry,
         },
       );
 
@@ -472,6 +474,7 @@ class DirectAdService {
     required DateTime endDate,
     List<String>? targetPropertyTypes,
     List<String>? targetLocations,
+    List<String>? targetCountries,
     Map<String, dynamic>? targetPriceRange,
     List<String>? targetUserInterests,
   }) async {
@@ -488,6 +491,7 @@ class DirectAdService {
         'end_date': endDate.toUtc().toIso8601String(),
         'target_property_types': targetPropertyTypes ?? [],
         'target_locations': targetLocations ?? [],
+        'target_countries': targetCountries ?? [],
         'target_price_range': targetPriceRange,
         'target_user_interests': targetUserInterests ?? [],
         'status': 'running',  // Campaigns go live immediately — no admin review needed
@@ -757,6 +761,52 @@ class DirectAdService {
       debugPrint('Error marking notification read: $e');
       return false;
     }
+  }
+
+  // ============================================================
+  // REFUNDS
+  // ============================================================
+
+  /// Returns unused budget to advertiser's account_balance immediately.
+  Future<void> requestBalanceRefund({
+    required String advertiserId,
+    required String campaignId,
+    required double amount,
+  }) async {
+    await _supabase.rpc('request_balance_refund', params: {
+      'p_advertiser_id': advertiserId,
+      'p_campaign_id': campaignId,
+      'p_amount': amount,
+    });
+  }
+
+  /// Creates a pending cash refund request that admin processes manually via Selcom.
+  Future<void> requestCashRefund({
+    required String advertiserId,
+    required String campaignId,
+    required double amount,
+    required String phone,
+    String? reason,
+  }) async {
+    await _supabase.rpc('request_cash_refund', params: {
+      'p_advertiser_id': advertiserId,
+      'p_campaign_id': campaignId,
+      'p_amount': amount,
+      'p_phone': phone,
+      'p_reason': reason,
+    });
+  }
+
+  /// Fetch all refund requests for this advertiser.
+  Future<List<RefundRequest>> getRefundRequests(String advertiserId) async {
+    final response = await _supabase
+        .from('refund_requests')
+        .select()
+        .eq('advertiser_id', advertiserId)
+        .order('requested_at', ascending: false);
+    return (response as List)
+        .map((j) => RefundRequest.fromJson(j as Map<String, dynamic>))
+        .toList();
   }
 
   Future<bool> markAllAdNotificationsRead(String userId) async {

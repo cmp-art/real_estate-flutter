@@ -39,9 +39,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   bool _showPhone = true;
   bool _isLoading = false;
 
-  // Country code selection
+  // Phone country code selection
   CountryCode _selectedCountryCode = CountryCodes.defaultCountry;
   List<CountryCode> _filteredCountries = CountryCodes.all;
+
+  // Profile country (where the user is located / wants to browse)
+  String? _selectedProfileCountry;
 
   @override
   void initState() {
@@ -59,6 +62,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       _selectedUserType = user.userType;
       _showEmail = user.showEmail;
       _showPhone = user.showPhone;
+      _selectedProfileCountry = user.country;
     }
   }
 
@@ -278,6 +282,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       showEmail: _showEmail,
       showPhone: _showPhone,
       userType: _selectedUserType,
+      country: _selectedProfileCountry,
     );
 
     final success = await ref
@@ -569,6 +574,41 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
               maxLines: 4,
               maxLength: 200,
               textCapitalization: TextCapitalization.sentences,
+            ),
+            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
+
+            // Country selector
+            DropdownButtonFormField<String>(
+              value: _selectedProfileCountry,
+              decoration: const InputDecoration(
+                labelText: 'Country',
+                hintText: 'Select your country',
+                prefixIcon: Icon(Icons.public_outlined),
+                helperText: 'Used to show you relevant listings by default',
+              ),
+              items: [
+                const DropdownMenuItem<String>(
+                  value: null,
+                  child: Text('🌍  All Countries'),
+                ),
+                ...const [
+                  {'code': 'TZ', 'flag': '🇹🇿', 'name': 'Tanzania'},
+                  {'code': 'KE', 'flag': '🇰🇪', 'name': 'Kenya'},
+                  {'code': 'UG', 'flag': '🇺🇬', 'name': 'Uganda'},
+                  {'code': 'RW', 'flag': '🇷🇼', 'name': 'Rwanda'},
+                  {'code': 'ET', 'flag': '🇪🇹', 'name': 'Ethiopia'},
+                  {'code': 'BI', 'flag': '🇧🇮', 'name': 'Burundi'},
+                  {'code': 'MZ', 'flag': '🇲🇿', 'name': 'Mozambique'},
+                  {'code': 'ZM', 'flag': '🇿🇲', 'name': 'Zambia'},
+                  {'code': 'ZW', 'flag': '🇿🇼', 'name': 'Zimbabwe'},
+                ].map((c) => DropdownMenuItem<String>(
+                      value: c['code'],
+                      child: Text('${c['flag']}  ${c['name']}'),
+                    )),
+              ],
+              onChanged: _isLoading
+                  ? null
+                  : (v) => setState(() => _selectedProfileCountry = v),
             ),
             SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),
 

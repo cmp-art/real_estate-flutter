@@ -249,6 +249,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
         builder: (_) => CampaignDetailsScreen(
           campaign: campaign,
           advertiserId: _advertiser!.id,
+          advertiser: _advertiser!,
         ),
       ),
     );

@@ -18,6 +18,19 @@ class RegisterScreen extends ConsumerStatefulWidget {
   ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
+// East African countries supported by Patamjengo
+const _kCountries = [
+  {'code': 'TZ', 'flag': '🇹🇿', 'name': 'Tanzania'},
+  {'code': 'KE', 'flag': '🇰🇪', 'name': 'Kenya'},
+  {'code': 'UG', 'flag': '🇺🇬', 'name': 'Uganda'},
+  {'code': 'RW', 'flag': '🇷🇼', 'name': 'Rwanda'},
+  {'code': 'ET', 'flag': '🇪🇹', 'name': 'Ethiopia'},
+  {'code': 'BI', 'flag': '🇧🇮', 'name': 'Burundi'},
+  {'code': 'MZ', 'flag': '🇲🇿', 'name': 'Mozambique'},
+  {'code': 'ZM', 'flag': '🇿🇲', 'name': 'Zambia'},
+  {'code': 'ZW', 'flag': '🇿🇼', 'name': 'Zimbabwe'},
+];
+
 class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   static const String _tag = 'RegisterScreen';
 
@@ -31,6 +44,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isLoading = false;
+  String? _selectedCountry = 'TZ'; // Default: Tanzania
 
   @override
   void dispose() {
@@ -59,6 +73,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             email: _emailController.text.trim(),
             password: _passwordController.text,
             fullName: _fullNameController.text.trim(),
+            country: _selectedCountry,
           );
 
       if (!mounted) return;
@@ -207,6 +222,28 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         ),
                       ),
                       validator: _validateConfirmPassword,
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Country dropdown
+                    DropdownButtonFormField<String>(
+                      value: _selectedCountry,
+                      decoration: const InputDecoration(
+                        labelText: 'Country',
+                        hintText: 'Select your country',
+                        prefixIcon: Icon(Icons.public_outlined),
+                      ),
+                      items: _kCountries.map((c) {
+                        return DropdownMenuItem<String>(
+                          value: c['code'],
+                          child: Text('${c['flag']}  ${c['name']}'),
+                        );
+                      }).toList(),
+                      onChanged: _isLoading
+                          ? null
+                          : (v) => setState(() => _selectedCountry = v),
+                      validator: (v) =>
+                          v == null ? 'Please select your country' : null,
                     ),
                     const SizedBox(height: 32),
                     

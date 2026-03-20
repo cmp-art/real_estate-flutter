@@ -77,12 +77,18 @@ class AuthRemoteDataSource {
       // Wait for profile to be created
       await Future.delayed(const Duration(milliseconds: 500));
 
+      // Try to extract country from Google's locale field in user metadata
+      final locale = response.user!.userMetadata?['locale'] as String?;
+      final detectedCountry = _countryFromLocale(locale);
+      logger.d('Google locale: $locale → country: $detectedCountry');
+
       // Get or create user profile
       final userProfile = await _getOrCreateUserProfile(
         userId: response.user!.id,
         email: response.user!.email ?? googleUser.email,
         fullName: googleUser.displayName ?? 'Google User',
         avatarUrl: googleUser.photoUrl,
+        country: detectedCountry,
       );
 
       return userProfile;
@@ -172,6 +178,7 @@ class AuthRemoteDataSource {
     required String email,
     required String fullName,
     String? avatarUrl,
+    String? country,
   }) async {
     try {
       // Try to get existing profile
@@ -183,6 +190,14 @@ class AuthRemoteDataSource {
 
       if (existingProfile != null) {
         logger.d('User profile found in database');
+        // If the profile exists but has no country, update it now
+        if (existingProfile['country'] == null && country != null) {
+          await supabaseClient
+              .from(AppConstants.usersTable)
+              .update({'country': country})
+              .eq('id', userId);
+          return UserModel.fromJson({...existingProfile, 'country': country});
+        }
         return UserModel.fromJson(existingProfile);
       }
 
@@ -195,6 +210,7 @@ class AuthRemoteDataSource {
         'avatar_url': avatarUrl,
         'user_type': 'buyer',
         'created_at': DateTime.now().toIso8601String(),
+        if (country != null) 'country': country,
       };
 
       await supabaseClient.from(AppConstants.usersTable).insert(newProfile);
@@ -205,6 +221,19 @@ class AuthRemoteDataSource {
       logger.e('Error getting/creating user profile', error: e, stackTrace: s);
       throw ServerException('Failed to create user profile: ${e.toString()}');
     }
+  }
+
+  /// Extracts a 2-letter country code from a BCP-47 locale tag.
+  /// e.g. "en-TZ" → "TZ", "sw-KE" → "KE", "en" → null
+  static String? _countryFromLocale(String? locale) {
+    if (locale == null || locale.isEmpty) return null;
+    final parts = locale.split('-');
+    if (parts.length >= 2) {
+      final code = parts.last.toUpperCase();
+      // Only accept known 2-letter ISO codes
+      if (code.length == 2) return code;
+    }
+    return null;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -321,6 +350,7 @@ class AuthRemoteDataSource {
     required String password,
     required String fullName,
     String? phone,
+    String? country,
   }) async {
     try {
       logger.d('Attempting registration for: $email');
@@ -340,10 +370,15 @@ class AuthRemoteDataSource {
 
       await Future.delayed(const Duration(seconds: 1));
 
-      if (phone != null && phone.isNotEmpty) {
+      // Update phone and/or country if provided
+      final extraUpdates = <String, dynamic>{};
+      if (phone != null && phone.isNotEmpty) extraUpdates['phone'] = phone;
+      if (country != null) extraUpdates['country'] = country;
+      if (extraUpdates.isNotEmpty) {
         await supabaseClient
             .from(AppConstants.usersTable)
-            .update({'phone': phone}).eq('id', response.user!.id);
+            .update(extraUpdates)
+            .eq('id', response.user!.id);
       }
 
       final userProfile = await supabaseClient
@@ -362,6 +397,7 @@ class AuthRemoteDataSource {
           'phone': phone,
           'user_type': 'buyer',
           'created_at': DateTime.now().toIso8601String(),
+          if (country != null) 'country': country,
         };
 
         await supabaseClient.from(AppConstants.usersTable).insert(newProfile);
@@ -621,6 +657,7 @@ Until you do this, users will NOT be deleted!
     bool? showEmail,
     bool? showPhone,
     String? userType,
+    String? country,
   }) async {
     try {
       final Map<String, dynamic> updates = {};
@@ -632,6 +669,7 @@ Until you do this, users will NOT be deleted!
       if (showEmail != null) updates['show_email'] = showEmail;
       if (showPhone != null) updates['show_phone'] = showPhone;
       if (userType != null) updates['user_type'] = userType;
+      if (country != null) updates['country'] = country;
 
       if (updates.isEmpty) {
         throw ValidationException('No updates provided');

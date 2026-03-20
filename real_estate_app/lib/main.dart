@@ -100,9 +100,17 @@ void main() async {
 
   AppLifecycleObserver().initialize();
 
-  // Allow all orientations — app is fully responsive (phone portrait+landscape,
-  // tablet, desktop). Never lock to portrait on larger screens.
-  await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+  // Orientation: portrait-only on mobile (respects device lock), all on web/desktop.
+  // Passing DeviceOrientation.values on mobile overrides the device's auto-rotate
+  // lock and forces the app to rotate even when the user has rotation locked off.
+  if (kIsWeb) {
+    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+  } else {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
 
   // ========================================
   // SUPABASE INITIALIZATION

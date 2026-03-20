@@ -24,15 +24,26 @@ class BillingHistoryScreen extends ConsumerStatefulWidget {
   ConsumerState<BillingHistoryScreen> createState() => _BillingHistoryScreenState();
 }
 
-class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen> {
+class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   late Future<List<AdvertiserPayment>> _paymentsFuture;
+  late Future<List<RefundRequest>> _refundsFuture;
   String _filterStatus = 'all';
   DateTimeRange? _dateRange;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _loadPayments();
+    _loadRefunds();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   void _loadPayments() {
@@ -40,6 +51,14 @@ class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen> {
       _paymentsFuture = ref
           .read(directAdServiceProvider)
           .getPaymentHistory(widget.advertiserId);
+    });
+  }
+
+  void _loadRefunds() {
+    setState(() {
+      _refundsFuture = ref
+          .read(directAdServiceProvider)
+          .getRefundRequests(widget.advertiserId);
     });
   }
 
@@ -143,8 +162,41 @@ class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen> {
               tooltip: 'Clear Filters',
             ),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: ThemeConfig.getColor(
+            context,
+            lightColor: ThemeConfig.lightAppBarForeground,
+            darkColor: ThemeConfig.darkAppBarForeground,
+          ),
+          unselectedLabelColor: ThemeConfig.getColor(
+            context,
+            lightColor: ThemeConfig.lightAppBarForeground,
+            darkColor: ThemeConfig.darkAppBarForeground,
+          ).withOpacity(0.6),
+          indicatorColor: ThemeConfig.getColor(
+            context,
+            lightColor: ThemeConfig.lightAppBarForeground,
+            darkColor: ThemeConfig.darkAppBarForeground,
+          ),
+          tabs: const [
+            Tab(text: 'Payments'),
+            Tab(text: 'Refunds'),
+          ],
+        ),
       ),
-      body: FutureBuilder<List<AdvertiserPayment>>(
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildPaymentsTab(),
+          _buildRefundsTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentsTab() {
+    return FutureBuilder<List<AdvertiserPayment>>(
         future: _paymentsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -226,6 +278,218 @@ class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen> {
             ],
           );
         },
+      );
+  }
+
+  // ── Refunds tab ────────────────────────────────────────────────────────────
+  Widget _buildRefundsTab() {
+    return FutureBuilder<List<RefundRequest>>(
+      future: _refundsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingIndicator(message: 'Loading refunds...');
+        }
+        if (snapshot.hasError) {
+          return CustomErrorWidget(
+            message: 'Failed to load refunds',
+            onRetry: _loadRefunds,
+          );
+        }
+        final refunds = snapshot.data ?? [];
+        if (refunds.isEmpty) {
+          return const EmptyState(
+            icon: Icons.undo_rounded,
+            title: 'No Refunds',
+            message: 'You have not requested any refunds yet. You can request a refund from a campaign\'s detail screen.',
+            actionText: null,
+            onActionPressed: null,
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async => _loadRefunds(),
+          color: ThemeConfig.getPrimaryColor(context),
+          child: ListView.builder(
+            padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+            itemCount: refunds.length,
+            itemBuilder: (context, index) => _buildRefundCard(refunds[index]),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRefundCard(RefundRequest refund) {
+    final fmt = NumberFormat.currency(symbol: 'TSh ', decimalDigits: 0);
+    final Color statusColor;
+    final IconData statusIcon;
+    final String statusText;
+
+    switch (refund.status) {
+      case 'paid':
+        statusColor = ThemeConfig.successColor;
+        statusIcon = Icons.check_circle_rounded;
+        statusText = 'Paid';
+        break;
+      case 'approved':
+        statusColor = ThemeConfig.infoColor;
+        statusIcon = Icons.thumb_up_rounded;
+        statusText = 'Approved';
+        break;
+      case 'rejected':
+        statusColor = ThemeConfig.errorColor;
+        statusIcon = Icons.cancel_rounded;
+        statusText = 'Rejected';
+        break;
+      default: // pending
+        statusColor = ThemeConfig.warningColor;
+        statusIcon = Icons.schedule_rounded;
+        statusText = 'Pending';
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: ThemeConfig.getColor(
+            context,
+            lightColor: ThemeConfig.lightBorder,
+            darkColor: ThemeConfig.darkBorder,
+          ),
+        ),
+      ),
+      color: ThemeConfig.getCardColor(context),
+      child: Padding(
+        padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(statusIcon, color: statusColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fmt.format(refund.amount),
+                        style: TextStyle(
+                          fontSize: ResponsiveHelper.getResponsiveFontSize(
+                              context, mobile: 18),
+                          fontWeight: FontWeight.bold,
+                          color: ThemeConfig.getTextPrimaryColor(context),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            statusText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: statusColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: ThemeConfig.getTextSecondaryColor(context)
+                                .withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            refund.isBalance ? 'Wallet Credit' : 'Cash (Mobile Money)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: ThemeConfig.getTextSecondaryColor(context),
+                            ),
+                          ),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(height: 1,
+              color: ThemeConfig.getColor(context,
+                  lightColor: ThemeConfig.lightDivider,
+                  darkColor: ThemeConfig.darkDivider)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(Icons.calendar_today_rounded,
+                    size: 13,
+                    color: ThemeConfig.getTextSecondaryColor(context)),
+                const SizedBox(width: 5),
+                Text(
+                  'Requested: ${_formatDate(refund.requestedAt)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: ThemeConfig.getTextSecondaryColor(context),
+                  ),
+                ),
+                if (refund.processedAt != null) ...[
+                  const SizedBox(width: 12),
+                  Icon(Icons.done_all_rounded,
+                      size: 13, color: ThemeConfig.successColor),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Processed: ${_formatDate(refund.processedAt!)}',
+                    style: const TextStyle(fontSize: 12, color: ThemeConfig.successColor),
+                  ),
+                ],
+              ],
+            ),
+            if (refund.reason != null && refund.reason!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Reason: ${refund.reason}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: ThemeConfig.getTextSecondaryColor(context),
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+            if (refund.adminNotes != null && refund.adminNotes!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: ThemeConfig.infoColor.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Note: ${refund.adminNotes}',
+                  style: const TextStyle(
+                      fontSize: 12, color: ThemeConfig.infoColor),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

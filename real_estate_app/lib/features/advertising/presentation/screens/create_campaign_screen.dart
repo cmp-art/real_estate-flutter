@@ -13,6 +13,18 @@ import '../provider/ad_providers.dart';
 import 'add_funds_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
+const _kTargetableCountries = [
+  ('TZ', '🇹🇿', 'Tanzania'),
+  ('KE', '🇰🇪', 'Kenya'),
+  ('UG', '🇺🇬', 'Uganda'),
+  ('RW', '🇷🇼', 'Rwanda'),
+  ('ET', '🇪🇹', 'Ethiopia'),
+  ('BI', '🇧🇮', 'Burundi'),
+  ('MZ', '🇲🇿', 'Mozambique'),
+  ('ZM', '🇿🇲', 'Zambia'),
+  ('ZW', '🇿🇼', 'Zimbabwe'),
+];
+
 class CreateCampaignScreen extends ConsumerStatefulWidget {
   final String advertiserId;
   final double currentBalance;
@@ -54,6 +66,10 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
   final List<String> _selectedPropertyTypes = [];
   final List<String> _selectedLocations = [];
   bool _targetWholeCountry = true; // default: target all of Tanzania
+
+  // Country targeting — empty = all East Africa (widest reach)
+  bool _targetAllEA = true;
+  final List<String> _selectedTargetCountries = [];
 
   // Revenue estimate
   AdRevenueEstimate? _estimate;
@@ -191,7 +207,12 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         }
         return true;
       case 2:
-        // Targeting step: if specific regions mode, must pick at least one
+        // Targeting step: must pick at least one country if not All EA
+        if (!_targetAllEA && _selectedTargetCountries.isEmpty) {
+          _snackError('Please select at least one target country.');
+          return false;
+        }
+        // If specific regions mode, must pick at least one
         if (!_targetWholeCountry && _selectedLocations.isEmpty) {
           _snackError(
               'Please select at least one region, or choose "Whole Tanzania".');
@@ -243,6 +264,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         endDate: _endDate,
         targetPropertyTypes: _selectedPropertyTypes,
         targetLocations: _targetWholeCountry ? [] : _selectedLocations,
+        targetCountries: _targetAllEA ? [] : List<String>.from(_selectedTargetCountries),
       );
 
       if (!mounted) return;
@@ -1077,6 +1099,193 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
       key: const ValueKey(2),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Country targeting ──────────────────────────────────────────────
+        _sectionTitle('Target Countries'),
+        const SizedBox(height: 6),
+        Text(
+          'Choose which East African countries see your ad.',
+          style: TextStyle(
+              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
+              color: ThemeConfig.getTextSecondaryColor(context)),
+        ),
+        const SizedBox(height: 14),
+
+        // All East Africa option
+        GestureDetector(
+          onTap: () => setState(() {
+            _targetAllEA = true;
+            _selectedTargetCountries.clear();
+          }),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: _targetAllEA
+                  ? ThemeConfig.getPrimaryColor(context).withOpacity(0.08)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _targetAllEA
+                    ? ThemeConfig.getPrimaryColor(context)
+                    : ThemeConfig.getTextSecondaryColor(context).withOpacity(0.3),
+                width: _targetAllEA ? 2 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Text('🌍', style: TextStyle(fontSize: ResponsiveHelper.getResponsiveIconSize(context))),
+                SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'All East Africa (9 countries)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14),
+                          color: _targetAllEA
+                              ? ThemeConfig.getPrimaryColor(context)
+                              : ThemeConfig.getTextPrimaryColor(context),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'TZ · KE · UG · RW · ET · BI · MZ · ZM · ZW',
+                        style: TextStyle(
+                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11),
+                          color: ThemeConfig.getTextSecondaryColor(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_targetAllEA)
+                  Icon(Icons.check_circle_rounded,
+                      color: ThemeConfig.getPrimaryColor(context),
+                      size: ResponsiveHelper.getResponsiveIconSize(context)),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 10),
+
+        // Specific countries option
+        GestureDetector(
+          onTap: () => setState(() => _targetAllEA = false),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: !_targetAllEA
+                  ? ThemeConfig.getPrimaryColor(context).withOpacity(0.08)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: !_targetAllEA
+                    ? ThemeConfig.getPrimaryColor(context)
+                    : ThemeConfig.getTextSecondaryColor(context).withOpacity(0.3),
+                width: !_targetAllEA ? 2 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.flag_rounded,
+                  color: !_targetAllEA
+                      ? ThemeConfig.getPrimaryColor(context)
+                      : ThemeConfig.getTextSecondaryColor(context),
+                  size: 22,
+                ),
+                SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Specific Countries',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14),
+                          color: !_targetAllEA
+                              ? ThemeConfig.getPrimaryColor(context)
+                              : ThemeConfig.getTextPrimaryColor(context),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        !_targetAllEA && _selectedTargetCountries.isNotEmpty
+                            ? _selectedTargetCountries
+                                .map((c) => _kTargetableCountries
+                                    .firstWhere((t) => t.$1 == c,
+                                        orElse: () => (c, '', c))
+                                    .$2)
+                                .join(' ')
+                            : 'Select which countries to target',
+                        style: TextStyle(
+                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
+                          color: ThemeConfig.getTextSecondaryColor(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!_targetAllEA)
+                  Icon(Icons.check_circle_rounded,
+                      color: ThemeConfig.getPrimaryColor(context),
+                      size: ResponsiveHelper.getResponsiveIconSize(context)),
+              ],
+            ),
+          ),
+        ),
+
+        // Country chips — shown when specific countries mode active
+        if (!_targetAllEA) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _kTargetableCountries.map((c) {
+              final sel = _selectedTargetCountries.contains(c.$1);
+              return FilterChip(
+                label: Text('${c.$2}  ${c.$3}'),
+                selected: sel,
+                onSelected: (v) {
+                  setState(() {
+                    if (v) {
+                      _selectedTargetCountries.add(c.$1);
+                    } else {
+                      _selectedTargetCountries.remove(c.$1);
+                    }
+                  });
+                },
+                selectedColor:
+                    ThemeConfig.getPrimaryColor(context).withOpacity(0.15),
+                checkmarkColor: ThemeConfig.getPrimaryColor(context),
+                labelStyle: TextStyle(
+                  fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
+                  color: sel
+                      ? ThemeConfig.getPrimaryColor(context)
+                      : ThemeConfig.getTextPrimaryColor(context),
+                  fontWeight: sel ? FontWeight.w600 : FontWeight.normal,
+                ),
+              );
+            }).toList(),
+          ),
+          if (_selectedTargetCountries.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '⚠ Please select at least one country.',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: ThemeConfig.errorColor,
+                    fontWeight: FontWeight.w500),
+              ),
+            ),
+        ],
+
+        const SizedBox(height: 28),
+
         _sectionTitle('Target Property Types'),
         const SizedBox(height: 6),
         Text('Select all that apply (or leave blank for all)',
@@ -1342,6 +1551,18 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           if (_selectedPropertyTypes.isNotEmpty)
             _reviewRow('Property Types', _selectedPropertyTypes.join(', ')),
           _reviewRow(
+            'Countries',
+            _targetAllEA
+                ? 'All East Africa (9 countries)'
+                : _selectedTargetCountries.isEmpty
+                    ? 'Not set'
+                    : _selectedTargetCountries
+                        .map((c) => _kTargetableCountries
+                            .firstWhere((t) => t.$1 == c, orElse: () => (c, '', c))
+                            .$3)
+                        .join(', '),
+          ),
+          _reviewRow(
             'Locations',
             _targetWholeCountry
                 ? 'Whole Tanzania (all 31 regions)'
@@ -1352,6 +1573,52 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         ]),
 
         const SizedBox(height: 20),
+
+        // ── Low-reach warning: non-TZ only targeting ──────────────────────
+        if (!_targetAllEA && !_selectedTargetCountries.contains('TZ'))
+          Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withOpacity(0.4)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('⚠️', style: TextStyle(fontSize: 20)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Low reach warning',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: Colors.orange,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'PataMjengo currently has most of its users in Tanzania. '
+                        'Targeting ${_selectedTargetCountries.map((c) => _kTargetableCountries.firstWhere((t) => t.\$1 == c, orElse: () => (c, '', c)).\$3).join(', ')} only '
+                        'may result in very few impressions while your campaign runs. '
+                        'Consider adding Tanzania for better reach.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange[800],
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
 
         // Fund status
         _buildFundStatus(total, enoughFunds),

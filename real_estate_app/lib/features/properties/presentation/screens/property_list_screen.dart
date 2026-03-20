@@ -16,6 +16,7 @@ import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/error_widget.dart';
 import '../../../../shared/widgets/empty_state.dart';
+import '../../domain/entities/property_filter_entity.dart';
 import '../providers/property_providers.dart';
 
 import '../widgets/property_ad_card.dart';
@@ -36,12 +37,41 @@ class PropertyListScreen extends ConsumerStatefulWidget {
       _PropertyListScreenDirectAdsState();
 }
 
-class _PropertyListScreenDirectAdsState 
+// ── Country list (reused in register screen too) ──────────────────────────────
+const _kCountriesMap = [
+  {'code': 'TZ', 'flag': '🇹🇿', 'name': 'Tanzania'},
+  {'code': 'KE', 'flag': '🇰🇪', 'name': 'Kenya'},
+  {'code': 'UG', 'flag': '🇺🇬', 'name': 'Uganda'},
+  {'code': 'RW', 'flag': '🇷🇼', 'name': 'Rwanda'},
+  {'code': 'ET', 'flag': '🇪🇹', 'name': 'Ethiopia'},
+  {'code': 'BI', 'flag': '🇧🇮', 'name': 'Burundi'},
+  {'code': 'MZ', 'flag': '🇲🇿', 'name': 'Mozambique'},
+  {'code': 'ZM', 'flag': '🇿🇲', 'name': 'Zambia'},
+  {'code': 'ZW', 'flag': '🇿🇼', 'name': 'Zimbabwe'},
+];
+
+String _countryFlag(String code) =>
+    _kCountriesMap.firstWhere(
+      (c) => c['code'] == code,
+      orElse: () => {'flag': '🌍'},
+    )['flag']!;
+
+String _countryName(String code) =>
+    _kCountriesMap.firstWhere(
+      (c) => c['code'] == code,
+      orElse: () => {'name': code},
+    )['name']!;
+
+class _PropertyListScreenDirectAdsState
     extends ConsumerState<PropertyListScreen> {
   final _scrollController = ScrollController();
   bool _showScrollToTop = false;
   bool _hasLoadedInitially = false;
-  
+
+  // Country filter state
+  String? _countryFilter;   // null = all countries
+  bool _countryInitialized = false;
+
   // Ad state
   bool _shouldShowAds = false;
   int _adFrequency = 7;
@@ -60,14 +90,209 @@ class _PropertyListScreenDirectAdsState
     super.didChangeDependencies();
 
     if (!_hasLoadedInitially) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         _hasLoadedInitially = true;
         debugPrint('🚀 Initial load - PropertyListScreenDirectAds');
-        ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
+        await _initCountryFilter();
         _loadAdsAndCheckEligibility();
         _warmImageCache();
       });
     }
+  }
+
+  /// Reads the user's country from their profile (or SharedPreferences for guests).
+  /// Then triggers the initial property load with that country filter applied.
+  /// If no country is found and the prompt has never been shown, shows a
+  /// one-time "Where are you looking?" bottom sheet.
+  Future<void> _initCountryFilter() async {
+    if (_countryInitialized) return;
+    _countryInitialized = true;
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. Prefer the logged-in user's stored country
+    final user = ref.read(authNotifierProvider).value;
+    String? country = user?.country;
+
+    // 2. Fallback: locally saved preference (guest / returning user)
+    if (country == null) {
+      country = prefs.getString('country_filter');
+    }
+
+    if (mounted) {
+      setState(() => _countryFilter = country);
+    }
+    _reloadProperties(refresh: true);
+
+    // 3. If still no country, show the one-time country picker prompt
+    if (country == null && mounted) {
+      final alreadyPrompted = prefs.getBool('country_prompt_shown') ?? false;
+      if (!alreadyPrompted) {
+        await prefs.setBool('country_prompt_shown', true);
+        // Small delay so the list renders first (better UX)
+        await Future.delayed(const Duration(milliseconds: 600));
+        if (mounted) _showCountryPrompt();
+      }
+    }
+  }
+
+  /// One-time "Where are you looking?" prompt for users with no country set.
+  void _showCountryPrompt() {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      isDismissible: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag handle
+              Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text('🌍', style: TextStyle(fontSize: 40)),
+              const SizedBox(height: 12),
+              Text(
+                'Where are you looking?',
+                style: theme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Pick your country to see relevant listings.',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: Colors.grey[600]),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              ..._kCountriesMap.map((c) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Text(c['flag']!, style: const TextStyle(fontSize: 24)),
+                    title: Text(c['name']!, style: const TextStyle(fontWeight: FontWeight.w500)),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _setCountryFilter(c['code']);
+                    },
+                  )),
+              const Divider(),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(
+                  'Skip — show all countries',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a filter that includes the current country preference.
+  PropertyFilterEntity? _buildFilter() {
+    if (_countryFilter == null) return null;
+    return PropertyFilterEntity(country: _countryFilter);
+  }
+
+  /// Reloads the property list, always applying the current country filter.
+  void _reloadProperties({bool refresh = true}) {
+    ref
+        .read(propertyListProvider.notifier)
+        .loadProperties(filter: _buildFilter(), refresh: refresh);
+  }
+
+  /// Called when the user taps a country chip or "Browse All".
+  /// Saves locally (SharedPreferences) and, for logged-in users, also
+  /// updates the country stored in their Supabase profile.
+  Future<void> _setCountryFilter(String? country) async {
+    // 1. Save locally so the preference survives app restarts
+    final prefs = await SharedPreferences.getInstance();
+    if (country != null) {
+      await prefs.setString('country_filter', country);
+    } else {
+      await prefs.remove('country_filter');
+    }
+
+    // 2. Persist to DB profile for logged-in users
+    final user = ref.read(authNotifierProvider).value;
+    if (user != null) {
+      final updated = user.copyWith(country: country);
+      // Fire-and-forget — don't block the UI on the network call
+      ref.read(authNotifierProvider.notifier).updateProfile(updated);
+    }
+
+    if (mounted) {
+      setState(() => _countryFilter = country);
+      _reloadProperties(refresh: true);
+    }
+  }
+
+  /// Shows a bottom sheet with the list of supported countries.
+  void _showCountryPicker() {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Select Country',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Text('🌍', style: TextStyle(fontSize: 22)),
+              title: const Text('All Countries'),
+              selected: _countryFilter == null,
+              selectedColor: theme.primaryColor,
+              onTap: () {
+                Navigator.pop(ctx);
+                _setCountryFilter(null);
+              },
+            ),
+            ..._kCountriesMap.map((c) => ListTile(
+                  leading: Text(c['flag']!, style: const TextStyle(fontSize: 22)),
+                  title: Text(c['name']!),
+                  selected: _countryFilter == c['code'],
+                  selectedColor: theme.primaryColor,
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _setCountryFilter(c['code']);
+                  },
+                )),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -211,6 +436,7 @@ class _PropertyListScreenDirectAdsState
           userId: guestId,
           screenName: 'property_list',
           userRegion: guestRegion,
+          userCountry: _countryFilter,
           limit: 10,
         );
         debugPrint('🟢 ADS: guest loaded ${ads.length} ads');
@@ -247,6 +473,7 @@ class _PropertyListScreenDirectAdsState
           userId: user.id,
           screenName: 'property_list',
           userRegion: null,
+          userCountry: _countryFilter,
           limit: 10,
         );
       } catch (e) {
@@ -271,6 +498,7 @@ class _PropertyListScreenDirectAdsState
       }
       return;
     }
+
 
     bool shouldShow = true;
     try {
@@ -301,6 +529,7 @@ class _PropertyListScreenDirectAdsState
         userId: user.id,
         screenName: 'property_list',
         userRegion: userRegion,
+        userCountry: _countryFilter,
         limit: 10,
       );
       debugPrint('🟢 ADS: RPC returned ${ads.length} ads');
@@ -367,7 +596,7 @@ class _PropertyListScreenDirectAdsState
   }
 
   Future<void> _handleRefresh() async {
-    await ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
+    _reloadProperties(refresh: true);
     await _loadAdsAndCheckEligibility();
   }
 
@@ -491,10 +720,17 @@ Shared via Patamjengo
       ),
       body: Stack(
         children: [
-          RefreshIndicator(
-            onRefresh: _handleRefresh,
-            color: theme.primaryColor,
-            child: _buildBody(propertyListState, theme),
+          Column(
+            children: [
+              _buildCountryFilterRow(theme),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _handleRefresh,
+                  color: theme.primaryColor,
+                  child: _buildBody(propertyListState, theme),
+                ),
+              ),
+            ],
           ),
           if (_showScrollToTop)
             Positioned(
@@ -527,6 +763,89 @@ Shared via Patamjengo
     );
   }
 
+  /// Country filter chip row shown below the AppBar.
+  /// Shows a chip with the selected country (tappable to change) and a
+  /// "Browse All" text button when a country is active.
+  Widget _buildCountryFilterRow(ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      color: isDark ? Colors.grey[900] : Colors.grey[50],
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        children: [
+          // Country chip (always visible — shows "All Countries" if none set)
+          InkWell(
+            onTap: _showCountryPicker,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _countryFilter != null
+                    ? theme.primaryColor.withOpacity(0.12)
+                    : (isDark ? Colors.grey[800] : Colors.grey[200]),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _countryFilter != null
+                      ? theme.primaryColor
+                      : Colors.transparent,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _countryFilter != null
+                        ? _countryFlag(_countryFilter!)
+                        : '🌍',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _countryFilter != null
+                        ? _countryName(_countryFilter!)
+                        : 'All Countries',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: _countryFilter != null
+                          ? theme.primaryColor
+                          : (isDark ? Colors.white70 : Colors.black87),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.arrow_drop_down,
+                    size: 18,
+                    color: _countryFilter != null
+                        ? theme.primaryColor
+                        : (isDark ? Colors.white54 : Colors.black45),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // "Browse All" text button — only shown when a country is active
+          if (_countryFilter != null) ...[
+            const Spacer(),
+            TextButton(
+              onPressed: () => _setCountryFilter(null),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                'Browse All',
+                style: TextStyle(fontSize: 12, color: theme.primaryColor),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody(PropertyListState state, ThemeData theme) {
     if (state.isLoading && state.properties.isEmpty) {
       return const LoadingIndicator(message: 'Loading properties...');
@@ -535,9 +854,7 @@ Shared via Patamjengo
     if (state.error != null && state.properties.isEmpty) {
       return CustomErrorWidget(
         message: state.error!,
-        onRetry: () {
-          ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
-        },
+        onRetry: () => _reloadProperties(refresh: true),
       );
     }
 
@@ -720,7 +1037,7 @@ Shared via Patamjengo
       ),
     );
     if (mounted) {
-      ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
+      _reloadProperties(refresh: true);
     }
   }
 

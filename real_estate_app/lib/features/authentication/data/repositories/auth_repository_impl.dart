@@ -53,6 +53,7 @@ class AuthRepositoryImpl implements AuthRepository {
     required String password,
     required String fullName,
     String? phone,
+    String? country,
   }) async {
     try {
       final user = await remoteDataSource.register(
@@ -60,6 +61,7 @@ class AuthRepositoryImpl implements AuthRepository {
         password: password,
         fullName: fullName,
         phone: phone,
+        country: country,
       );
       return Right(user);
     } on AuthException catch (e) {
@@ -189,6 +191,7 @@ class AuthRepositoryImpl implements AuthRepository {
         showEmail: user.showEmail,
         showPhone: user.showPhone,
         userType: _userTypeToString(user.userType),
+        country: user.country,
       );
       return Right(updatedUser);
     } on ServerException catch (e) {

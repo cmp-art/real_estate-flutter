@@ -11,6 +11,17 @@ import '../../../../core/services/selcom_payment_service.dart';
 import '../../../subscriptions/data/models/subscription_model.dart';
 import '../provider/ad_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../presentation/providers/auth_provider.dart';
+
+const _kSelcomCountries = {'TZ'};
+
+String _countryNameForCode(String? code) {
+  const names = {
+    'TZ': 'Tanzania', 'KE': 'Kenya', 'UG': 'Uganda', 'RW': 'Rwanda',
+    'ET': 'Ethiopia', 'BI': 'Burundi', 'MZ': 'Mozambique', 'ZM': 'Zambia', 'ZW': 'Zimbabwe',
+  };
+  return code != null ? (names[code] ?? code) : 'your country';
+}
 
 class AddFundsScreen extends ConsumerStatefulWidget {
   final Advertiser advertiser;
@@ -35,6 +46,38 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
   // Track pending payment for background reconciliation
   String? _pendingTransactionId;
   double? _pendingAmount;
+
+  bool get _paymentAvailable {
+    final country = ref.read(authNotifierProvider).value?.country;
+    return country == null || _kSelcomCountries.contains(country);
+  }
+
+  void _showComingSoonDialog() {
+    final country = ref.read(authNotifierProvider).value?.country;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Text('🌍', style: TextStyle(fontSize: 24)),
+            SizedBox(width: 8),
+            Text('Coming Soon'),
+          ],
+        ),
+        content: Text(
+          'Ad funding via Selcom is currently available in Tanzania only.\n\n'
+          '${_countryNameForCode(country)} support is on our roadmap — '
+          'we\'ll notify you as soon as it\'s available in your region.',
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
 
   // Predefined amounts in TZS
   final List<double> _quickAmounts = [
@@ -489,35 +532,54 @@ class _AddFundsScreenState extends ConsumerState<AddFundsScreen>
 
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),
 
-              // Pay Button
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isProcessing ? null : _processPayment,
-                  style: ElevatedButton.styleFrom(
-                    padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-                    backgroundColor: theme.primaryColor,
+              // Pay Button — disabled for non-TZ users
+              if (!_paymentAvailable)
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _showComingSoonDialog,
+                    icon: const Text('🌍', style: TextStyle(fontSize: 18)),
+                    label: Text(
+                      'Coming Soon in ${_countryNameForCode(ref.read(authNotifierProvider).value?.country)}',
+                      style: TextStyle(
+                        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+                      foregroundColor: Colors.grey[600],
+                    ),
                   ),
-                  child: _isProcessing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation(Colors.white),
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isProcessing ? null : _processPayment,
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+                      backgroundColor: theme.primaryColor,
+                    ),
+                    child: _isProcessing
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation(Colors.white),
+                            ),
+                          )
+                        : Text(
+                            _amountController.text.isNotEmpty
+                                ? 'Pay ${formatter.format(double.tryParse(_amountController.text) ?? 0)}'
+                                : 'Add Funds',
+                            style: TextStyle(
+                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        )
-                      : Text(
-                          _amountController.text.isNotEmpty
-                              ? 'Pay ${formatter.format(double.tryParse(_amountController.text) ?? 0)}'
-                              : 'Add Funds',
-                          style: TextStyle(
-                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                  ),
                 ),
-              ),
 
               SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
 

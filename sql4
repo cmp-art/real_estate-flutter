@@ -1,0 +1,2211 @@
+-- ============================================================================
+-- ⚡ PRIORITY ZERO: FIX RLS RECURSION ON user_profiles
+-- This block runs FIRST, in isolation, before anything else in this file.
+-- It nukes ALL existing policies on user_profiles and replaces them with
+-- safe non-recursive ones. Even if a later statement fails, this stays applied.
+-- ============================================================================
+DO $$
+DECLARE
+    pol RECORD;
+BEGIN
+    -- Only run if user_profiles table already exists (safe for fresh installs)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'user_profiles'
+    ) THEN
+        RAISE NOTICE 'user_profiles does not exist yet — RLS will be applied when table is created below';
+        RETURN;
+    END IF;
+
+    -- Drop every policy on user_profiles, whatever its name
+    FOR pol IN
+        SELECT policyname
+        FROM pg_policies
+        WHERE tablename = 'user_profiles' AND schemaname = 'public'
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.user_profiles', pol.policyname);
+        RAISE NOTICE 'Dropped policy: %', pol.policyname;
+    END LOOP;
+
+    -- Ensure RLS is on
+    ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.user_profiles FORCE ROW LEVEL SECURITY;
+
+    -- Safe non-recursive policies only
+    -- 1. Public read (no self-reference, no is_admin() call)
+    EXECUTE $policy$
+        CREATE POLICY "Public can view user profiles"
+        ON public.user_profiles FOR SELECT
+        TO public
+        USING (TRUE)
+    $policy$;
+
+    -- 2. Authenticated users update own row only
+    EXECUTE $policy$
+        CREATE POLICY "Users can update own profile"
+        ON public.user_profiles FOR UPDATE
+        TO authenticated
+        USING (auth.uid() = id)
+        WITH CHECK (auth.uid() = id)
+    $policy$;
+
+    -- 3. Authenticated users insert own row only
+    EXECUTE $policy$
+        CREATE POLICY "Users can insert own profile"
+        ON public.user_profiles FOR INSERT
+        TO authenticated
+        WITH CHECK (auth.uid() = id)
+    $policy$;
+
+    -- 4. Service role bypasses everything (used by SECURITY DEFINER triggers)
+    EXECUTE $policy$
+        CREATE POLICY "Service role full access"
+        ON public.user_profiles FOR ALL
+        TO service_role
+        USING (TRUE)
+        WITH CHECK (TRUE)
+    $policy$;
+
+    RAISE NOTICE '✅ user_profiles RLS fixed — 4 safe policies applied, recursion eliminated';
+END $$;
+
+-- ============================================================================
+-- REAL ESTATE APP — FILE 4 OF 5: ADMIN & ROLE-BASED ACCESS CONTROL
+-- Tables: user_profiles, admin_activity_log
+-- Views: admin_all_accounts, admin_all_properties, admin_all_campaigns,
+--        admin_all_creatives, admin_all_subscriptions, admin_ad_revenue_summary,
+--        admin_subscription_revenue_summary, admin_pending_review,
+--        admin_dashboard_stats, admin_active_properties
+-- Run this FOURTH after 03_advertisement_system.sql
+-- ============================================================================
+
+-- ============================================================================
+-- PART 1: TABLES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id                   UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    role                 TEXT NOT NULL DEFAULT 'user'
+                         CHECK (role IN ('super_admin','admin','moderator','advertiser','agent','user')),
+    permissions          JSONB DEFAULT '[]'::jsonb,
+    -- identity & contact
+    full_name            TEXT,
+    email                TEXT,
+    phone                TEXT,
+    avatar_url           TEXT,
+    profile_image_url    TEXT,
+    -- profile content
+    bio                  TEXT CHECK (bio IS NULL OR length(bio) <= 500),
+    website              TEXT,
+    location             TEXT,
+    address              TEXT,
+    city                 TEXT,
+    country              TEXT DEFAULT 'TZ',
+    date_of_birth        DATE,
+    gender               TEXT,
+    nationality          TEXT,
+    -- user classification (sent by Flutter app on update)
+    user_type            TEXT DEFAULT 'regular',
+    account_type         TEXT DEFAULT 'personal',
+    profile_type         TEXT DEFAULT 'user',
+    -- visibility controls
+    show_email           BOOLEAN DEFAULT TRUE,
+    show_phone           BOOLEAN DEFAULT TRUE,
+    profile_visibility   TEXT    DEFAULT 'public',
+    -- preferences
+    notification_enabled BOOLEAN DEFAULT TRUE,
+    marketing_enabled    BOOLEAN DEFAULT FALSE,
+    preferred_language   TEXT    DEFAULT 'en',
+    preferred_currency   TEXT    DEFAULT 'TZS',
+    -- status flags
+    is_active            BOOLEAN DEFAULT TRUE,
+    is_verified          BOOLEAN DEFAULT FALSE,
+    email_verified       BOOLEAN DEFAULT FALSE,
+    phone_verified       BOOLEAN DEFAULT FALSE,
+    -- activity tracking
+    last_login_at        TIMESTAMPTZ,
+    login_count          INTEGER DEFAULT 0,
+    last_activity_at     TIMESTAMPTZ,
+    -- admin/moderation
+    deactivated_at       TIMESTAMPTZ,
+    deactivation_reason  TEXT,
+    deleted_at           TIMESTAMPTZ,
+    deleted_by_admin     UUID,
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_role      ON user_profiles(role);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_is_active ON user_profiles(is_active);
+
+-- ============================================================================
+-- ============================================================================
+-- MIGRATION: Add ALL columns that the Flutter app writes to user_profiles.
+-- Every ALTER TABLE here uses IF NOT EXISTS — fully safe to re-run.
+-- Add columns in batches to avoid long error messages.
+-- ============================================================================
+
+-- Batch 1: identity & contact columns (app profile screen)
+ALTER TABLE public.user_profiles
+    ADD COLUMN IF NOT EXISTS email        TEXT,
+    ADD COLUMN IF NOT EXISTS bio          TEXT,
+    ADD COLUMN IF NOT EXISTS show_email   BOOLEAN      DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS show_phone   BOOLEAN      DEFAULT TRUE;
+
+-- Batch 2: user classification columns (app sends these on update)
+ALTER TABLE public.user_profiles
+    ADD COLUMN IF NOT EXISTS user_type        TEXT        DEFAULT 'regular',
+    ADD COLUMN IF NOT EXISTS account_type     TEXT        DEFAULT 'personal',
+    ADD COLUMN IF NOT EXISTS profile_type     TEXT        DEFAULT 'user';
+
+-- Batch 3: extended profile fields
+ALTER TABLE public.user_profiles
+    ADD COLUMN IF NOT EXISTS website          TEXT,
+    ADD COLUMN IF NOT EXISTS location         TEXT,
+    ADD COLUMN IF NOT EXISTS address          TEXT,
+    ADD COLUMN IF NOT EXISTS city             TEXT,
+    ADD COLUMN IF NOT EXISTS country          TEXT        DEFAULT 'TZ',
+    ADD COLUMN IF NOT EXISTS date_of_birth    DATE,
+    ADD COLUMN IF NOT EXISTS gender           TEXT,
+    ADD COLUMN IF NOT EXISTS nationality      TEXT,
+    ADD COLUMN IF NOT EXISTS profile_image_url TEXT;
+
+-- Batch 4: app-level flags & preferences
+ALTER TABLE public.user_profiles
+    ADD COLUMN IF NOT EXISTS notification_enabled   BOOLEAN DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS marketing_enabled      BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS profile_visibility     TEXT    DEFAULT 'public',
+    ADD COLUMN IF NOT EXISTS preferred_language     TEXT    DEFAULT 'en',
+    ADD COLUMN IF NOT EXISTS preferred_currency     TEXT    DEFAULT 'TZS';
+
+-- Add bio length constraint if not already there
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'user_profiles_bio_length_check'
+          AND conrelid = 'public.user_profiles'::regclass
+    ) THEN
+        ALTER TABLE public.user_profiles
+            ADD CONSTRAINT user_profiles_bio_length_check
+            CHECK (bio IS NULL OR length(bio) <= 500);
+    END IF;
+END $$;
+
+-- Backfill email from auth.users for all existing profiles
+UPDATE public.user_profiles up
+SET email = au.email
+FROM auth.users au
+WHERE up.id = au.id
+  AND up.email IS NULL;
+
+CREATE TABLE IF NOT EXISTS admin_activity_log (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    admin_email TEXT NOT NULL,
+    admin_role  TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target_type TEXT,
+    target_id   UUID,
+    description TEXT,
+    metadata    JSONB,
+    ip_address  TEXT,
+    user_agent  TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_log_admin_id   ON admin_activity_log(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_log_action     ON admin_activity_log(action);
+CREATE INDEX IF NOT EXISTS idx_admin_log_created_at ON admin_activity_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_log_target     ON admin_activity_log(target_type, target_id);
+
+-- Ensure properties table has moderation columns
+ALTER TABLE properties
+    ADD COLUMN IF NOT EXISTS property_type    TEXT,
+    ADD COLUMN IF NOT EXISTS price            NUMERIC,
+    ADD COLUMN IF NOT EXISTS location         TEXT,
+    ADD COLUMN IF NOT EXISTS status           TEXT DEFAULT 'available',
+    ADD COLUMN IF NOT EXISTS is_featured      BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS is_verified      BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS views_count      INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS images           TEXT[] DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS videos           TEXT[] DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS media_urls       TEXT[] DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS deleted_at       TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS deleted_by_user  BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS deleted_by_admin UUID,
+    ADD COLUMN IF NOT EXISTS deletion_reason  TEXT,
+    ADD COLUMN IF NOT EXISTS moderated_by     UUID,
+    ADD COLUMN IF NOT EXISTS moderated_at     TIMESTAMPTZ;
+
+-- Widen properties status constraint to include 'deleted'
+ALTER TABLE properties DROP CONSTRAINT IF EXISTS properties_status_check;
+ALTER TABLE properties ADD CONSTRAINT properties_status_check
+    CHECK (status IN ('available','sold','rented','under_offer','off_market','pending','deleted'));
+
+-- Enforce max 1 video per property (matches Flutter UI; prevents API bypass)
+-- array_length returns NULL for empty arrays, so IS NULL covers the {} case
+ALTER TABLE properties DROP CONSTRAINT IF EXISTS max_one_video_per_property;
+ALTER TABLE properties ADD CONSTRAINT max_one_video_per_property
+    CHECK (array_length(videos, 1) IS NULL OR array_length(videos, 1) <= 1);
+
+CREATE INDEX IF NOT EXISTS idx_properties_deleted_at ON properties(deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- ============================================================================
+-- PART 2: HELPER FUNCTIONS (defined before triggers/policies that use them)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION is_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM user_profiles
+        WHERE id = user_id AND role IN ('super_admin','admin','moderator') AND is_active = TRUE
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE FUNCTION is_super_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (SELECT 1 FROM user_profiles WHERE id = user_id AND role='super_admin' AND is_active=TRUE);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE FUNCTION get_user_role(user_id UUID)
+RETURNS TEXT AS $$
+DECLARE user_role TEXT;
+BEGIN
+    SELECT role INTO user_role FROM user_profiles WHERE id = user_id;
+    RETURN COALESCE(user_role, 'user');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION has_permission(user_id UUID, permission TEXT)
+RETURNS BOOLEAN AS $$
+DECLARE user_permissions JSONB; user_role TEXT;
+BEGIN
+    IF is_super_admin(user_id) THEN RETURN TRUE; END IF;
+    SELECT permissions, role INTO user_permissions, user_role
+    FROM user_profiles WHERE id = user_id AND is_active = TRUE;
+    IF user_permissions IS NULL THEN RETURN FALSE; END IF;
+    RETURN user_permissions ? permission;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION log_admin_action(
+    p_admin_id UUID, p_action TEXT, p_target_type TEXT DEFAULT NULL,
+    p_target_id UUID DEFAULT NULL, p_description TEXT DEFAULT NULL, p_metadata JSONB DEFAULT NULL
+)
+RETURNS UUID AS $$
+DECLARE v_admin_email TEXT; v_admin_role TEXT; v_log_id UUID;
+BEGIN
+    SELECT u.email, p.role INTO v_admin_email, v_admin_role
+    FROM auth.users u JOIN user_profiles p ON p.id = u.id WHERE u.id = p_admin_id;
+    INSERT INTO admin_activity_log (admin_id, admin_email, admin_role, action, target_type, target_id, description, metadata)
+    VALUES (p_admin_id, COALESCE(v_admin_email,'admin@system'), COALESCE(v_admin_role,'admin'),
+            p_action, p_target_type, p_target_id, p_description, p_metadata)
+    RETURNING id INTO v_log_id;
+    RETURN v_log_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ============================================================================
+-- PART 3: TRIGGERS FOR USER_PROFILES
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION create_user_profile()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO user_profiles (id, full_name, email, role, email_verified, created_at)
+    VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email), NEW.email, 'user',
+            NEW.email_confirmed_at IS NOT NULL, NOW())
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION protect_user_role()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (OLD.role IS DISTINCT FROM NEW.role) AND NOT is_admin(auth.uid()) THEN
+        NEW.role := OLD.role;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- NOTE: on_auth_user_created is also used by File 2 for free subscription.
+-- We recreate it here to call BOTH functions via a wrapper.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE OR REPLACE FUNCTION on_new_user_handler()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_free_tier_id UUID;
+    v_full_name    TEXT;
+    v_avatar_url   TEXT;
+BEGIN
+    -- ── Extract name & avatar from metadata ───────────────────────────────────
+    -- Google OAuth stores name as 'name' or 'full_name', avatar as 'avatar_url' or 'picture'
+    -- Email sign-up stores name as 'full_name'
+    -- We check all possible keys so BOTH methods produce identical profile rows.
+    v_full_name := COALESCE(
+        NEW.raw_user_meta_data->>'full_name',   -- email sign-up
+        NEW.raw_user_meta_data->>'name',         -- Google OAuth
+        NEW.email,                               -- fallback: email address
+        'User'
+    );
+
+    v_avatar_url := COALESCE(
+        NEW.raw_user_meta_data->>'avatar_url',   -- email sign-up (if provided)
+        NEW.raw_user_meta_data->>'picture'        -- Google OAuth
+    );
+
+    -- ── 1. Create user profile ────────────────────────────────────────────────
+    -- ON CONFLICT DO UPDATE ensures Google re-logins update the avatar/name
+    INSERT INTO user_profiles (id, full_name, email, avatar_url, role, email_verified, created_at, updated_at)
+    VALUES (
+        NEW.id,
+        v_full_name,
+        NEW.email,
+        v_avatar_url,
+        'user',
+        NEW.email_confirmed_at IS NOT NULL,
+        NOW(),
+        NOW()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        full_name      = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+        email          = COALESCE(EXCLUDED.email, user_profiles.email),
+        avatar_url     = COALESCE(EXCLUDED.avatar_url, user_profiles.avatar_url),
+        email_verified = EXCLUDED.email_verified,
+        updated_at     = NOW();
+
+    -- ── 2. Create free subscription ───────────────────────────────────────────
+    SELECT id INTO v_free_tier_id FROM subscription_tiers WHERE name = 'free' LIMIT 1;
+    IF v_free_tier_id IS NOT NULL THEN
+        INSERT INTO user_subscriptions (user_id, tier_id, status, started_at, expires_at, auto_renew)
+        VALUES (NEW.id, v_free_tier_id, 'active', NOW(), NOW() + INTERVAL '100 years', FALSE)
+        ON CONFLICT DO NOTHING;
+    END IF;
+
+    -- ── 3. Create advertiser record ───────────────────────────────────────────
+    INSERT INTO advertisers (user_id, company_name, contact_name, email, phone, company_type, status)
+    VALUES (
+        NEW.id,
+        v_full_name,
+        v_full_name,
+        COALESCE(NEW.email, 'noreply@example.com'),
+        'N/A',
+        'real_estate_agency',
+        'active'
+    )
+    ON CONFLICT (user_id) DO NOTHING;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users FOR EACH ROW
+    EXECUTE FUNCTION on_new_user_handler();
+
+DROP TRIGGER IF EXISTS ensure_role_protection ON user_profiles;
+CREATE TRIGGER ensure_role_protection
+    BEFORE UPDATE ON user_profiles FOR EACH ROW
+    EXECUTE FUNCTION protect_user_role();
+
+-- ============================================================================
+-- PART 4: BACKFILL user_profiles FOR EXISTING USERS
+-- ============================================================================
+
+INSERT INTO user_profiles (id, full_name, email, avatar_url, role, email_verified, created_at, updated_at)
+SELECT
+    au.id,
+    COALESCE(
+        au.raw_user_meta_data->>'full_name',
+        au.raw_user_meta_data->>'name',
+        au.email,
+        'Unknown'
+    ),
+    au.email,
+    COALESCE(
+        au.raw_user_meta_data->>'avatar_url',
+        au.raw_user_meta_data->>'picture'
+    ),
+    'user',
+    au.email_confirmed_at IS NOT NULL,
+    au.created_at,
+    NOW()
+FROM auth.users au
+WHERE NOT EXISTS (SELECT 1 FROM user_profiles up WHERE up.id = au.id)
+ON CONFLICT (id) DO UPDATE SET
+    full_name  = COALESCE(EXCLUDED.full_name,  user_profiles.full_name),
+    email      = COALESCE(EXCLUDED.email,      user_profiles.email),
+    avatar_url = COALESCE(EXCLUDED.avatar_url, user_profiles.avatar_url),
+    updated_at = NOW();
+
+-- Backfill FREE SUBSCRIPTIONS for ALL existing users who have no active subscription
+-- This fixes "No active subscription found" for users created before this system was set up
+-- Without a subscription row, Flutter cannot determine tier → shows 0 ads
+DO $$
+DECLARE v_free_tier_id UUID;
+BEGIN
+    SELECT id INTO v_free_tier_id FROM subscription_tiers WHERE name = 'free' LIMIT 1;
+    IF v_free_tier_id IS NOT NULL THEN
+        INSERT INTO user_subscriptions (user_id, tier_id, status, started_at, expires_at, auto_renew)
+        SELECT au.id, v_free_tier_id, 'active', NOW(), NOW() + INTERVAL '100 years', FALSE
+        FROM auth.users au
+        WHERE NOT EXISTS (
+            SELECT 1 FROM user_subscriptions us
+            WHERE us.user_id = au.id AND us.status = 'active'
+        )
+        ON CONFLICT DO NOTHING;
+        RAISE NOTICE '✅ Free subscriptions backfilled for existing users';
+    ELSE
+        RAISE WARNING '⚠️  Free tier not found — run 02_subscription_payment_system.sql first';
+    END IF;
+END $$;
+
+-- Backfill ADVERTISER records for ALL existing users who have none
+INSERT INTO advertisers (user_id, company_name, contact_name, email, phone, company_type, status)
+SELECT
+    au.id,
+    COALESCE(au.raw_user_meta_data->>'full_name', 'My Company'),
+    COALESCE(au.raw_user_meta_data->>'full_name', 'Contact Person'),
+    COALESCE(au.email, 'noreply@example.com'),
+    'N/A', 'real_estate_agency', 'active'
+FROM auth.users au
+WHERE NOT EXISTS (SELECT 1 FROM advertisers a WHERE a.user_id = au.id)
+ON CONFLICT DO NOTHING;
+
+
+-- ============================================================================
+-- PART 6: ADMIN VIEWS (drop and recreate)
+-- ============================================================================
+
+DROP VIEW IF EXISTS admin_all_accounts                 CASCADE;
+DROP VIEW IF EXISTS admin_all_properties               CASCADE;
+DROP VIEW IF EXISTS admin_active_properties            CASCADE;
+DROP VIEW IF EXISTS admin_all_campaigns                CASCADE;
+DROP VIEW IF EXISTS admin_all_creatives                CASCADE;
+DROP VIEW IF EXISTS admin_all_subscriptions            CASCADE;
+DROP VIEW IF EXISTS admin_ad_revenue_summary           CASCADE;
+DROP VIEW IF EXISTS admin_subscription_revenue_summary CASCADE;
+DROP VIEW IF EXISTS admin_pending_review               CASCADE;
+DROP VIEW IF EXISTS admin_pending_manual_reviews       CASCADE;
+DROP VIEW IF EXISTS admin_dashboard_stats              CASCADE;
+
+-- Grant postgres (view owner) access to auth.users so views can join it
+-- Views run as their owner (postgres) by default (security_invoker=false)
+-- postgres bypasses RLS naturally UNLESS FORCE RLS is applied to the table.
+-- CRITICAL: Do NOT apply FORCE RLS to properties — admin views run as postgres
+-- with auth.uid()=NULL, so FORCE RLS would hide all deleted rows from admins.
+GRANT SELECT ON auth.users TO postgres;
+
+-- user_profiles uses FORCE RLS (sensitive data, always enforced)
+-- properties must NOT use FORCE RLS (admin views need to see deleted rows)
+ALTER TABLE user_profiles FORCE ROW LEVEL SECURITY;
+
+GRANT SELECT ON user_profiles      TO postgres;
+GRANT SELECT ON user_subscriptions TO postgres;
+GRANT SELECT ON subscription_tiers TO postgres;
+GRANT SELECT ON properties         TO postgres;
+GRANT SELECT ON properties         TO anon;
+GRANT SELECT ON advertisers        TO postgres;
+GRANT SELECT ON ad_campaigns       TO postgres;
+GRANT SELECT ON ad_creatives       TO postgres;
+GRANT SELECT ON ad_impressions     TO postgres;
+GRANT SELECT ON ad_clicks          TO postgres;
+GRANT SELECT ON admin_activity_log TO postgres;
+GRANT SELECT ON ai_validation_logs  TO postgres;
+GRANT SELECT ON manual_review_queue TO postgres;
+
+CREATE VIEW admin_all_accounts WITH (security_invoker = off)
+AS
+SELECT au.id, au.email, au.created_at AS auth_created_at, au.last_sign_in_at,
+    up.full_name, up.phone, up.avatar_url, up.role,
+    COALESCE(up.is_active, TRUE) AS is_active,
+    COALESCE(up.is_verified, FALSE) AS is_verified,
+    up.last_login_at, up.created_at, up.deactivated_at, up.deactivation_reason,
+    up.deleted_at, up.deleted_by_admin,
+    (SELECT st2.name FROM user_subscriptions s2 JOIN subscription_tiers st2 ON st2.id = s2.tier_id
+     WHERE s2.user_id = au.id AND s2.status='active' ORDER BY s2.started_at DESC LIMIT 1) AS current_tier,
+    (SELECT COUNT(*) FROM user_subscriptions s3 WHERE s3.user_id = au.id) AS total_subscriptions,
+    (SELECT COUNT(*) FROM properties p WHERE p.owner_id = au.id) AS total_properties,
+    (SELECT COUNT(*) FROM properties p WHERE p.owner_id = au.id AND p.deleted_at IS NOT NULL) AS deleted_properties,
+    (SELECT adv.status FROM advertisers adv WHERE adv.user_id = au.id LIMIT 1) AS advertiser_status,
+    (SELECT adv.total_spent FROM advertisers adv WHERE adv.user_id = au.id LIMIT 1) AS advertiser_total_spent,
+    CASE WHEN up.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_deleted
+FROM auth.users au LEFT JOIN user_profiles up ON up.id = au.id;
+
+CREATE VIEW admin_all_properties WITH (security_invoker = off)
+AS
+SELECT p.id, p.owner_id, up.full_name AS owner_name, au.email AS owner_email, up.phone AS owner_phone,
+    p.title, p.description, p.property_type, p.price, p.location, p.status,
+    p.is_featured, p.is_verified, p.views_count,
+    COALESCE(p.images,'{}') AS images, COALESCE(p.videos,'{}') AS videos, COALESCE(p.media_urls,'{}') AS media_urls,
+    p.created_at, p.updated_at, p.deleted_at, p.deleted_by_user, p.deleted_by_admin, p.deletion_reason,
+    CASE WHEN p.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_deleted
+FROM properties p
+LEFT JOIN user_profiles up ON up.id = p.owner_id
+LEFT JOIN auth.users    au ON au.id = p.owner_id;
+
+CREATE VIEW admin_active_properties WITH (security_invoker = off)
+AS
+SELECT p.id, p.owner_id, up.full_name AS owner_name, au.email AS owner_email,
+    p.title, p.description, p.property_type, p.price, p.location, p.status,
+    p.is_featured, p.is_verified, p.views_count,
+    COALESCE(p.images,'{}') AS images, COALESCE(p.videos,'{}') AS videos, COALESCE(p.media_urls,'{}') AS media_urls,
+    p.created_at, p.updated_at
+FROM properties p
+LEFT JOIN user_profiles up ON up.id = p.owner_id
+LEFT JOIN auth.users    au ON au.id = p.owner_id
+WHERE p.deleted_at IS NULL;
+
+CREATE VIEW admin_all_campaigns WITH (security_invoker = off)
+AS
+SELECT c.id, c.advertiser_id, a.company_name AS advertiser_company, a.contact_name AS advertiser_contact,
+    a.email AS advertiser_email, a.phone AS advertiser_phone, c.campaign_name, c.campaign_objective,
+    c.bidding_strategy, c.bid_amount, c.daily_budget, c.total_budget, c.spent_amount,
+    c.impressions_count, c.clicks_count, c.conversions_count,
+    CASE WHEN c.impressions_count > 0 THEN ROUND((c.clicks_count::NUMERIC/c.impressions_count)*100,4) ELSE 0 END AS ctr_percent,
+    c.status, c.start_date, c.end_date, c.target_property_types, c.target_locations,
+    c.created_at, c.updated_at, c.deleted_at, c.deleted_by_user, c.deletion_reason,
+    CASE WHEN c.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_deleted
+FROM ad_campaigns c LEFT JOIN advertisers a ON a.id = c.advertiser_id;
+
+CREATE VIEW admin_all_creatives WITH (security_invoker = off)
+AS
+SELECT cr.id, cr.campaign_id, c.campaign_name, c.advertiser_id, a.company_name AS advertiser_company,
+    a.email AS advertiser_email, cr.ad_format, cr.headline, cr.description, cr.call_to_action,
+    cr.image_url, cr.logo_url, cr.landing_url, cr.video_url, cr.media_type,
+    cr.status, cr.is_approved, cr.impressions, cr.clicks, cr.rejection_reason,
+    cr.reviewed_by, cr.reviewed_at, cr.created_at, cr.deleted_at, cr.deleted_by_user, cr.deletion_reason,
+    CASE WHEN cr.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_deleted
+FROM ad_creatives cr
+LEFT JOIN ad_campaigns c ON c.id = cr.campaign_id
+LEFT JOIN advertisers  a ON a.id = c.advertiser_id;
+
+CREATE VIEW admin_all_subscriptions WITH (security_invoker = off)
+AS
+SELECT s.id, s.user_id, up.full_name AS user_full_name, au.email AS user_email, up.phone AS user_phone,
+    st.name AS tier_name, st.price AS tier_price, s.status, s.started_at, s.expires_at, s.auto_renew,
+    s.payment_provider_id, s.cancelled_at, s.cancelled_by, s.cancellation_reason,
+    EXTRACT(YEAR  FROM s.started_at)::INT AS subscription_year,
+    EXTRACT(MONTH FROM s.started_at)::INT AS subscription_month,
+    EXTRACT(DAY FROM (COALESCE(s.cancelled_at, s.expires_at) - s.started_at))::INT AS active_days,
+    s.created_at
+FROM user_subscriptions s
+LEFT JOIN user_profiles   up ON up.id    = s.user_id
+LEFT JOIN auth.users      au ON au.id    = s.user_id
+LEFT JOIN subscription_tiers st ON st.id = s.tier_id;
+
+CREATE VIEW admin_ad_revenue_summary WITH (security_invoker = off)
+AS
+SELECT DATE_TRUNC('month', ai.viewed_at)::DATE AS revenue_month,
+    a.company_name AS advertiser, a.email AS advertiser_email, c.campaign_name, c.bidding_strategy,
+    COUNT(ai.id) AS impressions, COALESCE(SUM(ai.cost),0) AS impression_revenue_tzs,
+    COUNT(ac.id) AS clicks,      COALESCE(SUM(ac.cost),0) AS click_revenue_tzs,
+    COALESCE(SUM(ai.cost),0) + COALESCE(SUM(ac.cost),0) AS total_revenue_tzs,
+    CASE WHEN c.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS campaign_deleted
+FROM ad_impressions ai
+LEFT JOIN ad_clicks    ac ON ac.impression_id = ai.id
+LEFT JOIN ad_campaigns  c ON c.id = ai.campaign_id
+LEFT JOIN advertisers   a ON a.id = ai.advertiser_id
+GROUP BY DATE_TRUNC('month', ai.viewed_at)::DATE, a.company_name, a.email, c.campaign_name, c.bidding_strategy, c.deleted_at
+ORDER BY revenue_month DESC, total_revenue_tzs DESC;
+
+CREATE VIEW admin_subscription_revenue_summary WITH (security_invoker = off)
+AS
+SELECT DATE_TRUNC('month', s.started_at)::DATE AS revenue_month,
+    st.name AS tier, st.price AS tier_price_usd,
+    COUNT(s.id) AS new_subscriptions,
+    COUNT(s.id) * st.price AS gross_revenue_usd,
+    COUNT(s.cancelled_at) FILTER (WHERE s.cancelled_at IS NOT NULL) AS cancellations,
+    COUNT(s.id) FILTER (WHERE s.status='active') AS currently_active
+FROM user_subscriptions s JOIN subscription_tiers st ON st.id = s.tier_id
+GROUP BY DATE_TRUNC('month', s.started_at)::DATE, st.name, st.price
+ORDER BY revenue_month DESC, tier;
+
+CREATE VIEW admin_pending_review WITH (security_invoker = off)
+AS
+SELECT cr.id, cr.campaign_id, c.campaign_name, c.advertiser_id,
+    a.company_name AS advertiser_company, a.email AS advertiser_email,
+    cr.ad_format, cr.headline, cr.description, cr.call_to_action,
+    cr.image_url, cr.logo_url, cr.landing_url, cr.video_url, cr.media_type,
+    cr.status, cr.is_approved,
+    cr.ai_approved, cr.ai_confidence, cr.ai_category, cr.ai_reviewed_at,
+    cr.created_at, cr.deleted_at, cr.deletion_reason,
+    c.total_budget, c.daily_budget, c.start_date, c.end_date,
+    a.contact_name, a.phone AS advertiser_phone
+FROM ad_creatives cr
+LEFT JOIN ad_campaigns c ON c.id = cr.campaign_id
+LEFT JOIN advertisers  a ON a.id = c.advertiser_id
+WHERE cr.is_approved = FALSE AND cr.deleted_at IS NULL AND cr.status NOT IN ('rejected','archived')
+ORDER BY cr.created_at ASC;
+
+-- Convenience view: manual review queue items with time-waiting info
+-- Used by AdminManualReviewScreen to list items needing human decision
+CREATE VIEW admin_pending_manual_reviews WITH (security_invoker = off)
+AS
+SELECT
+    mrq.id,
+    mrq.content_type,
+    mrq.content_data,
+    mrq.submitted_by,
+    u.email  AS submitter_email,
+    up.full_name AS submitter_name,
+    mrq.status,
+    mrq.reviewed_by,
+    mrq.review_note,
+    mrq.reviewed_at,
+    mrq.created_at,
+    EXTRACT(EPOCH FROM (NOW() - mrq.created_at)) / 3600 AS hours_waiting
+FROM manual_review_queue mrq
+LEFT JOIN auth.users  u  ON u.id  = mrq.submitted_by
+LEFT JOIN user_profiles up ON up.id = mrq.submitted_by
+WHERE mrq.status = 'pending'
+ORDER BY mrq.created_at ASC;
+
+CREATE VIEW admin_dashboard_stats WITH (security_invoker = off)
+AS
+SELECT
+    (SELECT COUNT(*) FROM auth.users)                                          AS total_users,
+    (SELECT COUNT(*) FROM auth.users WHERE created_at > NOW()-INTERVAL '30 days') AS new_users_30d,
+    (SELECT COUNT(*) FROM user_profiles WHERE is_active=TRUE)                  AS active_users,
+    (SELECT COUNT(*) FROM user_profiles WHERE role IN ('admin','super_admin','moderator')) AS total_admins,
+    (SELECT COUNT(*) FROM advertisers)                                          AS total_advertisers,
+    (SELECT COUNT(*) FROM ad_campaigns WHERE status='running')                  AS active_campaigns,
+    (SELECT COUNT(*) FROM ad_creatives WHERE is_approved=FALSE AND status!='rejected' AND deleted_at IS NULL) AS pending_ads,
+    (SELECT COUNT(*) FROM manual_review_queue WHERE status='pending')                   AS pending_manual_reviews,
+    (SELECT COALESCE(SUM(account_balance),0) FROM advertisers)                  AS total_advertiser_balance,
+    (SELECT COALESCE(SUM(total_spent),0) FROM advertisers)                      AS total_ad_revenue,
+    (SELECT COUNT(*) FROM admin_activity_log WHERE created_at > NOW()-INTERVAL '24 hours') AS admin_actions_24h,
+    (SELECT COUNT(*) FROM properties WHERE deleted_at IS NULL)                  AS total_properties,
+    (SELECT COUNT(*) FROM user_subscriptions WHERE status='active')             AS active_subscriptions;
+
+-- ============================================================================
+-- PART 7: ADMIN FUNCTIONS (final patched versions with correct UUID target_id,
+--         admin_email/admin_role populated, full exception handling)
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS admin_soft_delete_property_with_notify(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_restore_property_with_notify(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_soft_delete_property(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_restore_property(UUID,UUID);
+DROP FUNCTION IF EXISTS admin_soft_delete_creative(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_restore_creative(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_ban_user_with_notify(UUID,UUID,TEXT);
+DROP FUNCTION IF EXISTS admin_unban_user_with_notify(UUID,UUID);
+DROP FUNCTION IF EXISTS admin_send_notification(UUID,UUID,TEXT,TEXT,TEXT,JSONB);
+DROP FUNCTION IF EXISTS admin_feature_property(UUID,UUID,BOOLEAN);
+DROP FUNCTION IF EXISTS admin_verify_property(UUID,UUID,BOOLEAN);
+DROP FUNCTION IF EXISTS admin_delete_property_media(UUID,UUID,TEXT,TEXT);
+DROP FUNCTION IF EXISTS get_admin_archive_stats();
+DROP FUNCTION IF EXISTS get_admin_deleted_campaigns(INT,INT);
+DROP FUNCTION IF EXISTS get_admin_cancelled_subscriptions(INT,INT);
+
+CREATE FUNCTION admin_soft_delete_property_with_notify(p_property_id UUID, p_admin_id UUID, p_reason TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_owner_id UUID; v_title TEXT; v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    SELECT owner_id, title INTO v_owner_id, v_title FROM properties WHERE id = p_property_id;
+    IF v_owner_id IS NULL THEN RETURN jsonb_build_object('success',false,'error','Property not found'); END IF;
+    IF (SELECT deleted_at FROM properties WHERE id=p_property_id) IS NOT NULL THEN
+        RETURN jsonb_build_object('success',false,'error','Property is already deleted'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE properties SET deleted_at=NOW(), deleted_by_admin=p_admin_id, deletion_reason=p_reason,
+        status='deleted', updated_at=NOW() WHERE id=p_property_id;
+    INSERT INTO user_notifications (user_id, type, title, message, data, is_read, created_at)
+    VALUES (v_owner_id,'property_deleted','Your property has been removed',
+        CASE WHEN p_reason IS NOT NULL AND p_reason<>'' THEN 'Your property "'||v_title||'" has been removed. Reason: '||p_reason
+             ELSE 'Your property "'||v_title||'" has been removed by an administrator.' END,
+        jsonb_build_object('property_id',p_property_id,'reason',p_reason,'action','property_deleted'), FALSE, NOW())
+    RETURNING id INTO v_notif_id;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata,created_at)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'admin_delete_property','property',p_property_id,
+        'Deleted property: '||v_title, jsonb_build_object('reason',p_reason,'owner_id',v_owner_id,'notification_id',v_notif_id), NOW());
+    RETURN jsonb_build_object('success',true,'message','Property deleted and owner notified','notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM,'detail',SQLSTATE);
+END; $$;
+
+CREATE FUNCTION admin_restore_property_with_notify(p_property_id UUID, p_admin_id UUID, p_note TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_owner_id UUID; v_title TEXT; v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    SELECT owner_id, title INTO v_owner_id, v_title FROM properties WHERE id=p_property_id;
+    IF v_owner_id IS NULL THEN RETURN jsonb_build_object('success',false,'error','Property not found'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    -- Clear ALL delete flags regardless of whether user or admin deleted it
+    UPDATE properties SET
+        deleted_at       = NULL,
+        deleted_by_admin = NULL,
+        deleted_by_user  = FALSE,
+        deletion_reason  = NULL,
+        status           = 'available',
+        updated_at       = NOW()
+    WHERE id=p_property_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (v_owner_id,'property_restored','✅ Your property has been restored',
+        'Your property "'||v_title||'" has been restored by an administrator and is now visible again.'||COALESCE(' Note: '||p_note,''),
+        jsonb_build_object('property_id',p_property_id,'action','property_restored'), FALSE, NOW())
+    RETURNING id INTO v_notif_id;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata,created_at)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'admin_restore_property','property',p_property_id,
+        'Restored property: '||v_title, jsonb_build_object('note',p_note,'owner_id',v_owner_id), NOW());
+    RETURN jsonb_build_object('success',true,'message','Property restored and owner notified','notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM,'detail',SQLSTATE);
+END; $$;
+
+CREATE FUNCTION admin_soft_delete_property(p_property_id UUID, p_admin_id UUID, p_reason TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN RETURN admin_soft_delete_property_with_notify(p_property_id,p_admin_id,p_reason); END; $$;
+
+CREATE FUNCTION admin_restore_property(p_property_id UUID, p_admin_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN RETURN admin_restore_property_with_notify(p_property_id,p_admin_id,'Reinstated by admin'); END; $$;
+
+CREATE FUNCTION admin_soft_delete_creative(p_creative_id UUID, p_admin_id UUID, p_reason TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_advertiser_id UUID; v_headline TEXT; v_campaign_id UUID; v_campaign_name TEXT;
+        v_user_id UUID; v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    SELECT ac.headline, ac.campaign_id, camp.campaign_name, camp.advertiser_id
+    INTO v_headline, v_campaign_id, v_campaign_name, v_advertiser_id
+    FROM ad_creatives ac JOIN ad_campaigns camp ON camp.id=ac.campaign_id WHERE ac.id=p_creative_id;
+    IF v_headline IS NULL THEN RETURN jsonb_build_object('success',false,'error','Ad creative not found'); END IF;
+    IF (SELECT deleted_at FROM ad_creatives WHERE id=p_creative_id) IS NOT NULL THEN
+        RETURN jsonb_build_object('success',false,'error','Ad is already deleted'); END IF;
+    SELECT user_id INTO v_user_id FROM advertisers WHERE id=v_advertiser_id;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE ad_creatives SET deleted_at=NOW(), deletion_reason=p_reason, status='archived',
+        is_approved=FALSE, updated_at=NOW() WHERE id=p_creative_id;
+    UPDATE ad_campaigns SET status='paused', updated_at=NOW() WHERE id=v_campaign_id
+        AND NOT EXISTS (SELECT 1 FROM ad_creatives WHERE campaign_id=v_campaign_id AND deleted_at IS NULL AND status IN ('active','paused'));
+    IF v_user_id IS NOT NULL THEN
+        INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+        VALUES (v_user_id,'ad_removed','Your ad has been removed',
+            CASE WHEN p_reason IS NOT NULL AND p_reason<>'' THEN 'Your ad "'||v_headline||'" removed. Reason: '||p_reason
+                 ELSE 'Your ad "'||v_headline||'" has been removed by an administrator.' END,
+            jsonb_build_object('creative_id',p_creative_id,'campaign_id',v_campaign_id,'reason',p_reason,'action','ad_removed'),
+            FALSE, NOW()) RETURNING id INTO v_notif_id;
+    END IF;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata,created_at)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'delete_creative','ad_creative',p_creative_id,
+        'Deleted ad: '||v_headline, jsonb_build_object('reason',p_reason,'campaign_id',v_campaign_id,'notification_id',v_notif_id), NOW());
+    RETURN jsonb_build_object('success',true,'message','Ad removed and advertiser notified','notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM,'detail',SQLSTATE);
+END; $$;
+
+CREATE FUNCTION admin_restore_creative(p_creative_id UUID, p_admin_id UUID, p_note TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_advertiser_id UUID; v_headline TEXT; v_campaign_id UUID; v_campaign_name TEXT;
+        v_user_id UUID; v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    SELECT ac.headline, ac.campaign_id, camp.campaign_name, camp.advertiser_id
+    INTO v_headline, v_campaign_id, v_campaign_name, v_advertiser_id
+    FROM ad_creatives ac JOIN ad_campaigns camp ON camp.id=ac.campaign_id WHERE ac.id=p_creative_id;
+    IF v_headline IS NULL THEN RETURN jsonb_build_object('success',false,'error','Ad creative not found'); END IF;
+    SELECT user_id INTO v_user_id FROM advertisers WHERE id=v_advertiser_id;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE ad_creatives SET deleted_at=NULL, deletion_reason=NULL, restored_at=NOW(),
+        status='paused', is_approved=FALSE, updated_at=NOW() WHERE id=p_creative_id;
+    IF v_user_id IS NOT NULL THEN
+        INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+        VALUES (v_user_id,'ad_restored','✅ Your ad has been reinstated',
+            'Your ad "'||v_headline||'" has been reinstated and is pending review.'||COALESCE(' Note: '||p_note,''),
+            jsonb_build_object('creative_id',p_creative_id,'campaign_id',v_campaign_id,'action','ad_restored'),
+            FALSE, NOW()) RETURNING id INTO v_notif_id;
+    END IF;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata,created_at)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'restore_creative','ad_creative',p_creative_id,
+        'Restored ad: '||v_headline, jsonb_build_object('note',p_note,'campaign_id',v_campaign_id), NOW());
+    RETURN jsonb_build_object('success',true,'message','Ad restored. Pending review.','notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM,'detail',SQLSTATE);
+END; $$;
+
+CREATE FUNCTION admin_ban_user_with_notify(p_user_id UUID, p_admin_id UUID, p_reason TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    IF NOT is_admin(p_admin_id) THEN RETURN jsonb_build_object('success',false,'error','Not authorized'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE user_profiles SET is_active=FALSE, deactivated_at=NOW(), deactivation_reason=p_reason, updated_at=NOW() WHERE id=p_user_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (p_user_id,'account_banned','Your account has been suspended',
+        'Your account has been suspended. Reason: '||COALESCE(p_reason,'Policy violation')||'. Contact support if this is an error.',
+        jsonb_build_object('reason',p_reason,'admin_id',p_admin_id,'action','account_banned'), FALSE, NOW()) RETURNING id INTO v_notif_id;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'ban_user','user',p_user_id,
+        COALESCE(p_reason,'User banned'), jsonb_build_object('reason',p_reason,'notification_id',v_notif_id));
+    RETURN jsonb_build_object('success',true,'notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION admin_unban_user_with_notify(p_user_id UUID, p_admin_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    IF NOT is_admin(p_admin_id) THEN RETURN jsonb_build_object('success',false,'error','Not authorized'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE user_profiles SET is_active=TRUE, deactivated_at=NULL, deactivation_reason=NULL, updated_at=NOW() WHERE id=p_user_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (p_user_id,'account_unbanned','✅ Your account has been reinstated',
+        'Your account has been reinstated. You can now log in normally.',
+        jsonb_build_object('admin_id',p_admin_id,'action','account_unbanned'), FALSE, NOW()) RETURNING id INTO v_notif_id;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'unban_user','user',p_user_id,'User unbanned');
+    RETURN jsonb_build_object('success',true,'notification_sent',v_notif_id IS NOT NULL);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION admin_send_notification(p_admin_id UUID, p_user_id UUID, p_type TEXT, p_title TEXT, p_message TEXT, p_data JSONB DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_admin_email TEXT; v_admin_role TEXT; v_notif_id UUID;
+BEGIN
+    IF NOT is_admin(p_admin_id) THEN RETURN jsonb_build_object('success',false,'error','Not authorized'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (p_user_id,p_type,p_title,p_message,COALESCE(p_data,'{}'::JSONB),FALSE,NOW()) RETURNING id INTO v_notif_id;
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'send_notification','user',p_user_id,'Sent: '||p_title);
+    RETURN jsonb_build_object('success',true,'notification_id',v_notif_id);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION admin_feature_property(p_property_id UUID, p_admin_id UUID, p_featured BOOLEAN)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_prop properties%ROWTYPE; v_admin_email TEXT; v_admin_role TEXT;
+BEGIN
+    SELECT * INTO v_prop FROM properties WHERE id=p_property_id AND deleted_at IS NULL;
+    IF NOT FOUND THEN RETURN jsonb_build_object('success',false,'error','Property not found'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE properties SET is_featured=p_featured, updated_at=NOW() WHERE id=p_property_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (v_prop.owner_id,
+        CASE WHEN p_featured THEN 'property_featured' ELSE 'property_unfeatured' END,
+        CASE WHEN p_featured THEN '🌟 Your property is now featured!' ELSE 'Property feature removed' END,
+        CASE WHEN p_featured THEN 'Your listing "'||v_prop.title||'" has been featured!'
+             ELSE 'Your listing "'||v_prop.title||'" is no longer featured.' END,
+        jsonb_build_object('property_id',p_property_id,'is_featured',p_featured), FALSE, NOW());
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,
+        CASE WHEN p_featured THEN 'feature_property' ELSE 'unfeature_property' END,
+        'property',p_property_id,
+        CASE WHEN p_featured THEN 'Property featured' ELSE 'Property unfeatured' END);
+    RETURN jsonb_build_object('success',true);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION admin_verify_property(p_property_id UUID, p_admin_id UUID, p_verified BOOLEAN)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_prop properties%ROWTYPE; v_admin_email TEXT; v_admin_role TEXT;
+BEGIN
+    SELECT * INTO v_prop FROM properties WHERE id=p_property_id AND deleted_at IS NULL;
+    IF NOT FOUND THEN RETURN jsonb_build_object('success',false,'error','Property not found'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE properties SET is_verified=p_verified, moderated_by=p_admin_id, moderated_at=NOW(), updated_at=NOW() WHERE id=p_property_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (v_prop.owner_id,
+        CASE WHEN p_verified THEN 'property_verified' ELSE 'property_unverified' END,
+        CASE WHEN p_verified THEN '✅ Property verified!' ELSE 'Property verification removed' END,
+        CASE WHEN p_verified THEN 'Your listing "'||v_prop.title||'" has been verified!'
+             ELSE 'The verified status for "'||v_prop.title||'" has been removed.' END,
+        jsonb_build_object('property_id',p_property_id,'is_verified',p_verified), FALSE, NOW());
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,
+        CASE WHEN p_verified THEN 'verify_property' ELSE 'unverify_property' END,
+        'property',p_property_id,
+        CASE WHEN p_verified THEN 'Property verified' ELSE 'Property unverified' END);
+    RETURN jsonb_build_object('success',true);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION admin_delete_property_media(p_property_id UUID, p_admin_id UUID, p_media_url TEXT, p_reason TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_prop properties%ROWTYPE; v_admin_email TEXT; v_admin_role TEXT;
+BEGIN
+    SELECT * INTO v_prop FROM properties WHERE id=p_property_id;
+    IF NOT FOUND THEN RETURN jsonb_build_object('success',false,'error','Property not found'); END IF;
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id=p_admin_id;
+    SELECT COALESCE(role,'admin') INTO v_admin_role FROM user_profiles WHERE id=p_admin_id;
+    UPDATE properties SET
+        images     = array_remove(COALESCE(images,'{}'),p_media_url),
+        videos     = array_remove(COALESCE(videos,'{}'),p_media_url),
+        media_urls = array_remove(COALESCE(media_urls,'{}'),p_media_url),
+        updated_at = NOW()
+    WHERE id=p_property_id;
+    INSERT INTO user_notifications (user_id,type,title,message,data,is_read,created_at)
+    VALUES (v_prop.owner_id,'property_media_removed','Media removed from your listing',
+        'A photo/video was removed from "'||v_prop.title||'". Reason: '||COALESCE(p_reason,'Policy violation'),
+        jsonb_build_object('property_id',p_property_id,'media_url',p_media_url,'reason',p_reason), FALSE, NOW());
+    INSERT INTO admin_activity_log (admin_id,admin_email,admin_role,action,target_type,target_id,description,metadata)
+    VALUES (p_admin_id,v_admin_email,v_admin_role,'delete_property_media','property',p_property_id,
+        COALESCE(p_reason,'Media removed'), jsonb_build_object('media_url',p_media_url));
+    RETURN jsonb_build_object('success',true);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END; $$;
+
+CREATE FUNCTION get_admin_archive_stats()
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_result JSONB;
+BEGIN
+    SELECT jsonb_build_object(
+        'total_accounts',          (SELECT COUNT(*) FROM auth.users),
+        'active_accounts',         (SELECT COUNT(*) FROM user_profiles WHERE is_active=TRUE AND deleted_at IS NULL),
+        'deactivated_accounts',    (SELECT COUNT(*) FROM user_profiles WHERE is_active=FALSE),
+        'deleted_accounts',        (SELECT COUNT(*) FROM user_profiles WHERE deleted_at IS NOT NULL),
+        'total_subscriptions',     (SELECT COUNT(*) FROM user_subscriptions),
+        'active_subscriptions',    (SELECT COUNT(*) FROM user_subscriptions WHERE status='active'),
+        'cancelled_subscriptions', (SELECT COUNT(*) FROM user_subscriptions WHERE status='cancelled'),
+        'expired_subscriptions',   (SELECT COUNT(*) FROM user_subscriptions WHERE status='expired'),
+        'total_properties',        (SELECT COUNT(*) FROM properties),
+        'active_properties',       (SELECT COUNT(*) FROM properties WHERE deleted_at IS NULL),
+        'deleted_properties',      (SELECT COUNT(*) FROM properties WHERE deleted_at IS NOT NULL),
+        'total_campaigns',         (SELECT COUNT(*) FROM ad_campaigns),
+        'active_campaigns',        (SELECT COUNT(*) FROM ad_campaigns WHERE status='running' AND deleted_at IS NULL),
+        'deleted_campaigns',       (SELECT COUNT(*) FROM ad_campaigns WHERE deleted_at IS NOT NULL),
+        'total_creatives',         (SELECT COUNT(*) FROM ad_creatives),
+        'deleted_creatives',       (SELECT COUNT(*) FROM ad_creatives WHERE deleted_at IS NOT NULL),
+        'pending_approval',        (SELECT COUNT(*) FROM ad_creatives WHERE is_approved=FALSE AND deleted_at IS NULL AND status!='rejected'),
+        'total_impression_revenue_tzs', (SELECT COALESCE(SUM(cost),0) FROM ad_impressions),
+        'total_click_revenue_tzs',      (SELECT COALESCE(SUM(cost),0) FROM ad_clicks)
+    ) INTO v_result;
+    RETURN v_result;
+END; $$;
+
+CREATE FUNCTION get_admin_deleted_campaigns(p_limit INT DEFAULT 50, p_offset INT DEFAULT 0)
+RETURNS TABLE (id UUID, advertiser_company TEXT, advertiser_email TEXT, campaign_name TEXT,
+    total_budget NUMERIC, spent_amount NUMERIC, impressions_count INT, clicks_count INT,
+    status TEXT, deleted_at TIMESTAMPTZ, deletion_reason TEXT, created_at TIMESTAMPTZ)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    RETURN QUERY
+    SELECT c.id, a.company_name, a.email, c.campaign_name, c.total_budget, c.spent_amount,
+        c.impressions_count, c.clicks_count, c.status, c.deleted_at, c.deletion_reason, c.created_at
+    FROM ad_campaigns c LEFT JOIN advertisers a ON a.id=c.advertiser_id
+    WHERE c.deleted_at IS NOT NULL ORDER BY c.deleted_at DESC LIMIT p_limit OFFSET p_offset;
+END; $$;
+
+CREATE FUNCTION get_admin_cancelled_subscriptions(p_limit INT DEFAULT 50, p_offset INT DEFAULT 0)
+RETURNS TABLE (id UUID, user_email TEXT, user_full_name TEXT, tier_name TEXT, tier_price NUMERIC,
+    started_at TIMESTAMPTZ, cancelled_at TIMESTAMPTZ, cancellation_reason TEXT, active_days INT)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    RETURN QUERY
+    SELECT s.id, au.email, up.full_name, st.name, st.price, s.started_at, s.cancelled_at,
+        s.cancellation_reason, EXTRACT(DAY FROM (s.cancelled_at-s.started_at))::INT
+    FROM user_subscriptions s
+    JOIN subscription_tiers st ON st.id=s.tier_id
+    LEFT JOIN user_profiles up ON up.id=s.user_id
+    LEFT JOIN auth.users    au ON au.id=s.user_id
+    WHERE s.status='cancelled' ORDER BY s.cancelled_at DESC LIMIT p_limit OFFSET p_offset;
+END; $$;
+
+-- ============================================================================
+-- PART 8: RLS
+-- ============================================================================
+-- NOTE: user_profiles RLS was already applied at the TOP of this file
+-- (Priority Zero block) to guarantee it runs even if later statements fail.
+-- We only need to handle admin_activity_log and other tables here.
+
+ALTER TABLE user_profiles      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_activity_log ENABLE ROW LEVEL SECURITY;
+
+-- Verify user_profiles has exactly the correct policies (re-apply if somehow missing)
+DO $$
+DECLARE
+    pol RECORD;
+BEGIN
+    -- Only recreate if the safe policy is somehow missing
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'user_profiles'
+        AND policyname = 'Public can view user profiles'
+        AND schemaname = 'public'
+    ) THEN
+        -- Nuke everything and reapply
+        FOR pol IN SELECT policyname FROM pg_policies WHERE tablename='user_profiles' AND schemaname='public'
+        LOOP
+            EXECUTE format('DROP POLICY IF EXISTS %I ON public.user_profiles', pol.policyname);
+        END LOOP;
+        CREATE POLICY "Public can view user profiles" ON public.user_profiles FOR SELECT TO public USING (TRUE);
+        CREATE POLICY "Users can update own profile"  ON public.user_profiles FOR UPDATE TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+        CREATE POLICY "Users can insert own profile"  ON public.user_profiles FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+        CREATE POLICY "Service role full access"      ON public.user_profiles FOR ALL   TO service_role  USING (TRUE) WITH CHECK (TRUE);
+        RAISE NOTICE 'Re-applied user_profiles RLS policies';
+    ELSE
+        RAISE NOTICE '✅ user_profiles RLS policies already in place';
+    END IF;
+END $$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ADMIN_ACTIVITY_LOG POLICIES
+-- ════════════════════════════════════════════════════════════════════════════
+
+DROP POLICY IF EXISTS "Admins can view logs"   ON admin_activity_log;
+DROP POLICY IF EXISTS "System can insert logs" ON admin_activity_log;
+
+CREATE POLICY "Admins can view logs" ON admin_activity_log FOR SELECT
+    USING (is_admin(auth.uid()));
+CREATE POLICY "System can insert logs" ON admin_activity_log FOR INSERT
+    WITH CHECK (TRUE);
+
+-- Property visibility: non-deleted visible to public; owners see their own; admins see all
+ALTER TABLE properties ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public can view non-deleted properties"                   ON properties;
+DROP POLICY IF EXISTS "Owners can view their own properties including deleted"   ON properties;
+DROP POLICY IF EXISTS "Admins can view all properties"                           ON properties;
+DROP POLICY IF EXISTS "Admins can update any property"                           ON properties;
+DROP POLICY IF EXISTS "Service role bypasses properties RLS"                     ON properties;
+DROP POLICY IF EXISTS "Owners can create their own properties"                   ON properties;
+DROP POLICY IF EXISTS "Owners can update their own properties"                   ON properties;
+
+-- service_role (used by SECURITY DEFINER functions and Edge Functions) must
+-- see ALL rows including soft-deleted ones for admin operations to work.
+CREATE POLICY "Service role bypasses properties RLS"
+    ON properties FOR ALL
+    USING (auth.role() = 'service_role');
+
+CREATE POLICY "Public can view non-deleted properties"
+    ON properties FOR SELECT USING (deleted_at IS NULL);
+CREATE POLICY "Owners can view their own properties including deleted"
+    ON properties FOR SELECT USING (auth.uid() = owner_id);
+CREATE POLICY "Admins can view all properties"
+    ON properties FOR SELECT USING (is_admin(auth.uid()));
+
+-- Owners can create their own listings
+CREATE POLICY "Owners can create their own properties"
+    ON properties FOR INSERT
+    WITH CHECK (auth.uid() = owner_id);
+
+-- Owners can edit their own non-deleted listings; admins can edit any
+CREATE POLICY "Owners can update their own properties"
+    ON properties FOR UPDATE
+    USING (auth.uid() = owner_id AND deleted_at IS NULL)
+    WITH CHECK (auth.uid() = owner_id);
+
+CREATE POLICY "Admins can update any property"
+    ON properties FOR UPDATE USING (is_admin(auth.uid()));
+
+-- ============================================================================
+-- GUEST MODE: users table public read access
+-- Allows unauthenticated (anon) users to see property owner names & avatars
+-- when browsing listings. Safe — only exposes what's already shown on listings.
+-- Works for: Android, iOS, Web, PWA (all use the same Supabase anon key).
+-- ============================================================================
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+-- Drop and recreate idempotently so re-runs are safe
+DROP POLICY IF EXISTS "Public can view users" ON public.users;
+
+CREATE POLICY "Public can view users"
+    ON public.users FOR SELECT
+    TO public
+    USING (TRUE);
+
+-- Admin RLS for ads and user management (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='ad_creatives' AND policyname='Admins can view all creatives') THEN
+        CREATE POLICY "Admins can view all creatives" ON ad_creatives FOR SELECT USING (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='ad_creatives' AND policyname='Admins can update any creative') THEN
+        CREATE POLICY "Admins can update any creative" ON ad_creatives FOR UPDATE USING (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='ad_campaigns' AND policyname='Admins can view all campaigns') THEN
+        CREATE POLICY "Admins can view all campaigns" ON ad_campaigns FOR SELECT USING (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='ad_campaigns' AND policyname='Admins can update any campaign') THEN
+        CREATE POLICY "Admins can update any campaign" ON ad_campaigns FOR UPDATE USING (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='advertisers' AND policyname='Admins can view all advertisers') THEN
+        CREATE POLICY "Admins can view all advertisers" ON advertisers FOR SELECT USING (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='user_notifications' AND policyname='Admins can insert notifications') THEN
+        CREATE POLICY "Admins can insert notifications" ON user_notifications FOR INSERT WITH CHECK (is_admin(auth.uid())); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='user_notifications' AND policyname='Admins can view all notifications') THEN
+        CREATE POLICY "Admins can view all notifications" ON user_notifications FOR SELECT USING (is_admin(auth.uid())); END IF;
+END $$;
+
+-- ============================================================================
+-- PART 9: GRANTS
+-- ============================================================================
+
+GRANT USAGE ON SCHEMA public TO authenticated, anon, public;
+GRANT SELECT ON user_profiles       TO authenticated, anon, public;
+GRANT INSERT, UPDATE ON user_profiles TO authenticated;
+-- Guest mode: allow unauthenticated (anon) users to read public user info
+-- needed for property owner names/avatars to appear for browsing guests
+GRANT SELECT ON public.users        TO anon;
+GRANT SELECT ON admin_activity_log  TO authenticated;
+
+GRANT SELECT ON admin_all_accounts                 TO authenticated, service_role;
+GRANT SELECT ON admin_all_properties               TO authenticated, service_role;
+GRANT SELECT ON admin_active_properties            TO authenticated, service_role;
+GRANT SELECT ON admin_all_campaigns                TO authenticated, service_role;
+GRANT SELECT ON admin_all_creatives                TO authenticated, service_role;
+GRANT SELECT ON admin_all_subscriptions            TO authenticated, service_role;
+GRANT SELECT ON admin_ad_revenue_summary           TO authenticated, service_role;
+GRANT SELECT ON admin_subscription_revenue_summary TO authenticated, service_role;
+GRANT SELECT ON admin_pending_review               TO authenticated, service_role;
+GRANT SELECT ON admin_pending_manual_reviews       TO authenticated, service_role;
+GRANT SELECT ON admin_dashboard_stats              TO authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE ON properties     TO authenticated;
+GRANT SELECT, UPDATE ON ad_creatives   TO authenticated;
+GRANT SELECT, UPDATE ON ad_campaigns   TO authenticated;
+GRANT SELECT         ON advertisers    TO authenticated;
+GRANT INSERT, SELECT ON user_notifications  TO authenticated;
+GRANT INSERT, SELECT ON admin_activity_log  TO authenticated;
+
+GRANT EXECUTE ON FUNCTION is_admin(UUID)                                          TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION is_super_admin(UUID)                                    TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION get_user_role(UUID)                                     TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION has_permission(UUID,TEXT)                               TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION log_admin_action(UUID,TEXT,TEXT,UUID,TEXT,JSONB)        TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_soft_delete_property_with_notify(UUID,UUID,TEXT)  TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_restore_property_with_notify(UUID,UUID,TEXT)      TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_soft_delete_property(UUID,UUID,TEXT)              TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_restore_property(UUID,UUID)                       TO authenticated;
+
+-- ── USER SELF-DELETE PROPERTY ─────────────────────────────────────────────────
+-- Called by the app when a property owner deletes their own listing.
+-- Sets deleted_by_user=TRUE so admins can distinguish user-initiated deletes
+-- from admin-initiated deletes and filter them separately in the dashboard.
+DROP FUNCTION IF EXISTS user_delete_property(UUID);
+CREATE FUNCTION user_delete_property(p_property_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    v_user_id UUID := auth.uid();
+    v_prop    properties%ROWTYPE;
+BEGIN
+    SELECT * INTO v_prop FROM properties WHERE id = p_property_id;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Property not found');
+    END IF;
+    IF v_prop.owner_id != v_user_id THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Not authorized');
+    END IF;
+    IF v_prop.deleted_at IS NOT NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Property already deleted');
+    END IF;
+    UPDATE properties SET
+        deleted_at      = NOW(),
+        deleted_by_user = TRUE,
+        status          = 'deleted',
+        updated_at      = NOW()
+    WHERE id = p_property_id;
+    RETURN jsonb_build_object('success', true, 'message', 'Property deleted');
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION user_delete_property(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_soft_delete_creative(UUID,UUID,TEXT)              TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_restore_creative(UUID,UUID,TEXT)                  TO authenticated;
+
+-- ============================================================================
+-- ADMIN AD CREATIVE APPROVE / REJECT
+-- ============================================================================
+DROP FUNCTION IF EXISTS admin_approve_creative(UUID, UUID);
+DROP FUNCTION IF EXISTS admin_reject_creative(UUID, UUID, TEXT);
+
+CREATE FUNCTION admin_approve_creative(
+    p_creative_id UUID,
+    p_admin_id    UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+    v_headline      TEXT;
+    v_campaign_id   UUID;
+    v_advertiser_id UUID;
+    v_user_id       UUID;
+    v_admin_email   TEXT;
+    v_admin_role    TEXT;
+BEGIN
+    IF NOT is_admin(p_admin_id) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Not authorized');
+    END IF;
+
+    SELECT cr.headline, cr.campaign_id, c.advertiser_id
+    INTO   v_headline, v_campaign_id, v_advertiser_id
+    FROM   ad_creatives cr
+    JOIN   ad_campaigns  c ON c.id = cr.campaign_id
+    WHERE  cr.id = p_creative_id AND cr.deleted_at IS NULL;
+
+    IF v_headline IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Creative not found');
+    END IF;
+
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id = p_admin_id;
+    SELECT COALESCE(role,'admin')         INTO v_admin_role  FROM user_profiles WHERE id = p_admin_id;
+    SELECT user_id INTO v_user_id FROM advertisers WHERE id = v_advertiser_id;
+
+    -- Approve creative and set active in one statement
+    UPDATE ad_creatives
+    SET    is_approved = TRUE,
+           status      = 'active',
+           updated_at  = NOW()
+    WHERE  id = p_creative_id;
+
+    -- Start the campaign immediately (no status restriction)
+    UPDATE ad_campaigns
+    SET    status     = 'running',
+           updated_at = NOW()
+    WHERE  id         = v_campaign_id
+      AND  deleted_at IS NULL;
+
+    -- Notify advertiser
+    IF v_user_id IS NOT NULL THEN
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read, created_at)
+        VALUES (v_user_id, 'ad_approved', '✅ Your ad has been approved',
+            'Your ad "' || v_headline || '" has been approved and is now live!',
+            jsonb_build_object('creative_id', p_creative_id, 'campaign_id', v_campaign_id, 'action', 'ad_approved'),
+            FALSE, NOW());
+    END IF;
+
+    INSERT INTO admin_activity_log (admin_id, admin_email, admin_role, action, target_type, target_id, description)
+    VALUES (p_admin_id, v_admin_email, v_admin_role, 'approve_creative', 'ad_creative', p_creative_id,
+            'Approved ad: ' || v_headline);
+
+    RETURN jsonb_build_object('success', true, 'message', 'Ad approved and now live');
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$$;
+
+CREATE FUNCTION admin_reject_creative(
+    p_creative_id UUID,
+    p_admin_id    UUID,
+    p_reason      TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+    v_headline      TEXT;
+    v_campaign_id   UUID;
+    v_advertiser_id UUID;
+    v_user_id       UUID;
+    v_admin_email   TEXT;
+    v_admin_role    TEXT;
+BEGIN
+    IF NOT is_admin(p_admin_id) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Not authorized');
+    END IF;
+
+    SELECT cr.headline, cr.campaign_id, c.advertiser_id
+    INTO   v_headline, v_campaign_id, v_advertiser_id
+    FROM   ad_creatives cr
+    JOIN   ad_campaigns  c ON c.id = cr.campaign_id
+    WHERE  cr.id = p_creative_id AND cr.deleted_at IS NULL;
+
+    IF v_headline IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Creative not found');
+    END IF;
+
+    SELECT COALESCE(email,'admin@system') INTO v_admin_email FROM auth.users WHERE id = p_admin_id;
+    SELECT COALESCE(role,'admin')         INTO v_admin_role  FROM user_profiles WHERE id = p_admin_id;
+    SELECT user_id INTO v_user_id FROM advertisers WHERE id = v_advertiser_id;
+
+    UPDATE ad_creatives
+    SET    is_approved      = FALSE,
+           status           = 'rejected',
+           rejection_reason = p_reason,
+           updated_at       = NOW()
+    WHERE  id = p_creative_id;
+
+    IF v_user_id IS NOT NULL THEN
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read, created_at)
+        VALUES (v_user_id, 'ad_rejected', 'Your ad was not approved',
+            'Your ad "' || v_headline || '" was not approved.' || COALESCE(' Reason: ' || p_reason, ''),
+            jsonb_build_object('creative_id', p_creative_id, 'reason', p_reason, 'action', 'ad_rejected'),
+            FALSE, NOW());
+    END IF;
+
+    INSERT INTO admin_activity_log (admin_id, admin_email, admin_role, action, target_type, target_id, description)
+    VALUES (p_admin_id, v_admin_email, v_admin_role, 'reject_creative', 'ad_creative', p_creative_id,
+            'Rejected ad: ' || v_headline || COALESCE('. Reason: ' || p_reason, ''));
+
+    RETURN jsonb_build_object('success', true, 'message', 'Ad rejected');
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('success', false, 'error', SQLERRM);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION admin_approve_creative(UUID, UUID)      TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_reject_creative(UUID, UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_ban_user_with_notify(UUID,UUID,TEXT)              TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_unban_user_with_notify(UUID,UUID)                 TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_send_notification(UUID,UUID,TEXT,TEXT,TEXT,JSONB) TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_feature_property(UUID,UUID,BOOLEAN)               TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_verify_property(UUID,UUID,BOOLEAN)                TO authenticated;
+GRANT EXECUTE ON FUNCTION admin_delete_property_media(UUID,UUID,TEXT,TEXT)        TO authenticated;
+GRANT EXECUTE ON FUNCTION get_admin_archive_stats()                               TO authenticated;
+GRANT EXECUTE ON FUNCTION get_admin_deleted_campaigns(INT,INT)                    TO authenticated;
+GRANT EXECUTE ON FUNCTION get_admin_cancelled_subscriptions(INT,INT)              TO authenticated;
+GRANT EXECUTE ON FUNCTION cancel_user_subscription(UUID,UUID,TEXT)                TO authenticated;
+
+-- ============================================================================
+-- PART 10: PROPERTIES_WITH_TIER VIEW
+-- Used by the Flutter app's PropertyRemoteDataSource to order listings by
+-- owner subscription tier (pro → basic → free) without a function-in-select.
+-- Depends on: properties, user_subscriptions, subscription_tiers (all above).
+-- ============================================================================
+
+DROP VIEW IF EXISTS properties_with_tier;
+
+CREATE VIEW properties_with_tier WITH (security_invoker = off) AS
+SELECT
+    p.*,
+    CASE
+        WHEN st.name = 'pro' THEN 1
+        ELSE                      2   -- free or no active subscription
+    END AS owner_tier_rank
+FROM properties p
+LEFT JOIN user_subscriptions us
+    ON  us.user_id = p.owner_id
+    AND us.status  = 'active'
+LEFT JOIN subscription_tiers st
+    ON  st.id = us.tier_id;
+
+GRANT SELECT ON properties_with_tier TO authenticated, anon, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- PART 11: PROPERTY_LIST_VIEW (APP'S MAIN VIEW)
+-- Optimized view for property list queries - returns only thumbnail instead
+-- of full images array to reduce bandwidth by 80%+
+-- ============================================================================
+
+DROP VIEW IF EXISTS property_list_view CASCADE;
+
+-- ── Weighted-recency boost ────────────────────────────────────────────────────
+-- Pro listings receive a 7-day virtual age bonus so they surface higher than
+-- Free listings of the same real age — but without dominating every page.
+--
+-- Ranking examples:
+--   Pro  created today       → boost_score = NOW() + 7 days  (ranks #1)
+--   Free created today       → boost_score = NOW()            (ranks after fresh Pro)
+--   Pro  created 6 days ago  → boost_score = NOW() + 1 day   (still above fresh Free)
+--   Pro  created 8 days ago  → boost_score = NOW() - 1 day   (fresh Free beats this)
+--   Free created 3 days ago  → boost_score = NOW() - 3 days
+--
+-- App orders by: .order('boost_score', ascending: false)
+-- Result: Pro properties appear prominently but don't bury Free listings forever.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE VIEW property_list_view WITH (security_invoker = off) AS
+SELECT
+    p.id,
+    p.title,
+    p.description,
+    p.price,
+    p.type,
+    p.category,
+    p.location,
+    p.latitude,
+    p.longitude,
+    p.bedrooms,
+    p.bathrooms,
+    p.area,
+    p.images[1]              AS thumbnail_url,
+    array_length(p.images,1) AS total_images,
+    p.owner_id,
+    p.status,
+    p.is_featured,
+    p.views_count,
+    p.created_at,
+    p.updated_at,
+    CASE WHEN st.name = 'pro' THEN 1 ELSE 2 END AS owner_tier_rank,
+    -- Weighted recency: Pro gets +7 days, Free gets +0.
+    -- Order by this DESC to get fair interleaving instead of all-Pro-first.
+    p.created_at + CASE
+        WHEN st.name = 'pro' THEN INTERVAL '7 days'
+        ELSE                       INTERVAL '0'
+    END                      AS boost_score,
+    p.images,
+    p.videos,
+    p.property_type,
+    p.deleted_at,
+    COALESCE(up.full_name, au.email, 'Unknown Owner') AS owner_name,
+    up.avatar_url            AS owner_avatar,
+    p.rent_duration
+FROM       properties        p
+LEFT JOIN  user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'
+LEFT JOIN  subscription_tiers st ON st.id = us.tier_id
+LEFT JOIN  user_profiles      up ON up.id = p.owner_id
+LEFT JOIN  auth.users         au ON au.id = p.owner_id;
+
+GRANT SELECT ON property_list_view TO authenticated, anon, service_role;
+
+
+
+-- ============================================================================
+-- PART X: CONTENT APPEALS
+-- Users can appeal a rejected listing or ad. Admins resolve via admin screen.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS content_appeals (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    content_type     TEXT        NOT NULL CHECK (content_type IN ('property','ad')),
+    content_id       TEXT        NOT NULL,
+    submitted_by     UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    rejection_reason TEXT        NOT NULL,
+    user_message     TEXT        DEFAULT '',
+    status           TEXT        NOT NULL DEFAULT 'pending'
+                                 CHECK (status IN ('pending','approved','rejected')),
+    reviewed_by      UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    admin_note       TEXT,
+    reviewed_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_appeals_status      ON content_appeals(status);
+CREATE INDEX IF NOT EXISTS idx_appeals_type        ON content_appeals(content_type);
+CREATE INDEX IF NOT EXISTS idx_appeals_user        ON content_appeals(submitted_by);
+CREATE INDEX IF NOT EXISTS idx_appeals_created     ON content_appeals(created_at DESC);
+
+COMMENT ON TABLE content_appeals IS 'User appeals for AI-rejected listings and ads. Admins review in admin panel.';
+
+ALTER TABLE content_appeals ENABLE ROW LEVEL SECURITY;
+
+-- Users can submit appeals and see their own
+DROP POLICY IF EXISTS "Users can submit appeals"    ON content_appeals;
+DROP POLICY IF EXISTS "Users can view own appeals"  ON content_appeals;
+DROP POLICY IF EXISTS "Admins manage all appeals"   ON content_appeals;
+
+CREATE POLICY "Users can submit appeals"
+    ON content_appeals FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() = submitted_by);
+
+CREATE POLICY "Users can view own appeals"
+    ON content_appeals FOR SELECT TO authenticated
+    USING (auth.uid() = submitted_by OR is_admin(auth.uid()));
+
+CREATE POLICY "Admins manage all appeals"
+    ON content_appeals FOR UPDATE TO authenticated
+    USING (is_admin(auth.uid()));
+
+-- ============================================================================
+-- VERIFICATION
+-- ============================================================================
+DO $$
+DECLARE v_profiles INT; v_super_admin TEXT; v_view_exists BOOLEAN;
+        v_list_view_exists BOOLEAN; v_has_videos BOOLEAN; v_has_images BOOLEAN;
+        v_guest_users_grant BOOLEAN; v_guest_users_policy BOOLEAN;
+        v_guest_props_policy BOOLEAN;
+BEGIN
+    SELECT COUNT(*) INTO v_profiles FROM user_profiles;
+    SELECT u.email INTO v_super_admin FROM auth.users u JOIN user_profiles p ON p.id=u.id WHERE p.role='super_admin' LIMIT 1;
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.views
+        WHERE table_schema = 'public' AND table_name = 'properties_with_tier'
+    ) INTO v_view_exists;
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.views
+        WHERE table_schema = 'public' AND table_name = 'property_list_view'
+    ) INTO v_list_view_exists;
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'properties' AND column_name = 'videos'
+    ) INTO v_has_videos;
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'properties' AND column_name = 'images'
+    ) INTO v_has_images;
+
+    -- Guest mode checks
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'users'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_guest_users_grant;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'users' AND schemaname = 'public'
+          AND policyname = 'Public can view users'
+    ) INTO v_guest_users_policy;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'properties' AND schemaname = 'public'
+          AND policyname = 'Public can view non-deleted properties'
+    ) INTO v_guest_props_policy;
+
+    RAISE NOTICE '=== FILE 4: ADMIN & RBAC SYSTEM COMPLETE ===';
+    RAISE NOTICE '  Profiles: %  Super admin: %', v_profiles, COALESCE(v_super_admin,'None yet');
+    RAISE NOTICE '  properties_with_tier view: %', CASE WHEN v_view_exists THEN '✅ created' ELSE '❌ missing' END;
+    RAISE NOTICE '  property_list_view (app): %', CASE WHEN v_list_view_exists THEN '✅ created' ELSE '❌ missing' END;
+    RAISE NOTICE '  properties.images column: %  properties.videos column: %',
+        CASE WHEN v_has_images THEN '✅' ELSE '❌' END,
+        CASE WHEN v_has_videos THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  content_appeals table: %',
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'content_appeals') THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '--- GUEST MODE (Android/iOS/Web/PWA) ---';
+    RAISE NOTICE '  anon SELECT on users table    : %', CASE WHEN v_guest_users_grant  THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  Public policy on users        : %', CASE WHEN v_guest_users_policy THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  Public policy on properties   : %', CASE WHEN v_guest_props_policy THEN '✅' ELSE '❌' END;
+    IF v_list_view_exists THEN
+        RAISE NOTICE '✅ YOUR APP WILL NOW WORK - BOTH VIEWS CREATED!';
+    ELSE
+        RAISE WARNING '❌ property_list_view missing - app will fail!';
+    END IF;
+    IF NOT (v_guest_users_grant AND v_guest_users_policy AND v_guest_props_policy) THEN
+        RAISE WARNING '⚠️  Guest mode incomplete — check the GUEST MODE section above.';
+    END IF;
+END $$;
+
+-- ============================================================================
+-- EXTENSION D: PROPERTY REPORTS, CONTACT REQUESTS & MORTGAGE INQUIRIES
+-- (Appended to sql9 — runs after admin RBAC above)
+-- ============================================================================
+
+-- ── Property Reports (fake, spam, wrong price etc.) ───────────────────────────
+CREATE TABLE IF NOT EXISTS property_reports (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    reported_by UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    reason      TEXT        NOT NULL
+                    CHECK (reason IN ('fake','wrong_price','wrong_location',
+                                      'already_sold','spam','offensive','other')),
+    description TEXT,
+    status      TEXT        DEFAULT 'pending'
+                    CHECK (status IN ('pending','reviewed','dismissed','actioned')),
+    reviewed_by UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(reported_by, property_id)
+);
+CREATE INDEX IF NOT EXISTS idx_property_reports_property ON property_reports(property_id);
+CREATE INDEX IF NOT EXISTS idx_property_reports_status   ON property_reports(status);
+
+ALTER TABLE property_reports ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users insert own reports"   ON property_reports;
+DROP POLICY IF EXISTS "Users view own reports"     ON property_reports;
+DROP POLICY IF EXISTS "Admins manage all reports"  ON property_reports;
+CREATE POLICY "Users insert own reports"  ON property_reports FOR INSERT
+    WITH CHECK (auth.uid() = reported_by);
+CREATE POLICY "Users view own reports"    ON property_reports FOR SELECT
+    USING (auth.uid() = reported_by);
+CREATE POLICY "Admins manage all reports" ON property_reports FOR ALL USING (
+    EXISTS (SELECT 1 FROM user_profiles WHERE id = auth.uid() AND role IN ('admin','super_admin')));
+
+-- ── Contact Requests (track WhatsApp/call/message/email contacts) ─────────────
+CREATE TABLE IF NOT EXISTS contact_requests (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id  UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    requester_id UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    owner_id     UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    method       TEXT        NOT NULL
+                     CHECK (method IN ('whatsapp','call','message','email')),
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_requests_property ON contact_requests(property_id);
+CREATE INDEX IF NOT EXISTS idx_contact_requests_owner    ON contact_requests(owner_id);
+
+ALTER TABLE contact_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users insert contact requests" ON contact_requests;
+DROP POLICY IF EXISTS "Owners view own contacts"      ON contact_requests;
+CREATE POLICY "Users insert contact requests" ON contact_requests FOR INSERT
+    WITH CHECK (auth.uid() = requester_id OR requester_id IS NULL);
+CREATE POLICY "Owners view own contacts" ON contact_requests FOR SELECT
+    USING (auth.uid() = owner_id);
+
+-- ── Mortgage Inquiries (save calculator results) ──────────────────────────────
+CREATE TABLE IF NOT EXISTS mortgage_inquiries (
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    property_id       UUID        REFERENCES properties(id) ON DELETE SET NULL,
+    property_price    DECIMAL(15,2) NOT NULL,
+    down_payment_pct  DECIMAL(5,2) NOT NULL DEFAULT 20,
+    interest_rate     DECIMAL(5,2) NOT NULL DEFAULT 12,
+    term_years        INTEGER      NOT NULL DEFAULT 15,
+    monthly_payment   DECIMAL(15,2) NOT NULL,
+    total_cost        DECIMAL(15,2) NOT NULL,
+    created_at        TIMESTAMPTZ  DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mortgage_inquiries_user     ON mortgage_inquiries(user_id);
+CREATE INDEX IF NOT EXISTS idx_mortgage_inquiries_property ON mortgage_inquiries(property_id);
+
+ALTER TABLE mortgage_inquiries ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own mortgage inquiries" ON mortgage_inquiries;
+CREATE POLICY "Users manage own mortgage inquiries" ON mortgage_inquiries
+    USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- ── Price Change Tracking + Notification Trigger ──────────────────────────────
+CREATE TABLE IF NOT EXISTS property_price_changes (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    old_price   DECIMAL(15,2) NOT NULL,
+    new_price   DECIMAL(15,2) NOT NULL,
+    change_pct  DECIMAL(8,4)  GENERATED ALWAYS AS (
+                    CASE WHEN old_price > 0
+                         THEN ((new_price - old_price) / old_price) * 100
+                         ELSE 0 END) STORED,
+    changed_by  UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_price_changes_property ON property_price_changes(property_id);
+
+-- Trigger: on price drop → insert price_change row + notify favorited users
+CREATE OR REPLACE FUNCTION handle_property_price_change()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    -- Only trigger on actual price decrease
+    IF NEW.price >= OLD.price THEN RETURN NEW; END IF;
+
+    -- Record the price change
+    INSERT INTO property_price_changes(property_id, old_price, new_price, changed_by)
+    VALUES (NEW.id, OLD.price, NEW.price, auth.uid());
+
+    -- Notify all users who favorited this property
+    INSERT INTO user_notifications(user_id, type, title, message, data)
+    SELECT
+        f.user_id,
+        'price_drop',
+        'Price Drop on ' || NEW.title,
+        'Price dropped from TSh ' || OLD.price::BIGINT::TEXT ||
+        ' to TSh ' || NEW.price::BIGINT::TEXT || ' — save ' ||
+        ABS(((NEW.price - OLD.price) / OLD.price * 100))::INT::TEXT || '%!',
+        jsonb_build_object('property_id', NEW.id, 'old_price', OLD.price, 'new_price', NEW.price)
+    FROM favorites f
+    WHERE f.property_id = NEW.id
+      AND f.user_id != auth.uid()
+    ON CONFLICT DO NOTHING;
+
+    RETURN NEW;
+END $$;
+
+-- Attach trigger (idempotent: drop first then recreate)
+DROP TRIGGER IF EXISTS trg_property_price_drop ON properties;
+CREATE TRIGGER trg_property_price_drop
+    AFTER UPDATE OF price ON properties
+    FOR EACH ROW EXECUTE FUNCTION handle_property_price_change();
+
+DO $$ BEGIN RAISE NOTICE 'sql9 Extension D: property_reports, contact_requests, mortgage_inquiries, price_change_trigger — DONE'; END $$;
+
+-- ============================================================================
+-- PART 12: PROPERTY REPORTS & AD REPORTS
+-- Allows users (auth + guest) to flag suspicious/scam listings and ads.
+-- Admin is notified when a threshold is reached.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS property_reports (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id  UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    reporter_id  UUID,       -- nullable: guests report without auth
+    reason       TEXT        NOT NULL CHECK (reason IN ('scam','wrong_info','duplicate','inappropriate','other')),
+    description  TEXT,
+    status       TEXT        NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending','reviewed','dismissed')),
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_property_reports_property ON property_reports(property_id);
+CREATE INDEX IF NOT EXISTS idx_property_reports_status   ON property_reports(status);
+CREATE INDEX IF NOT EXISTS idx_property_reports_reporter ON property_reports(reporter_id);
+
+CREATE TABLE IF NOT EXISTS ad_reports (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    creative_id  UUID        NOT NULL REFERENCES ad_creatives(id) ON DELETE CASCADE,
+    campaign_id  UUID        NOT NULL REFERENCES ad_campaigns(id) ON DELETE CASCADE,
+    reporter_id  UUID,
+    reason       TEXT        NOT NULL CHECK (reason IN ('scam','misleading','inappropriate','spam','other')),
+    description  TEXT,
+    status       TEXT        NOT NULL DEFAULT 'pending'
+                             CHECK (status IN ('pending','reviewed','dismissed')),
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ad_reports_creative  ON ad_reports(creative_id);
+CREATE INDEX IF NOT EXISTS idx_ad_reports_status    ON ad_reports(status);
+CREATE INDEX IF NOT EXISTS idx_ad_reports_reporter  ON ad_reports(reporter_id);
+
+-- RLS
+ALTER TABLE property_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ad_reports        ENABLE ROW LEVEL SECURITY;
+
+-- Anyone (anon + authenticated) can submit a report
+DROP POLICY IF EXISTS "Anyone can report a property" ON property_reports;
+CREATE POLICY "Anyone can report a property"
+    ON property_reports FOR INSERT TO authenticated, anon WITH CHECK (TRUE);
+
+DROP POLICY IF EXISTS "Anyone can report an ad" ON ad_reports;
+CREATE POLICY "Anyone can report an ad"
+    ON ad_reports FOR INSERT TO authenticated, anon WITH CHECK (TRUE);
+
+-- Admins can read/update all reports
+DROP POLICY IF EXISTS "Admins view property reports"  ON property_reports;
+CREATE POLICY "Admins view property reports"
+    ON property_reports FOR SELECT USING (is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Admins update property reports" ON property_reports;
+CREATE POLICY "Admins update property reports"
+    ON property_reports FOR UPDATE USING (is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Admins view ad reports"  ON ad_reports;
+CREATE POLICY "Admins view ad reports"
+    ON ad_reports FOR SELECT USING (is_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Admins update ad reports" ON ad_reports;
+CREATE POLICY "Admins update ad reports"
+    ON ad_reports FOR UPDATE USING (is_admin(auth.uid()));
+
+-- ── RPC: report_property ─────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION report_property(
+    p_property_id  UUID,
+    p_reporter_id  UUID    DEFAULT NULL,
+    p_reason       TEXT    DEFAULT 'other',
+    p_description  TEXT    DEFAULT NULL
+)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    v_report_count   INT;
+    v_admin_id       UUID;
+    v_property_title TEXT;
+BEGIN
+    -- Prevent duplicate reports from the same user within 24 hours
+    IF p_reporter_id IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM property_reports
+            WHERE  property_id = p_property_id
+              AND  reporter_id = p_reporter_id
+              AND  created_at >= NOW() - INTERVAL '24 hours'
+        ) THEN
+            RETURN jsonb_build_object('success', FALSE, 'message', 'already_reported');
+        END IF;
+    END IF;
+
+    INSERT INTO property_reports (property_id, reporter_id, reason, description)
+    VALUES (p_property_id, p_reporter_id, p_reason, p_description);
+
+    -- Count pending reports for this property
+    SELECT COUNT(*) INTO v_report_count
+    FROM   property_reports
+    WHERE  property_id = p_property_id AND status = 'pending';
+
+    -- Notify admin at every multiple of 5 reports
+    IF v_report_count >= 5 AND v_report_count % 5 = 0 THEN
+        SELECT title INTO v_property_title FROM properties WHERE id = p_property_id;
+        SELECT id    INTO v_admin_id       FROM user_profiles WHERE role = 'admin' LIMIT 1;
+
+        IF v_admin_id IS NOT NULL THEN
+            INSERT INTO user_notifications (user_id, type, title, message, data)
+            VALUES (
+                v_admin_id,
+                'property_report_threshold',
+                '🚨 Property Flagged',
+                '"' || COALESCE(v_property_title, 'Unknown') || '" has received '
+                    || v_report_count || ' reports and needs review.',
+                jsonb_build_object(
+                    'property_id',  p_property_id,
+                    'report_count', v_report_count
+                )
+            );
+        END IF;
+    END IF;
+
+    RETURN jsonb_build_object('success', TRUE, 'report_count', v_report_count);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION report_property(UUID, UUID, TEXT, TEXT) TO authenticated, anon;
+
+-- ── RPC: report_ad ───────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION report_ad(
+    p_creative_id  UUID,
+    p_campaign_id  UUID,
+    p_reporter_id  UUID    DEFAULT NULL,
+    p_reason       TEXT    DEFAULT 'other',
+    p_description  TEXT    DEFAULT NULL
+)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    v_report_count INT;
+    v_admin_id     UUID;
+    v_headline     TEXT;
+BEGIN
+    -- Prevent duplicate reports from same user within 24 hours
+    IF p_reporter_id IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM ad_reports
+            WHERE  creative_id = p_creative_id
+              AND  reporter_id = p_reporter_id
+              AND  created_at >= NOW() - INTERVAL '24 hours'
+        ) THEN
+            RETURN jsonb_build_object('success', FALSE, 'message', 'already_reported');
+        END IF;
+    END IF;
+
+    INSERT INTO ad_reports (creative_id, campaign_id, reporter_id, reason, description)
+    VALUES (p_creative_id, p_campaign_id, p_reporter_id, p_reason, p_description);
+
+    SELECT COUNT(*) INTO v_report_count
+    FROM   ad_reports
+    WHERE  creative_id = p_creative_id AND status = 'pending';
+
+    -- Notify admin at every multiple of 3 reports (ads have lower threshold)
+    IF v_report_count >= 3 AND v_report_count % 3 = 0 THEN
+        SELECT headline INTO v_headline  FROM ad_creatives WHERE id = p_creative_id;
+        SELECT id       INTO v_admin_id  FROM user_profiles WHERE role = 'admin' LIMIT 1;
+
+        IF v_admin_id IS NOT NULL THEN
+            INSERT INTO user_notifications (user_id, type, title, message, data)
+            VALUES (
+                v_admin_id,
+                'ad_report_threshold',
+                '🚨 Ad Flagged',
+                'Ad "' || COALESCE(v_headline, 'Unknown') || '" has '
+                    || v_report_count || ' reports and needs review.',
+                jsonb_build_object(
+                    'creative_id',  p_creative_id,
+                    'campaign_id',  p_campaign_id,
+                    'report_count', v_report_count
+                )
+            );
+        END IF;
+    END IF;
+
+    RETURN jsonb_build_object('success', TRUE, 'report_count', v_report_count);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION report_ad(UUID, UUID, UUID, TEXT, TEXT) TO authenticated, anon;
+
+-- ============================================================================
+-- PART 14: COUNTRY SUPPORT
+-- Add country to users and properties, rebuild property_list_view
+-- ============================================================================
+
+-- Add country to the users profile table (nullable — existing users have NULL until they set it)
+ALTER TABLE users      ADD COLUMN IF NOT EXISTS country TEXT;
+
+-- Add country to the properties table (nullable — existing listings default to NULL = "unspecified")
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS country TEXT;
+
+-- Index for fast country filtering on the main listing query
+CREATE INDEX IF NOT EXISTS idx_properties_country ON properties(country);
+
+-- Rebuild property_list_view to include the country column.
+-- Must DROP first because adding a column to a view requires CREATE OR REPLACE
+-- with the exact same column list — safest to just recreate.
+DROP VIEW IF EXISTS property_list_view CASCADE;
+
+CREATE VIEW property_list_view WITH (security_invoker = off) AS
+SELECT
+    p.id,
+    p.title,
+    p.description,
+    p.price,
+    p.type,
+    p.category,
+    p.location,
+    p.latitude,
+    p.longitude,
+    p.bedrooms,
+    p.bathrooms,
+    p.area,
+    p.images[1]              AS thumbnail_url,
+    array_length(p.images,1) AS total_images,
+    p.owner_id,
+    p.status,
+    p.is_featured,
+    p.views_count,
+    p.created_at,
+    p.updated_at,
+    CASE WHEN st.name = 'pro' THEN 1 ELSE 2 END AS owner_tier_rank,
+    -- Weighted recency: Pro gets +7 days, Free gets +0.
+    p.created_at + CASE
+        WHEN st.name = 'pro' THEN INTERVAL '7 days'
+        ELSE                       INTERVAL '0'
+    END                      AS boost_score,
+    p.images,
+    p.videos,
+    p.property_type,
+    p.deleted_at,
+    COALESCE(up.full_name, au.email, 'Unknown Owner') AS owner_name,
+    up.avatar_url            AS owner_avatar,
+    p.rent_duration,
+    p.country                                          -- NEW: country filter support
+FROM       properties        p
+LEFT JOIN  user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'
+LEFT JOIN  subscription_tiers st ON st.id = us.tier_id
+LEFT JOIN  user_profiles      up ON up.id = p.owner_id
+LEFT JOIN  auth.users         au ON au.id = p.owner_id;
+
+GRANT SELECT ON property_list_view TO authenticated, anon, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- PART 15: CROSS-COUNTRY AD TARGETING
+-- Allows Tanzania advertisers to target specific East African countries.
+-- Empty target_countries = all countries (widest reach).
+-- ============================================================================
+
+-- Add target_countries column to ad_campaigns
+ALTER TABLE ad_campaigns
+  ADD COLUMN IF NOT EXISTS target_countries TEXT[] DEFAULT '{}';
+
+COMMENT ON COLUMN ad_campaigns.target_countries IS
+  'ISO 3166-1 alpha-2 codes. Empty array = all East African countries.';
+
+-- Drop old RPC (all signatures) and recreate with country filter
+DROP FUNCTION IF EXISTS get_eligible_ads(UUID,TEXT,UUID,INT,TEXT,TEXT)       CASCADE;
+DROP FUNCTION IF EXISTS get_eligible_ads(UUID,TEXT,UUID,INT,TEXT,TEXT,TEXT)  CASCADE;
+
+CREATE OR REPLACE FUNCTION get_eligible_ads(
+    p_user_id             UUID,
+    p_screen_name         TEXT    DEFAULT 'property_list',
+    p_property_id         UUID    DEFAULT NULL,
+    p_limit               INT     DEFAULT 5,
+    p_user_region         TEXT    DEFAULT NULL,
+    p_user_property_type  TEXT    DEFAULT NULL,
+    p_user_country        TEXT    DEFAULT NULL
+)
+RETURNS SETOF JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'campaign_id',       c.id,
+        'creative_id',       cr.id,
+        'advertiser_id',     c.advertiser_id,
+        'headline',          cr.headline,
+        'description',       cr.description,
+        'call_to_action',    cr.call_to_action,
+        'image_url',         cr.image_url,
+        'logo_url',          cr.logo_url,
+        'landing_url',       cr.landing_url,
+        'bid_amount',        c.bid_amount,
+        'bidding_strategy',  c.bidding_strategy,
+        'media_type',        COALESCE(cr.media_type, 'image'),
+        'video_url',         cr.video_url,
+        'destination_type',   COALESCE(cr.destination_type, 'website'),
+        'advertiser_user_id',  a.user_id,
+        'linked_property_id', cr.linked_property_id
+    )
+    FROM  ad_campaigns c
+    JOIN  ad_creatives  cr ON cr.campaign_id = c.id
+    JOIN  advertisers   a  ON a.id = c.advertiser_id
+    WHERE
+        -- ── Core eligibility ──────────────────────────────────────────────
+        c.status         = 'running'
+        AND c.deleted_at    IS NULL
+        AND cr.deleted_at   IS NULL
+        AND cr.is_approved  = TRUE
+        AND cr.status       = 'active'
+        AND c.start_date   <= NOW()
+        AND c.end_date     >= NOW()
+
+        -- ── Total budget not exhausted ─────────────────────────────────────
+        AND c.spent_amount < c.total_budget
+
+        -- ── Daily budget not exhausted ─────────────────────────────────────
+        AND (
+            SELECT COALESCE(SUM(i.cost), 0)
+            FROM   ad_impressions i
+            WHERE  i.campaign_id = c.id
+              AND  i.created_at >= CURRENT_DATE::TIMESTAMPTZ
+        ) < c.daily_budget
+
+        -- ── Country targeting ──────────────────────────────────────────────
+        -- Empty array = targets all countries.
+        -- If campaign has countries set, user's country must match.
+        -- Unknown user country (NULL) → show the ad (benefit of doubt).
+        AND (
+            cardinality(c.target_countries) = 0
+            OR c.target_countries IS NULL
+            OR p_user_country IS NULL
+            OR p_user_country = ANY(c.target_countries)
+        )
+
+        -- ── Location targeting ─────────────────────────────────────────────
+        -- Empty array or NULL = target whole Tanzania (no restriction).
+        -- If user region is unknown (NULL), show the ad.
+        AND (
+            c.target_locations = '[]'::JSONB
+            OR  c.target_locations IS NULL
+            OR  p_user_region IS NULL
+            OR  c.target_locations @> to_jsonb(p_user_region::TEXT)
+        )
+
+        -- ── Property type targeting ────────────────────────────────────────
+        AND (
+            c.target_property_types = '[]'::JSONB
+            OR  c.target_property_types IS NULL
+            OR  p_user_property_type IS NULL
+            OR  c.target_property_types @> to_jsonb(p_user_property_type::TEXT)
+        )
+
+        -- ── Frequency cap ─────────────────────────────────────────────────
+        AND NOT EXISTS (
+            SELECT 1
+            FROM   ad_impressions fi
+            WHERE  fi.creative_id = cr.id
+              AND  fi.user_id     = p_user_id
+              AND  fi.created_at >= CURRENT_DATE::TIMESTAMPTZ
+        )
+
+    ORDER BY RANDOM() * c.bid_amount DESC
+    LIMIT p_limit;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_eligible_ads(UUID,TEXT,UUID,INT,TEXT,TEXT,TEXT) TO authenticated, anon;
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- PART 17: REFUND SYSTEM
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS refund_requests (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    advertiser_id UUID NOT NULL REFERENCES advertisers(id) ON DELETE CASCADE,
+    campaign_id   UUID REFERENCES ad_campaigns(id) ON DELETE SET NULL,
+    amount        NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    phone         TEXT,
+    reason        TEXT,
+    type          TEXT NOT NULL DEFAULT 'cash'
+                      CHECK (type IN ('cash', 'balance')),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'approved', 'paid', 'rejected')),
+    admin_notes   TEXT,
+    requested_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at  TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_refund_requests_advertiser
+    ON refund_requests(advertiser_id);
+
+ALTER TABLE refund_requests ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "advertisers_own_refunds" ON refund_requests;
+CREATE POLICY "advertisers_own_refunds" ON refund_requests
+    FOR ALL USING (
+        advertiser_id IN (
+            SELECT id FROM advertisers WHERE user_id = auth.uid()
+        )
+    );
+
+DROP POLICY IF EXISTS "service_role_refunds" ON refund_requests;
+CREATE POLICY "service_role_refunds" ON refund_requests
+    FOR ALL TO service_role USING (true);
+
+GRANT SELECT, INSERT ON refund_requests TO authenticated;
+GRANT ALL ON refund_requests TO service_role;
+
+-- ── RPC: instant wallet credit refund ────────────────────────────────────────
+CREATE OR REPLACE FUNCTION request_balance_refund(
+    p_advertiser_id UUID,
+    p_campaign_id   UUID,
+    p_amount        NUMERIC
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_refund_id UUID;
+    v_unspent   NUMERIC;
+BEGIN
+    -- Verify unspent budget
+    SELECT (total_budget - spent_amount) INTO v_unspent
+    FROM   ad_campaigns
+    WHERE  id = p_campaign_id AND advertiser_id = p_advertiser_id;
+
+    IF v_unspent IS NULL THEN
+        RAISE EXCEPTION 'Campaign not found or does not belong to this advertiser';
+    END IF;
+
+    IF p_amount > v_unspent + 0.01 THEN
+        RAISE EXCEPTION 'Refund amount (%) exceeds unspent budget (%)',
+            p_amount, v_unspent;
+    END IF;
+
+    -- Record the refund as immediately paid
+    INSERT INTO refund_requests
+        (advertiser_id, campaign_id, amount, type, status, processed_at)
+    VALUES
+        (p_advertiser_id, p_campaign_id, p_amount, 'balance', 'paid', NOW())
+    RETURNING id INTO v_refund_id;
+
+    -- Credit back to advertiser wallet
+    UPDATE advertisers
+    SET    account_balance = account_balance + p_amount,
+           updated_at      = NOW()
+    WHERE  id = p_advertiser_id;
+
+    -- Shrink campaign total_budget so future impressions can't overspend
+    UPDATE ad_campaigns
+    SET    total_budget = GREATEST(spent_amount, total_budget - p_amount),
+           updated_at   = NOW()
+    WHERE  id = p_campaign_id;
+
+    RETURN v_refund_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION request_balance_refund(UUID, UUID, NUMERIC)
+    TO authenticated;
+
+-- ── RPC: cash refund request (admin processes manually via Selcom) ────────────
+CREATE OR REPLACE FUNCTION request_cash_refund(
+    p_advertiser_id UUID,
+    p_campaign_id   UUID,
+    p_amount        NUMERIC,
+    p_phone         TEXT,
+    p_reason        TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_refund_id UUID;
+    v_unspent   NUMERIC;
+BEGIN
+    SELECT (total_budget - spent_amount) INTO v_unspent
+    FROM   ad_campaigns
+    WHERE  id = p_campaign_id AND advertiser_id = p_advertiser_id;
+
+    IF v_unspent IS NULL THEN
+        RAISE EXCEPTION 'Campaign not found or does not belong to this advertiser';
+    END IF;
+
+    IF p_amount > v_unspent + 0.01 THEN
+        RAISE EXCEPTION 'Refund amount (%) exceeds unspent budget (%)',
+            p_amount, v_unspent;
+    END IF;
+
+    INSERT INTO refund_requests
+        (advertiser_id, campaign_id, amount, phone, reason, type, status)
+    VALUES
+        (p_advertiser_id, p_campaign_id, p_amount, p_phone, p_reason, 'cash', 'pending')
+    RETURNING id INTO v_refund_id;
+
+    RETURN v_refund_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION request_cash_refund(UUID, UUID, NUMERIC, TEXT, TEXT)
+    TO authenticated;
+
+NOTIFY pgrst, 'reload schema';

@@ -408,6 +408,45 @@ _SettingsTile(
       return;
     }
 
+    // Block non-TZ users — Selcom (ad funding) is Tanzania-only
+    const _kSelcomCountries = {'TZ'};
+    const _kCountryNames = {
+      'KE': 'Kenya', 'UG': 'Uganda', 'RW': 'Rwanda',
+      'ET': 'Ethiopia', 'BI': 'Burundi', 'MZ': 'Mozambique',
+      'ZM': 'Zambia', 'ZW': 'Zimbabwe',
+    };
+    final userCountry = user.country;
+    if (userCountry != null &&
+        userCountry.isNotEmpty &&
+        !_kSelcomCountries.contains(userCountry)) {
+      final countryName = _kCountryNames[userCountry] ?? userCountry;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Text('🌍', style: TextStyle(fontSize: 24)),
+              SizedBox(width: 8),
+              Text('Coming Soon'),
+            ],
+          ),
+          content: Text(
+            'The Advertiser Dashboard is currently available in Tanzania only '
+            'because ad funding requires Selcom.\n\n'
+            '$countryName support is on our roadmap — '
+            'we\'ll notify you when it\'s available in your region.',
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Got it'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     // Navigate with error handling
     try {
       await Navigator.push(

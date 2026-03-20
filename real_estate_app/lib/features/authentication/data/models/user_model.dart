@@ -17,6 +17,7 @@ class UserModel extends UserEntity {
     super.showPhone = true,
     required super.userType,
     required super.createdAt,
+    super.country,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
@@ -31,9 +32,10 @@ class UserModel extends UserEntity {
         showEmail: json['show_email'] as bool? ?? true,
         showPhone: json['show_phone'] as bool? ?? true,
         userType: _userTypeFromString(json['user_type'] as String? ?? 'buyer'),
-        createdAt: json['created_at'] != null 
+        createdAt: json['created_at'] != null
             ? DateTime.parse(json['created_at'] as String)
             : DateTime.now(),
+        country: json['country'] as String?,
       );
     } catch (e, stack) {
       logger.e('Error parsing UserModel', error: e, stackTrace: stack);
@@ -58,6 +60,7 @@ class UserModel extends UserEntity {
     'show_phone': showPhone,
     'user_type': _userTypeToString(userType),
     'created_at': createdAt.toIso8601String(),
+    'country': country,
   };
 
   factory UserModel.fromEntity(UserEntity entity) => UserModel(
@@ -71,6 +74,7 @@ class UserModel extends UserEntity {
     showPhone: entity.showPhone,
     userType: entity.userType,
     createdAt: entity.createdAt,
+    country: entity.country,
   );
 
   static UserType _userTypeFromString(String type) {

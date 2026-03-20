@@ -68,6 +68,9 @@ class PropertyRemoteDataSource {
         if (filter.status != null) {
           query = query.eq('status', _statusToString(filter.status!));
         }
+        if (filter.country != null && filter.country!.isNotEmpty) {
+          query = query.eq('country', filter.country!);
+        }
       }
 
       final data = await query
@@ -382,13 +385,18 @@ class PropertyRemoteDataSource {
     String query, {
     int page = 1,
     int limit = 20,
+    String? country,
   }) async {
     try {
-      final data = await supabaseClient
+      var dbQuery = supabaseClient
           .from('property_list_view')  // ✅ OPTIMIZED VIEW
           .select()
           .or('title.ilike.%$query%,description.ilike.%$query%,location.ilike.%$query%')
-          .neq('status', 'deleted')
+          .neq('status', 'deleted');
+      if (country != null && country.isNotEmpty) {
+        dbQuery = dbQuery.eq('country', country);
+      }
+      final data = await dbQuery
           .order('owner_tier_rank', ascending: true)
           .order('created_at', ascending: false)
           .range((page - 1) * limit, page * limit - 1);

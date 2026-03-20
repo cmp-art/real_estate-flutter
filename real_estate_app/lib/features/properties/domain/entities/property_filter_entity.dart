@@ -18,6 +18,9 @@ class PropertyFilterEntity extends Equatable {
   final double? maxArea;
   final String? location;
   final PropertyStatus? status;
+  /// ISO 3166-1 alpha-2 country code to filter by (e.g. 'TZ', 'KE').
+  /// Null means show all countries.
+  final String? country;
 
   const PropertyFilterEntity({
     this.type,
@@ -32,6 +35,7 @@ class PropertyFilterEntity extends Equatable {
     this.maxArea,
     this.location,
     this.status,
+    this.country,
   });
 
   @override
@@ -48,6 +52,7 @@ class PropertyFilterEntity extends Equatable {
         maxArea,
         location,
         status,
+        country,
       ];
 
   /// Supports clearing individual fields back to null by passing null explicitly.
@@ -65,6 +70,7 @@ class PropertyFilterEntity extends Equatable {
     Object? maxArea = _$unset,
     Object? location = _$unset,
     Object? status = _$unset,
+    Object? country = _$unset,
   }) {
     return PropertyFilterEntity(
       type:         identical(type, _$unset)         ? this.type         : type as PropertyType?,
@@ -79,6 +85,7 @@ class PropertyFilterEntity extends Equatable {
       maxArea:      identical(maxArea, _$unset)      ? this.maxArea      : maxArea as double?,
       location:     identical(location, _$unset)     ? this.location     : location as String?,
       status:       identical(status, _$unset)       ? this.status       : status as PropertyStatus?,
+      country:      identical(country, _$unset)      ? this.country      : country as String?,
     );
   }
 

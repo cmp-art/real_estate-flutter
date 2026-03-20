@@ -16,6 +16,9 @@ class UserEntity extends Equatable {
   final UserType userType;
   final DateTime createdAt;
   final Map<String, dynamic>? userMetadata;
+  /// ISO 3166-1 alpha-2 country code (e.g. 'TZ', 'KE', 'UG').
+  /// Null means the user hasn't selected a country yet.
+  final String? country;
 
   const UserEntity( {
     required this.id,
@@ -29,6 +32,7 @@ class UserEntity extends Equatable {
     required this.userType,
     required this.createdAt,
     this.userMetadata,
+    this.country,
   });
 
   @override
@@ -44,6 +48,7 @@ class UserEntity extends Equatable {
         userType,
         createdAt,
         userMetadata,
+        country,
       ];
 
   UserEntity copyWith({
@@ -58,6 +63,7 @@ class UserEntity extends Equatable {
     UserType? userType,
     DateTime? createdAt,
     Map<String, dynamic>? userMetadata,
+    String? country,
   }) {
     return UserEntity(
       id: id ?? this.id,
@@ -71,6 +77,7 @@ class UserEntity extends Equatable {
       userType: userType ?? this.userType,
       createdAt: createdAt ?? this.createdAt,
       userMetadata: userMetadata ?? this.userMetadata,
+      country: country ?? this.country,
     );
   }
 

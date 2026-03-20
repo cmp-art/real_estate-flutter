@@ -218,10 +218,11 @@ Future<bool> signInWithApple() async {
     required String password,
     required String fullName,
     String? phone,
+    String? country,
   }) async {
     try {
       _logger.i('📝 Registration Attempt - Email: $email');
-      
+
       state = const AsyncValue.loading();
 
       final result = await _repository.register(
@@ -229,6 +230,7 @@ Future<bool> signInWithApple() async {
         password: password,
         fullName: fullName,
         phone: phone,
+        country: country,
       );
 
       return result.fold(
