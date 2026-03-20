@@ -1604,7 +1604,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
                       const SizedBox(height: 4),
                       Text(
                         'PataMjengo currently has most of its users in Tanzania. '
-                        'Targeting ${_selectedTargetCountries.map((c) => _kTargetableCountries.firstWhere((t) => t.\$1 == c, orElse: () => (c, '', c)).\$3).join(', ')} only '
+                        'Targeting ${_selectedTargetCountries.map((c) { final match = _kTargetableCountries.where((t) => t.$1 == c); return match.isNotEmpty ? match.first.$3 : c; }).join(', ')} only '
                         'may result in very few impressions while your campaign runs. '
                         'Consider adding Tanzania for better reach.',
                         style: TextStyle(

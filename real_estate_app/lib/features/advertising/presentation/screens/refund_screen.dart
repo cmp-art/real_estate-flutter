@@ -264,7 +264,7 @@ class _RefundScreenState extends ConsumerState<RefundScreen> {
                         prefixIcon:
                             const Icon(Icons.phone_android_rounded),
                         filled: true,
-                        fillColor: ThemeConfig.getInputFillColor(context),
+                        fillColor: ThemeConfig.getColor(context, lightColor: ThemeConfig.lightInputFill, darkColor: ThemeConfig.darkInputFill),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide.none,
@@ -291,7 +291,7 @@ class _RefundScreenState extends ConsumerState<RefundScreen> {
                         hintText: 'e.g. Campaign ended early, unused budget',
                         prefixIcon: const Icon(Icons.notes_rounded),
                         filled: true,
-                        fillColor: ThemeConfig.getInputFillColor(context),
+                        fillColor: ThemeConfig.getColor(context, lightColor: ThemeConfig.lightInputFill, darkColor: ThemeConfig.darkInputFill),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide.none,
