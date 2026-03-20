@@ -44,6 +44,6 @@ class DefaultFirebaseOptions {
     messagingSenderId: '953302924189',
     projectId: 'patamjengo',
     storageBucket: 'patamjengo.firebasestorage.app',
-    iosBundleId: 'com.example.realEstateApp',
+    iosBundleId: 'com.patamjengo.app',
   );
 }
