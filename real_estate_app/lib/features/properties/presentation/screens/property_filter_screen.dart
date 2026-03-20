@@ -7,6 +7,7 @@ import 'dart:convert';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/currency_helper.dart';
+import '../../../../core/utils/location_utils.dart';
 import '../../domain/entities/property_filter_entity.dart';
 import '../providers/property_providers.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
@@ -14,7 +15,7 @@ import '../../../../core/utils/responsive_helper.dart';
 
 class PropertyFilterScreen extends ConsumerStatefulWidget {
   final PropertyFilterEntity? initialFilter;
-  
+
   const PropertyFilterScreen({
     super.key,
     this.initialFilter,
@@ -24,24 +25,12 @@ class PropertyFilterScreen extends ConsumerStatefulWidget {
   ConsumerState<PropertyFilterScreen> createState() => _PropertyFilterScreenState();
 }
 
-const _kFilterCountries = [
-  ('TZ', '🇹🇿', 'Tanzania'),
-  ('KE', '🇰🇪', 'Kenya'),
-  ('UG', '🇺🇬', 'Uganda'),
-  ('RW', '🇷🇼', 'Rwanda'),
-  ('ET', '🇪🇹', 'Ethiopia'),
-  ('BI', '🇧🇮', 'Burundi'),
-  ('MZ', '🇲🇿', 'Mozambique'),
-  ('ZM', '🇿🇲', 'Zambia'),
-  ('ZW', '🇿🇼', 'Zimbabwe'),
-];
-
 class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
   PropertyType? _selectedType;
   PropertyCategory? _selectedCategory;
   PropertyStatus? _selectedStatus;
-  String? _selectedCountry; // null = All Countries
   RangeValues _priceRange = const RangeValues(0, 1000000);
+  bool _isDetectingLocation = false;
   RangeValues _bedroomRange = const RangeValues(0, 10);
   RangeValues _bathroomRange = const RangeValues(0, 10);
   RangeValues _areaRange = const RangeValues(0, 1000);
@@ -92,11 +81,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
             );
           }
           
-          // Load country
-          if (filterMap['country'] != null) {
-            _selectedCountry = filterMap['country'] as String?;
-          }
-
           // Load location
           if (filterMap['location'] != null) {
             _locationController.text = filterMap['location'];
@@ -162,7 +146,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
       _selectedType = filter.type;
       _selectedCategory = filter.category;
       _selectedStatus = filter.status;
-      _selectedCountry = filter.country;
       _locationController.text = filter.location ?? '';
       
       if (filter.minPrice != null || filter.maxPrice != null) {
@@ -200,7 +183,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
         'type': _selectedType?.toString(),
         'category': _selectedCategory?.toString(),
         'status': _selectedStatus?.toString(),
-        'country': _selectedCountry,
         'location': _locationController.text.trim().isNotEmpty ? _locationController.text.trim() : null,
         'priceRangeStart': _priceRange.start,
         'priceRangeEnd': _priceRange.end,
@@ -229,7 +211,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
       type: _selectedType,
       category: _selectedCategory,
       status: _selectedStatus,
-      country: _selectedCountry,
       minPrice: _priceRange.start > 0 ? _priceRange.start : null,
       maxPrice: _priceRange.end < 1000000 ? _priceRange.end : null,
       minBedrooms: _bedroomRange.start.toInt() > 0 ? _bedroomRange.start.toInt() : null,
@@ -258,7 +239,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
       _selectedType = null;
       _selectedCategory = null;
       _selectedStatus = null;
-      _selectedCountry = null;
       _priceRange = const RangeValues(0, 1000000);
       _bedroomRange = const RangeValues(0, 10);
       _bathroomRange = const RangeValues(0, 10);
@@ -308,34 +288,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
       body: ListView(
         padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
         children: [
-          // Country Filter
-          Text(
-            'Country',
-            style: TextStyle(
-              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              ChoiceChip(
-                label: const Text('🌍  All Countries'),
-                selected: _selectedCountry == null,
-                onSelected: (_) => setState(() => _selectedCountry = null),
-              ),
-              ..._kFilterCountries.map((c) => ChoiceChip(
-                    label: Text('${c.$2}  ${c.$3}'),
-                    selected: _selectedCountry == c.$1,
-                    onSelected: (sel) => setState(
-                        () => _selectedCountry = sel ? c.$1 : null),
-                  )),
-            ],
-          ),
-          SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
-
           // Type Filter
           Text(
             'Property Type',
@@ -542,9 +494,34 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
           TextField(
             controller: _locationController,
-            decoration: const InputDecoration(
-              hintText: 'Enter location',
-              prefixIcon: Icon(Icons.location_on),
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              hintText: 'e.g. Masaki, Westlands, Kololo…',
+              prefixIcon: const Icon(Icons.location_on),
+              suffixIcon: _isDetectingLocation
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.my_location_rounded),
+                      tooltip: 'Use my current location',
+                      onPressed: () async {
+                        setState(() => _isDetectingLocation = true);
+                        final detected = await detectCurrentLocation();
+                        if (mounted) {
+                          setState(() {
+                            _isDetectingLocation = false;
+                            if (detected != null) {
+                              _locationController.text = detected;
+                            }
+                          });
+                        }
+                      },
+                    ),
             ),
           ),
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),

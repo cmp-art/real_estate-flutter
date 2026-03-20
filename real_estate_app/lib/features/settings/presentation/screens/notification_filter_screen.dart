@@ -3,9 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../core/utils/location_utils.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/notification_filter_service.dart';
 import '../../../../core/utils/currency_utils.dart';
@@ -127,60 +126,23 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
 
   void _removeTag(String tag) => setState(() => _locationTags.remove(tag));
 
-  // ── GPS auto-detect ─────────────────────────────────────────────────────────
-  // Uses subLocality (e.g. "Masaki") → locality (e.g. "Dar es Salaam") →
-  // subAdministrativeArea (e.g. "Ilala") — most specific available is used.
+  // ── GPS auto-detect (Nominatim — works on web + mobile) ────────────────────
 
   Future<void> _detectLocation() async {
     setState(() => _isDetectingLocation = true);
     try {
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Location permission denied — type your location manually'),
-          ));
-        }
-        return;
-      }
-
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-
-      final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
-      if (placemarks.isEmpty) return;
-
-      final p = placemarks.first;
-      // Pick the most specific non-empty field
-      final detected = (p.subLocality?.isNotEmpty == true ? p.subLocality
-          : p.locality?.isNotEmpty == true ? p.locality
-          : p.subAdministrativeArea?.isNotEmpty == true ? p.subAdministrativeArea
-          : null);
-
-      if (detected != null && mounted) {
+      final detected = await detectCurrentLocation();
+      if (!mounted) return;
+      if (detected != null) {
         _addTag(detected);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('📍 Added "$detected" — edit if needed'),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 2),
         ));
-      } else if (mounted) {
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Could not detect your area — type it manually'),
-        ));
-      }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Location detection failed — type it manually'),
         ));
       }
     } finally {
