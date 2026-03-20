@@ -19,7 +19,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 
 const ANTHROPIC_URL  = 'https://api.anthropic.com/v1/messages'
-const CLAUDE_MODEL   = 'claude-haiku-4-5-20251001'
+const CLAUDE_MODEL   = 'claude-3-5-haiku-20241022'
 const ANTHROPIC_VER  = '2023-06-01'
 const MAX_TOKENS_CAP = 2000
 

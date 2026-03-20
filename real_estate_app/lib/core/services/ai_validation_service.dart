@@ -275,7 +275,7 @@ class AiValidationService {
   // _supabase.functions.invoke() resolves the correct URL automatically.
   static const String   _edgeFn       = 'validate_content';
   static const Duration _timeout      = Duration(seconds: 60);
-  static const int      _maxImages    = 2; // keep request small for mobile networks
+  static const int      _maxImages    = 4; // up to 4 images spread across the set
 
   // Lost-log counter — admin can read this to detect Supabase logging issues.
   int _lostLogCount = 0;
@@ -535,24 +535,21 @@ class AiValidationService {
           );
         }
         _health.recordFailure();
-        _log('Property AI image validation failed: $e — falling back to rule-based on text fields');
-        try {
-          final fallback = _ruleBasedPropertyCheck(data);
-          await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
-          _log('Rule-based fallback result: ${fallback.status}');
-          return fallback;
-        } catch (re) {
-          _log('Rule-based fallback also crashed: $re — manual queue');
-        }
-        // Last resort: manual queue (only property listings support this)
-        await _addToManualQueue(type: 'property', data: data, submittedBy: submittedBy);
-        const result = ValidationResult(
-          status: ValidationStatus.pending, method: ValidationMethod.manual,
-          approved: false, confidence: 0,
-          reason: 'Your listing is under admin review. You will be notified within 24 hours.',
+        _log('Property AI image validation failed: $e');
+        // IMPORTANT: DO NOT fall back to rule-based text check when images were
+        // provided.  The rule-based check only looks at keywords in the title/
+        // description — it would approve a car photo captioned "house for rent".
+        // Instead: hard-reject so the user retries (transient error) or the admin
+        // can manually approve (persistent error).
+        return _hardReject(
+          type: 'property', submittedBy: submittedBy,
+          reason: 'Image validation is temporarily unavailable. Please try again in a moment.',
+          suggestions: [
+            'Wait a few seconds and tap Submit again.',
+            'Make sure each photo is under ${AppConstants.maxImageSize ~/ (1024 * 1024)} MB.',
+            'Use JPEG or PNG format for best results.',
+          ],
         );
-        await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-        return result;
       }
     }
 
@@ -1312,8 +1309,10 @@ Category: ${d['category']} | Type: ${d['type']}
 Location: "${d['location']}"
 Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
 
-Reply ONLY in this exact JSON (no markdown):
-{"approved":true,"confidence":85,"detected_category":"house/apartment/room/hotel/land/commercial/industrial/vehicle/goods/unrelated","reason":"specific reason if rejected, empty string if approved","suggestions":[]}''';
+Reply ONLY in this exact JSON format (no markdown, no text outside JSON):
+{"approved":false,"confidence":0,"detected_category":"house|apartment|room|hotel|land|commercial|industrial|vehicle|goods|unrelated","reason":"explain why rejected, or empty string if approved","suggestions":[]}
+
+Replace the values above with your actual assessment. Do NOT return the template unchanged.''';
 
   String _buildPropertyPromptWithImages(
       Map<String, dynamic> d, {required int imageCount}) => '''
@@ -1359,8 +1358,10 @@ Category: ${d['category']} | Type: ${d['type']}
 Location: "${d['location']}"
 Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
 
-Reply ONLY in this exact JSON (no markdown, no explanation outside JSON):
-{"approved":true,"confidence":85,"detected_category":"house/apartment/land/commercial/screenshot/vehicle/food/unrelated","images_ok":true,"text_ok":true,"reason":"specific reason if rejected, empty string if approved","suggestions":[]}''';
+Reply ONLY in this exact JSON format (no markdown, no text outside JSON):
+{"approved":false,"confidence":0,"detected_category":"house|apartment|land|commercial|screenshot|vehicle|food|unrelated","images_ok":false,"text_ok":false,"reason":"explain why rejected, or empty string if approved","suggestions":[]}
+
+Replace the values above with your actual assessment. Do NOT return the template unchanged.''';
 
   String _buildAdPrompt(Map<String, dynamic> d) => '''
 You are an ad moderator for a real estate platform in Tanzania.

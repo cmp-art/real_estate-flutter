@@ -328,6 +328,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   List<XFile> _selectedImages = [];
   final List<XFile> _selectedVideos  = [];
   final Map<String, dynamic> _videoThumbnails = {};
+  // Web-only: cache decoded bytes so Image.memory() works in CanvasKit renderer.
+  // (Image.network with blob:// URLs fails silently in CanvasKit/Impeller.)
+  final Map<String, Uint8List> _webImageBytes = {};
   bool _isLoading    = false;
   bool _isValidating = false;
 
@@ -456,6 +459,49 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (property.type == PropertyType.rent) {
       _selectedRentDuration = property.rentDuration ?? RentDuration.monthly;
     }
+  }
+
+  // ── Web image bytes cache ─────────────────────────────────────────────────
+  // Reads and caches bytes for each XFile so Image.memory() can display them
+  // in CanvasKit renderer (Image.network fails with blob:// URLs in CanvasKit).
+  Future<void> _cacheWebBytes(List<XFile> images) async {
+    if (!kIsWeb) return;
+    for (final img in images) {
+      if (_webImageBytes.containsKey(img.path)) continue;
+      try {
+        final bytes = await img.readAsBytes();
+        if (bytes.isNotEmpty) _webImageBytes[img.path] = bytes;
+      } catch (_) {}
+    }
+  }
+
+  /// Returns a widget that displays [file] correctly on both web and native.
+  /// Web uses Image.memory (blob-URL compatible in CanvasKit/Impeller).
+  /// Native uses Image.file.
+  Widget _imageWidget(XFile file, {double size = 200}) {
+    if (!kIsWeb) {
+      return Image.file(File(file.path), width: size, height: size, fit: BoxFit.cover);
+    }
+    final cached = _webImageBytes[file.path];
+    if (cached != null) {
+      return Image.memory(cached, width: size, height: size, fit: BoxFit.cover);
+    }
+    return FutureBuilder<Uint8List>(
+      future: file.readAsBytes().then((b) {
+        if (b.isNotEmpty) _webImageBytes[file.path] = b;
+        return b;
+      }),
+      builder: (ctx, snap) {
+        if (snap.hasData && snap.data!.isNotEmpty) {
+          return Image.memory(snap.data!, width: size, height: size, fit: BoxFit.cover);
+        }
+        return Container(
+          width: size, height: size,
+          color: Colors.grey.shade200,
+          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      },
+    );
   }
 
   @override
@@ -635,6 +681,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     );
 
     if (images.isNotEmpty && mounted) {
+      // Pre-cache bytes on web before setState so the preview renders immediately.
+      await _cacheWebBytes(images);
       setState(() {
         // APPEND to existing list — never replace
         _selectedImages = [..._selectedImages, ...images];
@@ -1064,14 +1112,17 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       body: WebDropZone(
         maxFiles: AppConstants.maxImagesPerProperty,
         maxBytesPerFile: AppConstants.maxImageSize,
-        onFilesDropped: (dropped) {
+        onFilesDropped: (dropped) async {
           final remaining =
               AppConstants.maxImagesPerProperty - _selectedImages.length;
           if (remaining <= 0) return;
+          final toAdd = dropped.take(remaining).toList();
+          // Cache bytes before setState so the preview renders immediately.
+          await _cacheWebBytes(toAdd);
           if (mounted) {
             setState(() => _selectedImages = [
                   ..._selectedImages,
-                  ...dropped.take(remaining),
+                  ...toAdd,
                 ]);
           }
         },
@@ -1205,23 +1256,16 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                               children: [
                                 ClipRRect(
                                   borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                                  child: kIsWeb
-                                    ? Image.network(
-                                        file.path,
-                                        height: 200, width: 200,
-                                        fit: BoxFit.cover,
-                                      )
-                                    : Image.file(
-                                        File(file.path),
-                                        height: 200, width: 200,
-                                        fit: BoxFit.cover,
-                                      ),
+                                  child: _imageWidget(file, size: 200),
                                 ),
                                 // Remove button
                                 Positioned(
                                   top: 6, right: 6,
                                   child: IconButton(
-                                    onPressed: () => setState(() => _selectedImages.removeAt(index)),
+                                    onPressed: () => setState(() {
+                                      _webImageBytes.remove(_selectedImages[index].path);
+                                      _selectedImages.removeAt(index);
+                                    }),
                                     icon: Icon(Icons.close, size: ResponsiveHelper.getResponsiveIconSize(context)),
                                     style: IconButton.styleFrom(
                                       backgroundColor: Colors.black54,

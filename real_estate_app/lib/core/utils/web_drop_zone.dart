@@ -111,8 +111,26 @@ class _WebDropZoneState extends State<WebDropZone> {
       final file = files.item(i);
       if (file == null) continue;
 
-      final isImage = imageTypes.contains(file.type);
-      final isVideo = videoTypes.contains(file.type);
+      // Some OS / browser combinations report an empty MIME type for
+      // drag-dropped files.  Fall back to the file extension so those
+      // files are not silently skipped.
+      String fileType = file.type;
+      if (fileType.isEmpty) {
+        final ext = file.name.split('.').last.toLowerCase();
+        const extToMime = <String, String>{
+          'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+          'png': 'image/png',  'webp': 'image/webp',
+          'heic': 'image/heic', 'heif': 'image/heif',
+          'gif': 'image/gif',
+          'mp4': 'video/mp4',  'mov': 'video/quicktime',
+          'webm': 'video/webm', 'm4v': 'video/x-m4v',
+          'avi': 'video/avi',  '3gp': 'video/3gpp',
+        };
+        fileType = extToMime[ext] ?? '';
+      }
+
+      final isImage = imageTypes.contains(fileType);
+      final isVideo = videoTypes.contains(fileType);
       if (!isImage && !isVideo) continue;
 
       if (isImage) {
@@ -129,9 +147,12 @@ class _WebDropZoneState extends State<WebDropZone> {
       await reader.onLoad.first;
 
       final bytes = (reader.result as ByteBuffer).asUint8List();
-      final blob  = html.Blob([bytes], file.type);
+      // Use resolved fileType (never empty) so the blob has a valid MIME type
+      // and XFile.readAsBytes() works correctly across all renderers.
+      final blob  = html.Blob([bytes], fileType);
       final url   = html.Url.createObjectUrl(blob);
-      final xfile = XFile(url, name: file.name, length: file.size);
+      // Store bytes in the blob so we can read them back with readAsBytes().
+      final xfile = XFile(url, name: file.name, length: file.size, mimeType: fileType);
 
       if (isImage) {
         validImages.add(xfile);

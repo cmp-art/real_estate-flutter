@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import '../../../../core/utils/web_drop_zone.dart'
     if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
@@ -51,6 +52,8 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
 
   List<String> _existingImages = [];
   final List<XFile> _selectedImages = [];
+  // Web-only bytes cache so Image.memory() works in CanvasKit renderer.
+  final Map<String, Uint8List> _webImageBytes = {};
   bool _isLoading = false;
 
   final ImageHelper _imageHelper = ImageHelper();
@@ -94,6 +97,44 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
     super.dispose();
   }
 
+  // ── Web image bytes cache ─────────────────────────────────────────────────
+  Future<void> _cacheWebBytes(List<XFile> images) async {
+    if (!kIsWeb) return;
+    for (final img in images) {
+      if (_webImageBytes.containsKey(img.path)) continue;
+      try {
+        final bytes = await img.readAsBytes();
+        if (bytes.isNotEmpty) _webImageBytes[img.path] = bytes;
+      } catch (_) {}
+    }
+  }
+
+  Widget _imageWidget(XFile file, {double size = 100}) {
+    if (!kIsWeb) {
+      return Image.file(File(file.path), width: size, height: size, fit: BoxFit.cover);
+    }
+    final cached = _webImageBytes[file.path];
+    if (cached != null) {
+      return Image.memory(cached, width: size, height: size, fit: BoxFit.cover);
+    }
+    return FutureBuilder<Uint8List>(
+      future: file.readAsBytes().then((b) {
+        if (b.isNotEmpty) _webImageBytes[file.path] = b;
+        return b;
+      }),
+      builder: (ctx, snap) {
+        if (snap.hasData && snap.data!.isNotEmpty) {
+          return Image.memory(snap.data!, width: size, height: size, fit: BoxFit.cover);
+        }
+        return Container(
+          width: size, height: size,
+          color: Colors.grey.shade200,
+          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      },
+    );
+  }
+
   Future<void> _pickImages() async {
     final currentLanguage = ref.read(languageProvider).languageCode;
     String t(String key) => AppTranslations.translate(key, currentLanguage);
@@ -131,6 +172,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
     );
 
     if (images.isNotEmpty && mounted) {
+      await _cacheWebBytes(images);
       setState(() {
         _selectedImages.addAll(images);
       });
@@ -145,6 +187,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
 
   void _removeNewImage(int index) {
     setState(() {
+      _webImageBytes.remove(_selectedImages[index].path);
       _selectedImages.removeAt(index);
     });
   }
@@ -334,8 +377,10 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
               _existingImages.length -
               _selectedImages.length;
           if (remaining <= 0) return;
+          final toAdd = dropped.take(remaining).toList();
+          await _cacheWebBytes(toAdd);
           if (mounted) {
-            setState(() => _selectedImages.addAll(dropped.take(remaining)));
+            setState(() => _selectedImages.addAll(toAdd));
           }
         },
         onOversized: (skipped, maxMB) {
@@ -464,19 +509,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
                         children: [
                           ClipRRect(
                             borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                            child: kIsWeb
-                              ? Image.network(
-                                  _selectedImages[index].path,
-                                  height: 200,
-                                  width: 200,
-                                  fit: BoxFit.cover,
-                                )
-                              : Image.file(
-                                  File(_selectedImages[index].path),
-                                  height: 200,
-                                  width: 200,
-                                  fit: BoxFit.cover,
-                                ),
+                            child: _imageWidget(_selectedImages[index], size: 200),
                           ),
                           Positioned(
                             top: 8,

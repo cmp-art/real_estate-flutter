@@ -321,6 +321,14 @@ class PropertyRemoteDataSource {
         // Read bytes — works on both web (blob URL) and native (file path)
         final bytes = await xfile.readAsBytes();
 
+        // Guard against empty reads (can happen if blob URL expired on web).
+        if (bytes.isEmpty) {
+          throw ServerException(
+            'Image ${i + 1} could not be read. '
+            'Please remove it and add it again.',
+          );
+        }
+
         // Check file size against the app-wide limit (currently 15 MB).
         if (bytes.length > AppConstants.maxImageSize) {
           throw ServerException(
