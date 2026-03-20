@@ -9,6 +9,8 @@ import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../../core/providers/ip_country_provider.dart';
+
 import '../../../../core/constants/app_constants.dart';
 import '../../../advertising/presentation/provider/ad_providers.dart';
 import '../../../../core/services/direct_ad_models.dart';
@@ -100,105 +102,33 @@ class _PropertyListScreenDirectAdsState
     }
   }
 
-  /// Reads the user's country from their profile (or SharedPreferences for guests).
-  /// Then triggers the initial property load with that country filter applied.
-  /// If no country is found and the prompt has never been shown, shows a
-  /// one-time "Where are you looking?" bottom sheet.
+  /// Initialises the property country filter.
+  /// Priority: locally saved user preference → IP-detected country → null (all).
+  /// Country is no longer read from or written to the user's DB profile —
+  /// the IP-based country is used for ad targeting separately.
   Future<void> _initCountryFilter() async {
     if (_countryInitialized) return;
     _countryInitialized = true;
 
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. Prefer the logged-in user's stored country
-    final user = ref.read(authNotifierProvider).value;
-    String? country = user?.country;
+    // 1. User previously changed the chip — respect that choice
+    String? country = prefs.getString('country_filter');
 
-    // 2. Fallback: locally saved preference (guest / returning user)
+    // 2. First visit: default to IP-detected country
     if (country == null) {
-      country = prefs.getString('country_filter');
+      try {
+        country = await ref.read(ipCountryProvider.future);
+        if (country != null) {
+          await prefs.setString('country_filter', country);
+        }
+      } catch (_) {}
     }
 
     if (mounted) {
       setState(() => _countryFilter = country);
     }
     _reloadProperties(refresh: true);
-
-    // 3. If still no country, show the one-time country picker prompt
-    if (country == null && mounted) {
-      final alreadyPrompted = prefs.getBool('country_prompt_shown') ?? false;
-      if (!alreadyPrompted) {
-        await prefs.setBool('country_prompt_shown', true);
-        // Small delay so the list renders first (better UX)
-        await Future.delayed(const Duration(milliseconds: 600));
-        if (mounted) _showCountryPrompt();
-      }
-    }
-  }
-
-  /// One-time "Where are you looking?" prompt for users with no country set.
-  void _showCountryPrompt() {
-    final theme = Theme.of(context);
-    showModalBottomSheet(
-      context: context,
-      isDismissible: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Drag handle
-              Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text('🌍', style: TextStyle(fontSize: 40)),
-              const SizedBox(height: 12),
-              Text(
-                'Where are you looking?',
-                style: theme.textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Pick your country to see relevant listings.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: Colors.grey[600]),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              ..._kCountriesMap.map((c) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Text(c['flag']!, style: const TextStyle(fontSize: 24)),
-                    title: Text(c['name']!, style: const TextStyle(fontWeight: FontWeight.w500)),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _setCountryFilter(c['code']);
-                    },
-                  )),
-              const Divider(),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(
-                  'Skip — show all countries',
-                  style: TextStyle(color: Colors.grey[500], fontSize: 13),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   /// Builds a filter that includes the current country preference.
@@ -215,23 +145,14 @@ class _PropertyListScreenDirectAdsState
   }
 
   /// Called when the user taps a country chip or "Browse All".
-  /// Saves locally (SharedPreferences) and, for logged-in users, also
-  /// updates the country stored in their Supabase profile.
+  /// Saves to SharedPreferences only — property browsing preference,
+  /// not used for ad targeting (ads use IP country instead).
   Future<void> _setCountryFilter(String? country) async {
-    // 1. Save locally so the preference survives app restarts
     final prefs = await SharedPreferences.getInstance();
     if (country != null) {
       await prefs.setString('country_filter', country);
     } else {
       await prefs.remove('country_filter');
-    }
-
-    // 2. Persist to DB profile for logged-in users
-    final user = ref.read(authNotifierProvider).value;
-    if (user != null) {
-      final updated = user.copyWith(country: country);
-      // Fire-and-forget — don't block the UI on the network call
-      ref.read(authNotifierProvider.notifier).updateProfile(updated);
     }
 
     if (mounted) {
@@ -406,10 +327,13 @@ class _PropertyListScreenDirectAdsState
     final user = ref.read(authNotifierProvider).value;
     final adService = ref.read(directAdServiceProvider);
 
+    // IP country for ad targeting — independent of the property browse filter
+    final String? ipCountry = await ref.read(ipCountryProvider.future).catchError((_) => null);
+
     // ── Guest path: always show ads (equivalent to free tier) ────────────────
     if (user == null) {
       final guestId = await _getOrCreateGuestId();
-      debugPrint('🔵 ADS: loading for guest $guestId');
+      debugPrint('🔵 ADS: loading for guest $guestId (country: $ipCountry)');
 
       // Try GPS for location-targeted ads; silently skip on failure
       String? guestRegion;
@@ -436,7 +360,7 @@ class _PropertyListScreenDirectAdsState
           userId: guestId,
           screenName: 'property_list',
           userRegion: guestRegion,
-          userCountry: _countryFilter,
+          userCountry: ipCountry,
           limit: 10,
         );
         debugPrint('🟢 ADS: guest loaded ${ads.length} ads');
@@ -460,7 +384,7 @@ class _PropertyListScreenDirectAdsState
     }
 
     // ── Authenticated user path ───────────────────────────────────────────────
-    debugPrint('🔵 ADS: loading for user ${user.id}');
+    debugPrint('🔵 ADS: loading for user ${user.id} (country: $ipCountry)');
 
     final userEmail = user.email ?? '';
     final isAdmin = userEmail == _adminEmail;
@@ -473,7 +397,7 @@ class _PropertyListScreenDirectAdsState
           userId: user.id,
           screenName: 'property_list',
           userRegion: null,
-          userCountry: _countryFilter,
+          userCountry: ipCountry,
           limit: 10,
         );
       } catch (e) {
@@ -498,7 +422,6 @@ class _PropertyListScreenDirectAdsState
       }
       return;
     }
-
 
     bool shouldShow = true;
     try {
@@ -529,7 +452,7 @@ class _PropertyListScreenDirectAdsState
         userId: user.id,
         screenName: 'property_list',
         userRegion: userRegion,
-        userCountry: _countryFilter,
+        userCountry: ipCountry,
         limit: 10,
       );
       debugPrint('🟢 ADS: RPC returned ${ads.length} ads');

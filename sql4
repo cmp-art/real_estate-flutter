@@ -2215,3 +2215,119 @@ GRANT EXECUTE ON FUNCTION request_cash_refund(UUID, UUID, NUMERIC, TEXT, TEXT)
     TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- PART 18: IP-BASED AD TARGETING — NON-EA USERS SEE ALL ADS
+-- Users outside East Africa (detected via Cloudflare CF-IPCountry in the
+-- get-user-country Edge Function) bypass campaign country targeting entirely
+-- and see all active ads. This maximises reach for diaspora/international users
+-- without requiring advertisers to set up additional targeting.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION get_eligible_ads(
+    p_user_id             UUID,
+    p_screen_name         TEXT    DEFAULT 'property_list',
+    p_property_id         UUID    DEFAULT NULL,
+    p_limit               INT     DEFAULT 5,
+    p_user_region         TEXT    DEFAULT NULL,
+    p_user_property_type  TEXT    DEFAULT NULL,
+    p_user_country        TEXT    DEFAULT NULL
+)
+RETURNS SETOF JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'campaign_id',       c.id,
+        'creative_id',       cr.id,
+        'advertiser_id',     c.advertiser_id,
+        'headline',          cr.headline,
+        'description',       cr.description,
+        'call_to_action',    cr.call_to_action,
+        'image_url',         cr.image_url,
+        'logo_url',          cr.logo_url,
+        'landing_url',       cr.landing_url,
+        'bid_amount',        c.bid_amount,
+        'bidding_strategy',  c.bidding_strategy,
+        'media_type',        COALESCE(cr.media_type, 'image'),
+        'video_url',         cr.video_url,
+        'destination_type',   COALESCE(cr.destination_type, 'website'),
+        'advertiser_user_id',  a.user_id,
+        'linked_property_id', cr.linked_property_id
+    )
+    FROM  ad_campaigns c
+    JOIN  ad_creatives  cr ON cr.campaign_id = c.id
+    JOIN  advertisers   a  ON a.id = c.advertiser_id
+    WHERE
+        -- ── Core eligibility ──────────────────────────────────────────────
+        c.status         = 'running'
+        AND c.deleted_at    IS NULL
+        AND cr.deleted_at   IS NULL
+        AND cr.is_approved  = TRUE
+        AND cr.status       = 'active'
+        AND c.start_date   <= NOW()
+        AND c.end_date     >= NOW()
+
+        -- ── Total budget not exhausted ─────────────────────────────────────
+        AND c.spent_amount < c.total_budget
+
+        -- ── Daily budget not exhausted ─────────────────────────────────────
+        AND (
+            SELECT COALESCE(SUM(i.cost), 0)
+            FROM   ad_impressions i
+            WHERE  i.campaign_id = c.id
+              AND  i.created_at >= CURRENT_DATE::TIMESTAMPTZ
+        ) < c.daily_budget
+
+        -- ── Country targeting ──────────────────────────────────────────────
+        -- Empty array = targets all East African countries.
+        -- If campaign has specific countries set, user's country must match.
+        -- NULL user country = benefit of doubt → show the ad.
+        -- Users OUTSIDE East Africa bypass targeting and see all ads
+        -- (maximises reach for diaspora / international visitors).
+        AND (
+            cardinality(c.target_countries) = 0
+            OR c.target_countries IS NULL
+            OR p_user_country IS NULL
+            OR p_user_country = ANY(c.target_countries)
+            OR p_user_country != ALL(ARRAY['TZ','KE','UG','RW','ET','BI','MZ','ZM','ZW'])
+        )
+
+        -- ── Location targeting ─────────────────────────────────────────────
+        -- Empty array or NULL = target whole Tanzania (no restriction).
+        -- If user region is unknown (NULL), show the ad.
+        AND (
+            c.target_locations = '[]'::JSONB
+            OR  c.target_locations IS NULL
+            OR  p_user_region IS NULL
+            OR  c.target_locations @> to_jsonb(p_user_region::TEXT)
+        )
+
+        -- ── Property type targeting ────────────────────────────────────────
+        AND (
+            c.target_property_types = '[]'::JSONB
+            OR  c.target_property_types IS NULL
+            OR  p_user_property_type IS NULL
+            OR  c.target_property_types @> to_jsonb(p_user_property_type::TEXT)
+        )
+
+        -- ── Frequency cap ─────────────────────────────────────────────────
+        AND NOT EXISTS (
+            SELECT 1
+            FROM   ad_impressions fi
+            WHERE  fi.creative_id = cr.id
+              AND  fi.user_id     = p_user_id
+              AND  fi.created_at >= CURRENT_DATE::TIMESTAMPTZ
+        )
+
+    ORDER BY RANDOM() * c.bid_amount DESC
+    LIMIT p_limit;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_eligible_ads(UUID,TEXT,UUID,INT,TEXT,TEXT,TEXT) TO authenticated, anon;
+
+NOTIFY pgrst, 'reload schema';
