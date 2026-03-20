@@ -138,14 +138,14 @@ class ThemeConfig {
         fontSize: 20,
         fontWeight: FontWeight.w600,
       ),
-      // Status bar: transparent so app bar colour shows through; white icons on blue
+      // Status bar: white background with dark icons (light mode — matches scaffold)
       systemOverlayStyle: SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
+        statusBarColor: Color(0xFFFAFAFA),
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
       ),
     ),
-    
+
     bottomNavigationBarTheme: const BottomNavigationBarThemeData(
       backgroundColor: lightBottomNavBackground,
       selectedItemColor: lightBottomNavSelected,
@@ -234,9 +234,9 @@ class ThemeConfig {
         fontSize: 20,
         fontWeight: FontWeight.w600,
       ),
-      // Status bar: transparent so dark app bar shows through; white icons on dark
+      // Status bar: dark background with light icons (dark mode — matches scaffold)
       systemOverlayStyle: SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
+        statusBarColor: Color(0xFF121212),
         statusBarIconBrightness: Brightness.light,
         statusBarBrightness: Brightness.dark,
       ),

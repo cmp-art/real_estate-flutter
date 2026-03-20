@@ -15,10 +15,8 @@ import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/utils/share_utils.dart';
 import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../presentation/providers/auth_provider.dart';
-import '../../../../core/middleware/feature_gate_middleware.dart';
-import '../../../subscriptions/data/models/subscription_model.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
-import '../../../settings/presentation/providers/app_providers.dart' hide userSubscriptionProvider;
+import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
 import '../screens/property_edit_screen.dart';
 import 'package:patamjengo_app/features/settings/presentation/screens/app_translations.dart';
@@ -295,47 +293,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                     ),
                   ),
                 ),
-                // Tier badge — top right
-                // Hidden for PRO subscribers (they already have full access; badge clutters the card)
-                if ((widget.property.ownerTier == 'pro' || widget.property.ownerTier == 'basic') &&
-                    !(ref.watch(userSubscriptionProvider)?.tier == SubscriptionTier.pro))
-                  Positioned(
-                    top: 8, right: 8,
-                    child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: widget.property.ownerTier == 'pro'
-                            ? Colors.green[700]
-                            : Colors.blue[700],
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            widget.property.ownerTier == 'pro'
-                                ? Icons.workspace_premium
-                                : Icons.verified,
-                            color: Colors.white,
-                            size: ResponsiveHelper.getResponsiveIconSize(context),
-                          ),
-                          SizedBox(
-                              width:
-                                  ResponsiveHelper.getResponsiveSpacing(context) / 2),
-                          Text(
-                            widget.property.ownerTier == 'pro' ? 'PRO' : 'BASIC',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: ResponsiveHelper.getResponsiveFontSize(
-                                  context, mobile: 10),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
                 // Media count — bottom right
                 if (totalMedia > 1)
                   Positioned(
