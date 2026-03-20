@@ -1,3 +1,13 @@
 [build]
   command = "bash netlify_build.sh"
   publish = "build/web"
+
+[build.environment]
+  # Firebase API keys are public client-side keys (restricted by domain in Firebase Console,
+  # not by secrecy). Tell Netlify's scanner to skip them.
+  SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES = "AIzaSyD8mNbSVz3uEiRj-lVR8P3hREHMNl8GxW4,AIzaSyCCbpzMWyLLbD76Acj9ETX7XXtWk3wdvcY,AIzaSyCz7IqoPs7BT1knRTu7ikTRlGL5b0RSWcU"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
