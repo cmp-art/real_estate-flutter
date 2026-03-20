@@ -39,40 +39,12 @@ class PropertyListScreen extends ConsumerStatefulWidget {
       _PropertyListScreenDirectAdsState();
 }
 
-// ── Country list (reused in register screen too) ──────────────────────────────
-const _kCountriesMap = [
-  {'code': 'TZ', 'flag': '🇹🇿', 'name': 'Tanzania'},
-  {'code': 'KE', 'flag': '🇰🇪', 'name': 'Kenya'},
-  {'code': 'UG', 'flag': '🇺🇬', 'name': 'Uganda'},
-  {'code': 'RW', 'flag': '🇷🇼', 'name': 'Rwanda'},
-  {'code': 'ET', 'flag': '🇪🇹', 'name': 'Ethiopia'},
-  {'code': 'BI', 'flag': '🇧🇮', 'name': 'Burundi'},
-  {'code': 'MZ', 'flag': '🇲🇿', 'name': 'Mozambique'},
-  {'code': 'ZM', 'flag': '🇿🇲', 'name': 'Zambia'},
-  {'code': 'ZW', 'flag': '🇿🇼', 'name': 'Zimbabwe'},
-];
-
-String _countryFlag(String code) =>
-    _kCountriesMap.firstWhere(
-      (c) => c['code'] == code,
-      orElse: () => {'flag': '🌍'},
-    )['flag']!;
-
-String _countryName(String code) =>
-    _kCountriesMap.firstWhere(
-      (c) => c['code'] == code,
-      orElse: () => {'name': code},
-    )['name']!;
 
 class _PropertyListScreenDirectAdsState
     extends ConsumerState<PropertyListScreen> {
   final _scrollController = ScrollController();
   bool _showScrollToTop = false;
   bool _hasLoadedInitially = false;
-
-  // Country filter state
-  String? _countryFilter;   // null = all countries
-  bool _countryInitialized = false;
 
   // Ad state
   bool _shouldShowAds = false;
@@ -95,125 +67,17 @@ class _PropertyListScreenDirectAdsState
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         _hasLoadedInitially = true;
         debugPrint('🚀 Initial load - PropertyListScreenDirectAds');
-        await _initCountryFilter();
+        ref.read(propertyListProvider.notifier).loadProperties(refresh: true);
         _loadAdsAndCheckEligibility();
         _warmImageCache();
       });
     }
   }
 
-  /// Initialises the property country filter.
-  /// Priority: locally saved user preference → IP-detected country → null (all).
-  /// Country is no longer read from or written to the user's DB profile —
-  /// the IP-based country is used for ad targeting separately.
-  Future<void> _initCountryFilter() async {
-    if (_countryInitialized) return;
-    _countryInitialized = true;
-
-    final prefs = await SharedPreferences.getInstance();
-
-    // 1. User previously changed the chip — respect that choice
-    String? country = prefs.getString('country_filter');
-
-    // 2. First visit: default to IP-detected country
-    if (country == null) {
-      try {
-        country = await ref.read(ipCountryProvider.future);
-        if (country != null) {
-          await prefs.setString('country_filter', country);
-        }
-      } catch (_) {}
-    }
-
-    if (mounted) {
-      setState(() => _countryFilter = country);
-    }
-    _reloadProperties(refresh: true);
-  }
-
-  /// Builds a filter that includes the current country preference.
-  PropertyFilterEntity? _buildFilter() {
-    if (_countryFilter == null) return null;
-    return PropertyFilterEntity(country: _countryFilter);
-  }
-
-  /// Reloads the property list, always applying the current country filter.
+  /// Reloads the property list using whatever filter is currently active
+  /// in the provider (set via the filter screen).
   void _reloadProperties({bool refresh = true}) {
-    ref
-        .read(propertyListProvider.notifier)
-        .loadProperties(filter: _buildFilter(), refresh: refresh);
-  }
-
-  /// Called when the user taps a country chip or "Browse All".
-  /// Saves to SharedPreferences only — property browsing preference,
-  /// not used for ad targeting (ads use IP country instead).
-  Future<void> _setCountryFilter(String? country) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (country != null) {
-      await prefs.setString('country_filter', country);
-    } else {
-      await prefs.remove('country_filter');
-    }
-
-    if (mounted) {
-      setState(() => _countryFilter = country);
-      _reloadProperties(refresh: true);
-    }
-  }
-
-  /// Shows a bottom sheet with the list of supported countries.
-  void _showCountryPicker() {
-    final theme = Theme.of(context);
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Select Country',
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Text('🌍', style: TextStyle(fontSize: 22)),
-              title: const Text('All Countries'),
-              selected: _countryFilter == null,
-              selectedColor: theme.primaryColor,
-              onTap: () {
-                Navigator.pop(ctx);
-                _setCountryFilter(null);
-              },
-            ),
-            ..._kCountriesMap.map((c) => ListTile(
-                  leading: Text(c['flag']!, style: const TextStyle(fontSize: 22)),
-                  title: Text(c['name']!),
-                  selected: _countryFilter == c['code'],
-                  selectedColor: theme.primaryColor,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _setCountryFilter(c['code']);
-                  },
-                )),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
+    ref.read(propertyListProvider.notifier).loadProperties(refresh: refresh);
   }
 
   @override
@@ -643,17 +507,10 @@ Shared via Patamjengo
       ),
       body: Stack(
         children: [
-          Column(
-            children: [
-              _buildCountryFilterRow(theme),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _handleRefresh,
-                  color: theme.primaryColor,
-                  child: _buildBody(propertyListState, theme),
-                ),
-              ),
-            ],
+          RefreshIndicator(
+            onRefresh: _handleRefresh,
+            color: theme.primaryColor,
+            child: _buildBody(propertyListState, theme),
           ),
           if (_showScrollToTop)
             Positioned(
@@ -689,86 +546,6 @@ Shared via Patamjengo
   /// Country filter chip row shown below the AppBar.
   /// Shows a chip with the selected country (tappable to change) and a
   /// "Browse All" text button when a country is active.
-  Widget _buildCountryFilterRow(ThemeData theme) {
-    final isDark = theme.brightness == Brightness.dark;
-    return Container(
-      color: isDark ? Colors.grey[900] : Colors.grey[50],
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Row(
-        children: [
-          // Country chip (always visible — shows "All Countries" if none set)
-          InkWell(
-            onTap: _showCountryPicker,
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _countryFilter != null
-                    ? theme.primaryColor.withOpacity(0.12)
-                    : (isDark ? Colors.grey[800] : Colors.grey[200]),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _countryFilter != null
-                      ? theme.primaryColor
-                      : Colors.transparent,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _countryFilter != null
-                        ? _countryFlag(_countryFilter!)
-                        : '🌍',
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _countryFilter != null
-                        ? _countryName(_countryFilter!)
-                        : 'All Countries',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: _countryFilter != null
-                          ? theme.primaryColor
-                          : (isDark ? Colors.white70 : Colors.black87),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.arrow_drop_down,
-                    size: 18,
-                    color: _countryFilter != null
-                        ? theme.primaryColor
-                        : (isDark ? Colors.white54 : Colors.black45),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // "Browse All" text button — only shown when a country is active
-          if (_countryFilter != null) ...[
-            const Spacer(),
-            TextButton(
-              onPressed: () => _setCountryFilter(null),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                'Browse All',
-                style: TextStyle(fontSize: 12, color: theme.primaryColor),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildBody(PropertyListState state, ThemeData theme) {
     if (state.isLoading && state.properties.isEmpty) {
       return const LoadingIndicator(message: 'Loading properties...');
