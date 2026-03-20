@@ -321,9 +321,12 @@ class PropertyRemoteDataSource {
         // Read bytes — works on both web (blob URL) and native (file path)
         final bytes = await xfile.readAsBytes();
 
-        // Check file size (5MB limit)
-        if (bytes.length > 5 * 1024 * 1024) {
-          throw ServerException('Image ${i + 1} exceeds 5MB limit. Please compress before upload.');
+        // Check file size against the app-wide limit (currently 15 MB).
+        if (bytes.length > AppConstants.maxImageSize) {
+          throw ServerException(
+            'Image ${i + 1} exceeds ${AppConstants.maxImageSize ~/ (1024 * 1024)} MB limit. '
+            'Please choose a smaller file.',
+          );
         }
 
         final timestamp = DateTime.now().millisecondsSinceEpoch;

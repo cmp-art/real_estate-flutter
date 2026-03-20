@@ -10,12 +10,14 @@ class WebDropZone extends StatelessWidget {
   final int maxFiles;
   final int maxBytesPerFile;
   final void Function(List<XFile> files) onFilesDropped;
+  final void Function(List<XFile> videos)? onVideoDropped;
   final void Function(int skipped, double maxMB)? onOversized;
 
   const WebDropZone({
     super.key,
     required this.child,
     required this.onFilesDropped,
+    this.onVideoDropped,
     this.maxFiles = 10,
     this.maxBytesPerFile = 15 * 1024 * 1024,
     this.onOversized,

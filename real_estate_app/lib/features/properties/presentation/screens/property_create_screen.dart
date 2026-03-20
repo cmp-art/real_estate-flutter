@@ -1075,12 +1075,35 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                 ]);
           }
         },
+        onVideoDropped: (videos) {
+          if (!mounted) return;
+          if (_selectedVideos.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Only one video allowed per listing'),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ));
+            return;
+          }
+          // Process the first dropped video through the same path as _pickVideo.
+          // Generate thumbnail and add to state.
+          final video = videos.first;
+          captureVideoThumbnailWeb(video.path).then((thumb) {
+            if (mounted) {
+              setState(() {
+                _selectedVideos.add(video);
+                _videoThumbnails[video.path] = thumb;
+              });
+            }
+          });
+        },
         onOversized: (skipped, maxMB) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text(
-                  '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
-                  'each must be under ${maxMB.toStringAsFixed(0)} MB'),
+                  '$skipped file${skipped > 1 ? 's' : ''} skipped — '
+                  'images must be under ${maxMB.toStringAsFixed(0)} MB, '
+                  'videos under 50 MB'),
               backgroundColor: Colors.orange,
               behavior: SnackBarBehavior.floating,
             ));

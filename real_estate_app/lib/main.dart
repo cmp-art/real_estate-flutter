@@ -100,16 +100,10 @@ void main() async {
 
   AppLifecycleObserver().initialize();
 
-  // Orientation: portrait-only on mobile (hard lock — ignores system auto-rotate).
-  // DeviceOrientation.values on web/desktop allows all orientations.
-  if (kIsWeb) {
-    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-  } else {
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
-  }
+  // Allow all orientations on every platform so the device's auto-rotate
+  // setting is respected.  The OS will still enforce its own rotation lock
+  // when the user turns auto-rotate off.
+  await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
 
   // Apply initial status-bar style BEFORE the first frame so there is no
   // brief flash of the default Android blue bar.  The AppBarTheme's

@@ -8,20 +8,22 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Wraps [child] with a drag-and-drop zone that accepts image files dropped
-/// from the operating system.  [onFilesDropped] is called with the list of
-/// [XFile] images after they pass the size/type filter.
+/// Wraps [child] with a drag-and-drop zone that accepts files dropped from
+/// the OS.  Images are passed to [onFilesDropped]; video files are passed to
+/// [onVideoDropped] if provided, otherwise silently ignored.
 class WebDropZone extends StatefulWidget {
   final Widget child;
   final int maxFiles;
   final int maxBytesPerFile;
   final void Function(List<XFile> files) onFilesDropped;
+  final void Function(List<XFile> videos)? onVideoDropped;
   final void Function(int skipped, double maxMB)? onOversized;
 
   const WebDropZone({
     super.key,
     required this.child,
     required this.onFilesDropped,
+    this.onVideoDropped,
     this.maxFiles = 10,
     this.maxBytesPerFile = 15 * 1024 * 1024,
     this.onOversized,
@@ -72,44 +74,56 @@ class _WebDropZoneState extends State<WebDropZone> {
       _processFiles(files);
     };
 
-    final body = html.document.body;
-    if (body != null) {
-      body.addEventListener('dragover',  _overListener);
-      body.addEventListener('dragleave', _leaveListener);
-      body.addEventListener('drop',      _dropListener);
-    }
+    // Use window + capture=true so our listeners fire BEFORE Flutter's
+    // CanvasKit canvas can call stopPropagation() on drag events.
+    // Without capture mode, body listeners never receive the events and
+    // the drop is silently ignored by the browser.
+    html.window.addEventListener('dragover',  _overListener,  true);
+    html.window.addEventListener('dragleave', _leaveListener, true);
+    html.window.addEventListener('drop',      _dropListener,  true);
   }
 
   @override
   void dispose() {
-    final body = html.document.body;
-    if (body != null) {
-      body.removeEventListener('dragover',  _overListener);
-      body.removeEventListener('dragleave', _leaveListener);
-      body.removeEventListener('drop',      _dropListener);
-    }
+    html.window.removeEventListener('dragover',  _overListener,  true);
+    html.window.removeEventListener('dragleave', _leaveListener, true);
+    html.window.removeEventListener('drop',      _dropListener,  true);
     super.dispose();
   }
 
   Future<void> _processFiles(html.FileList files) async {
-    final validXFiles = <XFile>[];
+    final validImages = <XFile>[];
+    final validVideos = <XFile>[];
     int skipped = 0;
 
-    const allowed = <String>[
+    const imageTypes = <String>[
       'image/jpeg', 'image/jpg', 'image/png',
       'image/webp', 'image/heic', 'image/heif',
     ];
+    const videoTypes = <String>[
+      'video/mp4', 'video/quicktime', 'video/webm',
+      'video/x-m4v', 'video/avi', 'video/3gpp',
+    ];
+    // 50 MB limit for web video
+    const int maxVideoBytes = 50 * 1024 * 1024;
 
-    for (int i = 0; i < files.length && validXFiles.length < widget.maxFiles; i++) {
+    for (int i = 0; i < files.length; i++) {
       final file = files.item(i);
       if (file == null) continue;
-      if (!allowed.contains(file.type)) continue;
-      if (file.size > widget.maxBytesPerFile) {
-        skipped++;
-        continue;
+
+      final isImage = imageTypes.contains(file.type);
+      final isVideo = videoTypes.contains(file.type);
+      if (!isImage && !isVideo) continue;
+
+      if (isImage) {
+        if (validImages.length >= widget.maxFiles) continue;
+        if (file.size > widget.maxBytesPerFile) { skipped++; continue; }
+      } else {
+        // video — one at a time, 50 MB cap
+        if (file.size > maxVideoBytes) { skipped++; continue; }
       }
 
-      // Read file as bytes then expose as XFile via blob URL
+      // Read file as bytes and expose as XFile via blob URL.
       final reader = html.FileReader();
       reader.readAsArrayBuffer(file);
       await reader.onLoad.first;
@@ -117,16 +131,20 @@ class _WebDropZoneState extends State<WebDropZone> {
       final bytes = (reader.result as ByteBuffer).asUint8List();
       final blob  = html.Blob([bytes], file.type);
       final url   = html.Url.createObjectUrl(blob);
-      validXFiles.add(XFile(url, name: file.name, length: file.size));
+      final xfile = XFile(url, name: file.name, length: file.size);
+
+      if (isImage) {
+        validImages.add(xfile);
+      } else {
+        validVideos.add(xfile);
+      }
     }
 
     if (skipped > 0) {
       widget.onOversized?.call(skipped, widget.maxBytesPerFile / (1024 * 1024));
     }
-
-    if (validXFiles.isNotEmpty) {
-      widget.onFilesDropped(validXFiles);
-    }
+    if (validImages.isNotEmpty) widget.onFilesDropped(validImages);
+    if (validVideos.isNotEmpty) widget.onVideoDropped?.call(validVideos);
   }
 
   @override

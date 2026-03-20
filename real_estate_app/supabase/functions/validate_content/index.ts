@@ -23,6 +23,37 @@ const CLAUDE_MODEL   = 'claude-haiku-4-5-20251001'
 const ANTHROPIC_VER  = '2023-06-01'
 const MAX_TOKENS_CAP = 2000
 
+// ── Server-side rate limiter ──────────────────────────────────────────────────
+// Sliding-window: max 5 validation calls per user per 60 seconds.
+// In-memory — resets on cold start, but enforces on warm instances.
+const RL_MAX  = 5
+const RL_WIN  = 60_000   // ms
+
+const rlMap = new Map<string, number[]>()
+
+function rlCheck(userId: string): { ok: boolean; retryAfter: number } {
+  const now  = Date.now()
+  const hits = (rlMap.get(userId) ?? []).filter(t => now - t < RL_WIN)
+  if (hits.length >= RL_MAX) {
+    const oldest     = Math.min(...hits)
+    const retryAfter = Math.ceil((oldest + RL_WIN - now) / 1000)
+    return { ok: false, retryAfter }
+  }
+  hits.push(now)
+  rlMap.set(userId, hits)
+  return { ok: true, retryAfter: 0 }
+}
+
+/** Extract the `sub` (user id) from a Supabase JWT without verifying the signature. */
+function userIdFromAuth(authHeader: string | null): string | null {
+  if (!authHeader?.startsWith('Bearer ')) return null
+  try {
+    const payload = authHeader.slice(7).split('.')[1]
+    const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+    return (JSON.parse(decoded) as { sub?: string }).sub ?? null
+  } catch { return null }
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -109,6 +140,18 @@ async function handleValidation(req: Request, apiKey: string): Promise<Response>
     return jsonResponse({
       error: 'AI validation not configured. Set ANTHROPIC_API_KEY secret.',
     }, 500)
+  }
+
+  // Rate limit per user (server-side enforcement).
+  const userId = userIdFromAuth(req.headers.get('authorization'))
+  if (userId) {
+    const rl = rlCheck(userId)
+    if (!rl.ok) {
+      return jsonResponse({
+        error: `Too many validation requests. Try again in ${rl.retryAfter} seconds.`,
+        retry_after: rl.retryAfter,
+      }, 429)
+    }
   }
 
   const body = await req.json() as {

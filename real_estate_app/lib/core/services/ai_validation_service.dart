@@ -36,6 +36,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
+// Web image resize (canvas-based) vs native stub.
+import '../utils/web_compress.dart'
+    if (dart.library.io) '../utils/web_compress_stub.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOGGING — silent in release builds
@@ -486,9 +489,18 @@ class AiValidationService {
         await _deleteTempThumbnails(tempThumbs);
         return result;
       } catch (e) {
+        await _deleteTempThumbnails(tempThumbs);
+        // Server-side rate limit hit — hard-reject with countdown.
+        if (e.toString().contains('rate_limited:')) {
+          final secs = int.tryParse(e.toString().split(':').last) ?? 60;
+          return _hardReject(
+            type: 'property', submittedBy: submittedBy,
+            reason: 'Too many submissions. Please wait $secs seconds before trying again.',
+            suggestions: ['Wait $secs seconds, then resubmit.'],
+          );
+        }
         _health.recordFailure();
         _log('Property AI image validation failed: $e — falling back to rule-based on text fields');
-        await _deleteTempThumbnails(tempThumbs);
         try {
           final fallback = _ruleBasedPropertyCheck(data);
           await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
@@ -636,9 +648,17 @@ class AiValidationService {
         await _deleteTempThumbnails(adThumbsToClean);
         return result;
       } catch (e) {
+        await _deleteTempThumbnails(adThumbsToClean);
+        if (e.toString().contains('rate_limited:')) {
+          final secs = int.tryParse(e.toString().split(':').last) ?? 60;
+          return _hardReject(
+            type: 'ad', submittedBy: submittedBy,
+            reason: 'Too many submissions. Please wait $secs seconds before trying again.',
+            suggestions: ['Wait $secs seconds, then resubmit.'],
+          );
+        }
         _health.recordFailure();
         _log('Ad AI media validation failed: $e — falling back to rule-based on text fields');
-        await _deleteTempThumbnails(adThumbsToClean);
         // FALLBACK: rule-based check on text fields so the user is not hard-blocked
         try {
           final fallback = _ruleBasedAdCheck(data);
@@ -710,6 +730,11 @@ class AiValidationService {
         _edgeFn,
         body: {'max_tokens': 900, 'messages': messages},
       );
+      if (response.status == 429) {
+        final data = response.data as Map<String, dynamic>?;
+        final secs = (data?['retry_after'] as num?)?.toInt() ?? 60;
+        throw Exception('rate_limited:$secs');
+      }
       if (response.status != 200) {
         throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
       }
@@ -771,6 +796,11 @@ class AiValidationService {
         _edgeFn,
         body: {'max_tokens': 600, 'messages': messages},
       );
+      if (response.status == 429) {
+        final data = response.data as Map<String, dynamic>?;
+        final secs = (data?['retry_after'] as num?)?.toInt() ?? 60;
+        throw Exception('rate_limited:$secs');
+      }
       if (response.status != 200) {
         throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
       }
@@ -1057,13 +1087,13 @@ class AiValidationService {
 
   Future<String?> _compressAndEncode(XFile file) async {
     try {
-      // On web: flutter_image_compress is not available — send raw bytes.
+      // On web: resize via HTML canvas so images stay under 6 MB edge fn limit.
       // On native: compress aggressively so each image is ~40-80 KB.
       if (kIsWeb) {
         final bytes = await file.readAsBytes();
         if (bytes.isEmpty) return null;
-        _log('Web: raw encode ${(bytes.length / 1024).toStringAsFixed(1)} KB');
-        return base64Encode(bytes);
+        _log('Web: resizing ${(bytes.length / 1024).toStringAsFixed(1)} KB image for Claude');
+        return await webResizeToBase64(bytes);
       }
 
       // Native path — compress with FlutterImageCompress.
@@ -1237,9 +1267,8 @@ REJECT if:
 - The listing is for a service (cleaning, transport, delivery) — not a property
 - The title and description have NO property-related words at all
 - The listing is clearly a different type of business (restaurant, shop selling goods)
-
-When in doubt and the listing COULD be about property, APPROVE it.
-If a real estate term appears (even once), APPROVE.
+- Description is gibberish, spam, or repeated random characters
+- Price is clearly implausible (e.g. 1 TZS or 99999999999999)
 
 Listing:
 Title: "${d['title']}"

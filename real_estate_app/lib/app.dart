@@ -36,14 +36,6 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
   void initState() {
     super.initState();
     _listenToAuthChanges();
-    // Re-enforce portrait lock here in case the OS reset it after a custom tab
-    // or other full-screen overlay returned to the app.
-    if (!kIsWeb) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-    }
   }
 
   void _listenToAuthChanges() {
