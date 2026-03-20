@@ -63,7 +63,6 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
   DateTime _endDate = DateTime.now().add(const Duration(days: 30));
 
   // Step 3 – Targeting
-  final List<String> _selectedPropertyTypes = [];
   final List<String> _selectedLocations = [];
   bool _targetWholeCountry = true; // default: target all of Tanzania
 
@@ -262,7 +261,6 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         biddingStrategy: _biddingStrategy,
         startDate: _startDate,
         endDate: _endDate,
-        targetPropertyTypes: _selectedPropertyTypes,
         targetLocations: _targetWholeCountry ? [] : _selectedLocations,
         targetCountries: _targetAllEA ? [] : List<String>.from(_selectedTargetCountries),
       );
@@ -1051,15 +1049,6 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
   // ── STEP 3: Targeting ─────────────────────────────────────────────────────
 
   Widget _buildStep3Targeting() {
-    final propertyTypes = [
-      ('apartment', 'Apartment'),
-      ('house', 'House'),
-      ('land', 'Land'),
-      ('commercial', 'Commercial'),
-      ('villa', 'Villa'),
-      ('office', 'Office'),
-    ];
-
     // All 31 Tanzania regions (mainland + Zanzibar islands)
     const tanzaniaRegions = [
       'Arusha',
@@ -1286,45 +1275,8 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
 
         const SizedBox(height: 28),
 
-        _sectionTitle('Target Property Types'),
-        const SizedBox(height: 6),
-        Text('Select all that apply (or leave blank for all)',
-            style: TextStyle(
-                fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
-                color: ThemeConfig.getTextSecondaryColor(context))),
-        SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: propertyTypes.map((pt) {
-            final sel = _selectedPropertyTypes.contains(pt.$1);
-            return FilterChip(
-              label: Text(pt.$2),
-              selected: sel,
-              onSelected: (v) {
-                setState(() {
-                  if (v) {
-                    _selectedPropertyTypes.add(pt.$1);
-                  } else {
-                    _selectedPropertyTypes.remove(pt.$1);
-                  }
-                });
-              },
-              selectedColor:
-                  ThemeConfig.getPrimaryColor(context).withOpacity(0.15),
-              checkmarkColor: ThemeConfig.getPrimaryColor(context),
-              labelStyle: TextStyle(
-                color: sel
-                    ? ThemeConfig.getPrimaryColor(context)
-                    : ThemeConfig.getTextPrimaryColor(context),
-                fontWeight: sel ? FontWeight.w600 : FontWeight.normal,
-              ),
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 28),
-
-        // ── Tanzania region targeting ──────────────────────────────────────
+        // ── Tanzania region targeting (only visible when TZ is targeted) ───
+        if (_targetAllEA || _selectedTargetCountries.contains('TZ')) ...[
         _sectionTitle('Tanzania Region Targeting'),
         const SizedBox(height: 6),
         Text(
@@ -1520,6 +1472,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
               ),
             ),
         ],
+        ], // end Tanzania Region Targeting conditional
       ],
     );
   }
@@ -1549,8 +1502,6 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           _reviewRow('End', DateFormat('MMM d, yyyy').format(_endDate)),
           _reviewRow('Duration',
               '${_endDate.difference(_startDate).inDays} days'),
-          if (_selectedPropertyTypes.isNotEmpty)
-            _reviewRow('Property Types', _selectedPropertyTypes.join(', ')),
           _reviewRow(
             'Countries',
             _targetAllEA
@@ -1563,14 +1514,15 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
                             .$3)
                         .join(', '),
           ),
-          _reviewRow(
-            'Locations',
-            _targetWholeCountry
-                ? 'All Tanzania (no region filter)'
-                : _selectedLocations.isEmpty
-                    ? 'Not set'
-                    : _selectedLocations.join(', '),
-          ),
+          if (_targetAllEA || _selectedTargetCountries.contains('TZ'))
+            _reviewRow(
+              'Locations',
+              _targetWholeCountry
+                  ? 'All Tanzania (no region filter)'
+                  : _selectedLocations.isEmpty
+                      ? 'Not set'
+                      : _selectedLocations.join(', '),
+            ),
         ]),
 
         const SizedBox(height: 20),
