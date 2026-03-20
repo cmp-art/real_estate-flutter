@@ -1,9 +1,19 @@
 // supabase/functions/send-push-notification/index.ts
 //
-// Sends FCM push notifications when a row is inserted into user_notifications.
+// Sends FCM push notifications for a user_notifications row.
 // FCM is free — no cost per message, no limits.
 //
 // Uses FCM HTTP v1 API with a service account JWT (no npm packages, pure Deno crypto).
+//
+// CALLING MODES — this function accepts TWO call styles:
+//
+//   1. Direct call from the Flutter app (NotificationService._sendPushNotification):
+//        POST body: { user_id, id, type, title, message, data }
+//        No Database Webhook needed — the app calls this right after INSERT.
+//
+//   2. Supabase Database Webhook (legacy / optional):
+//        POST body: { type: "INSERT", record: { user_id, id, type, title, message, data } }
+//        Works automatically because of: const record = payload.record ?? payload
 //
 // Required Supabase secrets (Dashboard → Settings → Edge Functions → Secrets):
 //   FIREBASE_SERVICE_ACCOUNT  — full service account JSON (copy from Firebase Console
@@ -11,12 +21,6 @@
 //
 // Deploy:
 //   supabase functions deploy send-push-notification --no-verify-jwt
-//
-// Supabase webhook (Dashboard → Database → Webhooks → Create webhook):
-//   Table:   user_notifications
-//   Events:  INSERT
-//   URL:     https://<project-ref>.supabase.co/functions/v1/send-push-notification
-//   Headers: Authorization: Bearer <service_role_key>
 
 import { serve }       from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
