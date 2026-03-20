@@ -176,7 +176,7 @@ class PropertyListNotifier extends StateNotifier<PropertyListState> {
     if (state.isLoading && !refresh) return;
 
     state = state.copyWith(isLoading: true, error: null);
-    _currentFilter = filter;
+    if (filter != null) _currentFilter = filter;
     
     if (refresh) {
       _isLoadingMore = false;
