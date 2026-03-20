@@ -30,6 +30,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
+import '../constants/app_constants.dart';
 // http package removed — all AI calls go through the Supabase Edge Function.
 // Direct Anthropic calls from client are permanently disabled (security).
 import 'package:supabase_flutter/supabase_flutter.dart';

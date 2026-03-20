@@ -372,7 +372,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
       body: WebDropZone(
         maxFiles: AppConstants.maxImagesPerProperty,
         maxBytesPerFile: AppConstants.maxImageSize,
-        onFilesDropped: (dropped) {
+        onFilesDropped: (dropped) async {
           final remaining = AppConstants.maxImagesPerProperty -
               _existingImages.length -
               _selectedImages.length;
