@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../advertising/presentation/provider/ad_providers.dart';
@@ -81,6 +83,20 @@ class _PropertyListScreenDirectAdsState
   }
 
   static const String _adminEmail = 'collinmarine9@gmail.com';
+
+  /// Returns the auth user ID for logged-in users, or a persistent device UUID
+  /// for guests. The guest UUID is created once and stored in SharedPreferences
+  /// so the same device always gets the same ID (frequency cap works correctly).
+  Future<String> _getOrCreateGuestId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var guestId = prefs.getString('guest_device_id');
+    if (guestId == null) {
+      guestId = const Uuid().v4();
+      await prefs.setString('guest_device_id', guestId);
+      debugPrint('🔵 ADS: new guest device ID created: $guestId');
+    }
+    return guestId;
+  }
 
   /// ✅ FIXED: Use state.properties directly, not whenData
   Future<void> _warmImageCache() async {
@@ -163,13 +179,62 @@ class _PropertyListScreenDirectAdsState
 
   Future<void> _loadAdsAndCheckEligibility() async {
     final user = ref.read(authNotifierProvider).value;
+    final adService = ref.read(directAdServiceProvider);
+
+    // ── Guest path: always show ads (equivalent to free tier) ────────────────
     if (user == null) {
-      debugPrint('🔴 ADS: user null — skip');
+      final guestId = await _getOrCreateGuestId();
+      debugPrint('🔵 ADS: loading for guest $guestId');
+
+      // Try GPS for location-targeted ads; silently skip on failure
+      String? guestRegion;
+      try {
+        LocationPermission perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.whileInUse ||
+            perm == LocationPermission.always) {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings:
+                const LocationSettings(accuracy: LocationAccuracy.low),
+          ).timeout(const Duration(seconds: 8));
+          final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+          if (marks.isNotEmpty) {
+            guestRegion = marks.first.administrativeArea ??
+                marks.first.subAdministrativeArea ??
+                marks.first.locality;
+          }
+        }
+      } catch (_) {}
+
+      List<DirectAd> ads = [];
+      try {
+        ads = await adService.getEligibleAds(
+          userId: guestId,
+          screenName: 'property_list',
+          userRegion: guestRegion,
+          limit: 10,
+        );
+        debugPrint('🟢 ADS: guest loaded ${ads.length} ads');
+      } catch (e) {
+        debugPrint('🔴 ADS: guest getEligibleAds failed: $e');
+      }
+
+      if (mounted) {
+        setState(() {
+          _shouldShowAds = ads.isNotEmpty;
+          _adFrequency = 7;
+          _loadedAds = ads;
+          _shuffledAdPool = _buildShuffledPool(ads);
+          _adPoolIndex = 0;
+          _lastAdLoadTime = DateTime.now();
+          _sessionImpressionRecorded.clear();
+          _impressionIds.clear();
+        });
+      }
       return;
     }
 
+    // ── Authenticated user path ───────────────────────────────────────────────
     debugPrint('🔵 ADS: loading for user ${user.id}');
-    final adService = ref.read(directAdServiceProvider);
 
     final userEmail = user.email ?? '';
     final isAdmin = userEmail == _adminEmail;
@@ -317,7 +382,7 @@ class _PropertyListScreenDirectAdsState
     _sessionImpressionRecorded.add(ad.creativeId);
 
     final user = ref.read(authNotifierProvider).value;
-    if (user == null) return;
+    final effectiveUserId = user?.id ?? await _getOrCreateGuestId();
 
     final adService = ref.read(directAdServiceProvider);
 
@@ -325,7 +390,7 @@ class _PropertyListScreenDirectAdsState
       campaignId: ad.campaignId,
       creativeId: ad.creativeId,
       advertiserId: ad.advertiserId,
-      userId: user.id,
+      userId: effectiveUserId,
       screenName: 'property_list',
       cost: ad.impressionCost,
     );
@@ -338,7 +403,7 @@ class _PropertyListScreenDirectAdsState
 
   Future<void> _recordAdClick(DirectAd ad) async {
     final user = ref.read(authNotifierProvider).value;
-    if (user == null) return;
+    final effectiveUserId = user?.id ?? await _getOrCreateGuestId();
 
     final impressionId = _impressionIds[ad.creativeId];
     if (impressionId == null) {
@@ -354,7 +419,7 @@ class _PropertyListScreenDirectAdsState
       campaignId: ad.campaignId,
       creativeId: ad.creativeId,
       advertiserId: ad.advertiserId,
-      userId: user.id,
+      userId: effectiveUserId,
       cost: ad.bidAmount,
     );
 
