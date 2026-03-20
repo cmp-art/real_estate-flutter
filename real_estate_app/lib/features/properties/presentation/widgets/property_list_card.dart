@@ -17,7 +17,7 @@ import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
-import '../../../settings/presentation/providers/app_providers.dart';
+import '../../../settings/presentation/providers/app_providers.dart' hide userSubscriptionProvider;
 import '../providers/property_providers.dart';
 import '../screens/property_edit_screen.dart';
 import 'package:patamjengo_app/features/settings/presentation/screens/app_translations.dart';
