@@ -17,7 +17,7 @@ import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/currency_helper.dart';
-import '../../../../core/utils/location_utils.dart';
+import '../../../../core/widgets/location_autocomplete_field.dart';
 
 import '../../../settings/presentation/screens/app_translations.dart';
 import '../providers/ai_providers.dart';
@@ -326,8 +326,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   List<XFile> _selectedImages = [];
   final List<XFile> _selectedVideos  = [];
   final Map<String, dynamic> _videoThumbnails = {};
-  bool _isLoading             = false;
-  bool _isDetectingLocation   = false;
+  bool _isLoading    = false;
   bool _isValidating = false;
 
   // bilingual helper — reads current language from provider
@@ -1400,40 +1399,16 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
 
             // Location Field
-            TextFormField(
+            LocationAutocompleteField(
               controller: _locationController,
-              decoration: InputDecoration(
-                labelText: t('location'),
-                hintText: t('enter_location'),
-                prefixIcon: const Icon(Icons.location_on),
-                suffixIcon: _isDetectingLocation
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 18, height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.my_location_rounded),
-                        tooltip: 'Use my current location',
-                        onPressed: () async {
-                          setState(() => _isDetectingLocation = true);
-                          final detected = await detectCurrentLocation();
-                          if (mounted) {
-                            setState(() {
-                              _isDetectingLocation = false;
-                              if (detected != null) {
-                                _locationController.text = detected;
-                              }
-                            });
-                          }
-                        },
-                      ),
-              ),
+              labelText: t('location'),
+              hintText: t('enter_location'),
+              clearOnSelect: false,
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? s.locationReq : null,
-              textCapitalization: TextCapitalization.words,
+              onSelected: (_, displayName) {
+                _locationController.text = displayName;
+              },
             ),
             _FieldTip(s.locationTip),
             SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),

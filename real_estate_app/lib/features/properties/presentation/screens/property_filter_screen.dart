@@ -7,7 +7,7 @@ import 'dart:convert';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/currency_helper.dart';
-import '../../../../core/utils/location_utils.dart';
+import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../domain/entities/property_filter_entity.dart';
 import '../providers/property_providers.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
@@ -30,7 +30,6 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
   PropertyCategory? _selectedCategory;
   PropertyStatus? _selectedStatus;
   RangeValues _priceRange = const RangeValues(0, 1000000);
-  bool _isDetectingLocation = false;
   RangeValues _bedroomRange = const RangeValues(0, 10);
   RangeValues _bathroomRange = const RangeValues(0, 10);
   RangeValues _areaRange = const RangeValues(0, 1000);
@@ -492,37 +491,13 @@ class _PropertyFilterScreenState extends ConsumerState<PropertyFilterScreen> {
             ),
           ),
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-          TextField(
+          LocationAutocompleteField(
             controller: _locationController,
-            textCapitalization: TextCapitalization.words,
-            decoration: InputDecoration(
-              hintText: 'e.g. Masaki, Westlands, Kololo…',
-              prefixIcon: const Icon(Icons.location_on),
-              suffixIcon: _isDetectingLocation
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.my_location_rounded),
-                      tooltip: 'Use my current location',
-                      onPressed: () async {
-                        setState(() => _isDetectingLocation = true);
-                        final detected = await detectCurrentLocation();
-                        if (mounted) {
-                          setState(() {
-                            _isDetectingLocation = false;
-                            if (detected != null) {
-                              _locationController.text = detected;
-                            }
-                          });
-                        }
-                      },
-                    ),
-            ),
+            hintText: 'e.g. Masaki, Westlands, Kololo…',
+            clearOnSelect: false,
+            onSelected: (_, displayName) {
+              _locationController.text = displayName;
+            },
           ),
           SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),
 

@@ -1,7 +1,7 @@
 // lib/core/utils/location_utils.dart
 //
-// GPS + reverse-geocoding helper used across the app.
-// Uses OpenStreetMap Nominatim — works on web, Android and iOS.
+// GPS + geocoding helpers used across the app.
+// Uses Photon (by Komoot) — free, no API key, works on web, Android and iOS.
 // The `geocoding` package is NOT used because it crashes on Flutter Web.
 
 import 'dart:convert';
@@ -9,13 +9,110 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
-/// Requests location permission, gets current GPS position and reverse-geocodes
-/// it to the most specific human-readable area name available.
-///
-/// Returns null when:
-///   - permission denied
-///   - timeout
-///   - Nominatim unavailable
+// ─────────────────────────────────────────────────────────────────────────────
+// MODEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+class PhotonPlace {
+  final String name;        // short label, e.g. "Masaki"
+  final String context;     // e.g. "Dar es Salaam, Tanzania"
+  final String displayName; // full, e.g. "Masaki, Dar es Salaam, Tanzania"
+
+  const PhotonPlace({
+    required this.name,
+    required this.context,
+    required this.displayName,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORWARD SEARCH (autocomplete) — restricted to East Africa bbox
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns up to 6 place suggestions for [query] within East Africa.
+/// Requires at least 3 characters. Returns empty list on error.
+Future<List<PhotonPlace>> photonSearch(String query) async {
+  if (query.trim().length < 3) return [];
+  try {
+    final uri = Uri.parse(
+      'https://photon.komoot.io/api/'
+      '?q=${Uri.encodeComponent(query.trim())}'
+      '&limit=6&lang=en&bbox=21,-27,48,15',
+    );
+    final response = await http
+        .get(uri, headers: {'User-Agent': 'PatamjengoApp/1.0'})
+        .timeout(const Duration(seconds: 8));
+
+    if (response.statusCode != 200) return [];
+
+    final data     = jsonDecode(response.body) as Map<String, dynamic>;
+    final features = data['features'] as List<dynamic>? ?? [];
+
+    return features.map<PhotonPlace>((f) {
+      final props   = (f as Map<String, dynamic>)['properties'] as Map<String, dynamic>? ?? {};
+      final name    = (props['name']    as String?) ?? '';
+      final city    = (props['city']    as String?)
+                   ?? (props['county']  as String?)
+                   ?? (props['state']   as String?)
+                   ?? '';
+      final country = (props['country'] as String?) ?? '';
+
+      final context = [city, country].where((s) => s.isNotEmpty).join(', ');
+      final display = [name, context].where((s) => s.isNotEmpty).join(', ');
+
+      return PhotonPlace(
+        name:        name.isNotEmpty ? name : display,
+        context:     context,
+        displayName: display.isNotEmpty ? display : name,
+      );
+    }).where((p) => p.name.isNotEmpty).toList();
+  } catch (e) {
+    debugPrint('photonSearch error: $e');
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVERSE GEOCODING — no bbox (user may be anywhere in the world)
+// ─────────────────────────────────────────────────────────────────────────────
+
+Future<String?> photonReverse(double lat, double lon) async {
+  try {
+    final uri = Uri.parse(
+      'https://photon.komoot.io/reverse'
+      '?lat=$lat&lon=$lon&limit=1&lang=en',
+    );
+    final response = await http
+        .get(uri, headers: {'User-Agent': 'PatamjengoApp/1.0'})
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) return null;
+
+    final data     = jsonDecode(response.body) as Map<String, dynamic>;
+    final features = data['features'] as List<dynamic>? ?? [];
+    if (features.isEmpty) return null;
+
+    final props  = (features.first as Map<String, dynamic>)['properties']
+        as Map<String, dynamic>? ?? {};
+
+    // Return the most specific label available
+    return (props['suburb']  as String?)
+        ?? (props['name']    as String?)
+        ?? (props['city']    as String?)
+        ?? (props['county']  as String?)
+        ?? (props['state']   as String?);
+  } catch (e) {
+    debugPrint('photonReverse error: $e');
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GPS + REVERSE GEOCODE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Requests location permission, gets GPS position, reverse-geocodes via Photon.
+/// Returns null on permission denied, timeout, or API failure.
 Future<String?> detectCurrentLocation() async {
   try {
     LocationPermission permission = await Geolocator.checkPermission();
@@ -34,45 +131,9 @@ Future<String?> detectCurrentLocation() async {
       ),
     );
 
-    return await _nominatimReverseGeocode(pos.latitude, pos.longitude);
+    return await photonReverse(pos.latitude, pos.longitude);
   } catch (e) {
     debugPrint('detectCurrentLocation error: $e');
-    return null;
-  }
-}
-
-Future<String?> _nominatimReverseGeocode(double lat, double lon) async {
-  try {
-    final uri = Uri.parse(
-      'https://nominatim.openstreetmap.org/reverse'
-      '?lat=$lat&lon=$lon&format=json&zoom=14&addressdetails=1',
-    );
-    final response = await http
-        .get(uri, headers: {
-          'User-Agent':      'PatamjengoApp/1.0',
-          'Accept-Language': 'en',
-        })
-        .timeout(const Duration(seconds: 10));
-
-    if (response.statusCode != 200) return null;
-
-    final data    = jsonDecode(response.body) as Map<String, dynamic>;
-    final address = data['address'] as Map<String, dynamic>?;
-    if (address == null) return null;
-
-    // Pick the most specific non-null field available:
-    //   suburb / neighbourhood → district-level area (e.g. "Masaki", "Westlands")
-    //   city_district / quarter → broader city area
-    //   city / town / state    → fallback
-    return address['suburb']        as String?
-        ?? address['neighbourhood'] as String?
-        ?? address['city_district'] as String?
-        ?? address['quarter']       as String?
-        ?? address['city']          as String?
-        ?? address['town']          as String?
-        ?? address['state']         as String?;
-  } catch (e) {
-    debugPrint('Nominatim error: $e');
     return null;
   }
 }

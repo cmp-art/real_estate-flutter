@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/utils/location_utils.dart';
+import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/notification_filter_service.dart';
 import '../../../../core/utils/currency_utils.dart';
@@ -67,7 +68,6 @@ class NotificationFilterScreen extends ConsumerStatefulWidget {
 
 class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScreen> {
   final _formKey    = GlobalKey<FormState>();
-  final _locationInputCtrl = TextEditingController();
 
   // PropertyType comes from notification_filter_service.dart
   Set<PropertyType> _selectedTypes = PropertyType.values.toSet();
@@ -90,7 +90,6 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   // Location tags — user-typed strings, empty = any location
   // Each tag is matched with ILIKE against property location in the DB trigger
   List<String> _locationTags = [];
-  bool _isDetectingLocation = false;
 
   bool _isLoading        = false;
   bool _isLoadingFilter  = false;
@@ -103,7 +102,6 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
 
   @override
   void dispose() {
-    _locationInputCtrl.dispose();
     _minPriceCtrl.dispose();
     _maxPriceCtrl.dispose();
     _minAreaCtrl.dispose();
@@ -116,38 +114,18 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   void _addTag(String raw) {
     final tag = raw.trim();
     if (tag.isEmpty) return;
-    if (_locationTags.any((t) => t.toLowerCase() == tag.toLowerCase())) {
-      _locationInputCtrl.clear();
-      return; // duplicate
-    }
+    if (_locationTags.any((t) => t.toLowerCase() == tag.toLowerCase())) return;
     setState(() => _locationTags.add(tag));
-    _locationInputCtrl.clear();
   }
 
   void _removeTag(String tag) => setState(() => _locationTags.remove(tag));
 
-  // ── GPS auto-detect (Nominatim — works on web + mobile) ────────────────────
+  // ── GPS auto-detect (Photon reverse — works on web + mobile) ──────────────
 
-  Future<void> _detectLocation() async {
-    setState(() => _isDetectingLocation = true);
-    try {
-      final detected = await detectCurrentLocation();
-      if (!mounted) return;
-      if (detected != null) {
-        _addTag(detected);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('📍 Added "$detected" — edit if needed'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 2),
-        ));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not detect your area — type it manually'),
-        ));
-      }
-    } finally {
-      if (mounted) setState(() => _isDetectingLocation = false);
-    }
+  void _autoDetectLocation() {
+    detectCurrentLocation().then((detected) {
+      if (detected != null && mounted) _addTag(detected);
+    });
   }
 
   // ── Load existing filter from DB ────────────────────────────────────────────
@@ -184,10 +162,10 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
           if (_maxArea  != null) _maxAreaCtrl.text  = _maxArea!.toStringAsFixed(0);
         });
         // Auto-detect only if no location was previously saved
-        if (savedTags.isEmpty) _detectLocation();
+        if (savedTags.isEmpty) _autoDetectLocation();
       } else {
         // First time opening — auto-detect location as starter
-        _detectLocation();
+        _autoDetectLocation();
       }
     } catch (_) {
       // Fall through to defaults
@@ -262,53 +240,11 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
 
-          // ── Input row ──────────────────────────────────────────────────
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _locationInputCtrl,
-                textCapitalization: TextCapitalization.words,
-                decoration: InputDecoration(
-                  hintText: 'e.g. Masaki, Westlands, Kololo…',
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  suffixIcon: _locationInputCtrl.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () => setState(() => _locationInputCtrl.clear()),
-                        )
-                      : null,
-                ),
-                onSubmitted: _addTag,
-                onChanged: (_) => setState(() {}), // refresh suffix icon
-              ),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: () => _addTag(_locationInputCtrl.text),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              ),
-              child: const Text('Add'),
-            ),
-          ]),
-
-          const SizedBox(height: 10),
-
-          // ── GPS detect button ──────────────────────────────────────────
-          OutlinedButton.icon(
-            onPressed: _isDetectingLocation ? null : _detectLocation,
-            icon: _isDetectingLocation
-                ? const SizedBox(
-                    width: 16, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.my_location_rounded, size: 18),
-            label: Text(
-              _isDetectingLocation ? 'Detecting…' : 'Use my current location',
-              style: const TextStyle(fontSize: 13),
-            ),
+          // ── Autocomplete input ─────────────────────────────────────────
+          LocationAutocompleteField(
+            hintText: 'e.g. Masaki, Westlands, Kololo…',
+            clearOnSelect: true,
+            onSelected: (name, _) => _addTag(name),
           ),
 
           const SizedBox(height: 14),
@@ -681,7 +617,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       _minAreaCtrl.clear();
       _maxAreaCtrl.clear();
     });
-    _detectLocation(); // re-suggest current location
+    _autoDetectLocation(); // re-suggest current location
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Reset to defaults'), duration: Duration(seconds: 2)),
     );
