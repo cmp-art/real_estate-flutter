@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/notification_filter_service.dart';
@@ -98,6 +100,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
 
   // Location filter — empty set = any location
   Set<String> _selectedRegions = {};
+  bool _isDetectingLocation = false;
 
   bool _isLoading = false;
   bool _isLoadingFilter = false;
@@ -106,6 +109,82 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   void initState() {
     super.initState();
     _loadExistingFilter();
+  }
+
+  // ── GPS auto-detect ─────────────────────────────────────────────────────────
+
+  Future<void> _detectLocation() async {
+    setState(() => _isDetectingLocation = true);
+    try {
+      // Check / request permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location permission denied — please select manually'),
+          ));
+        }
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+
+      final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+      if (placemarks.isEmpty) return;
+
+      final area = placemarks.first.administrativeArea ?? '';
+      final matched = _matchTanzaniaRegion(area);
+
+      if (matched != null && mounted) {
+        setState(() => _selectedRegions = {matched});
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('📍 Location set to $matched'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ));
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not detect your region — please select manually'),
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Location detection failed — please select manually'),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isDetectingLocation = false);
+    }
+  }
+
+  /// Strips "Region", "Mkoa", etc. and fuzzy-matches against Tanzania regions list.
+  String? _matchTanzaniaRegion(String raw) {
+    final cleaned = raw
+        .replaceAll(RegExp(r'\s*(region|mkoa)\s*', caseSensitive: false), '')
+        .trim();
+    if (cleaned.isEmpty) return null;
+    // Exact match first
+    for (final r in _kTanzaniaRegions) {
+      if (r.toLowerCase() == cleaned.toLowerCase()) return r;
+    }
+    // Partial match
+    for (final r in _kTanzaniaRegions) {
+      if (r.toLowerCase().contains(cleaned.toLowerCase()) ||
+          cleaned.toLowerCase().contains(r.toLowerCase())) {
+        return r;
+      }
+    }
+    return null;
   }
 
   @override
@@ -131,6 +210,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       );
 
       if (filter != null && mounted) {
+        final savedRegions = (filter.regions ?? []).toSet();
         setState(() {
           _selectedTypes = filter.propertyTypes.toSet();
           _minPrice = filter.minPrice;
@@ -141,14 +221,18 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
           _maxBathrooms = filter.maxBathrooms;
           _minArea = filter.minArea;
           _maxArea = filter.maxArea;
-          // Load saved regions — treat null/empty as no restriction
-          _selectedRegions = (filter.regions ?? []).toSet();
+          _selectedRegions = savedRegions;
 
           if (_minPrice != null) _minPriceCtrl.text = _minPrice!.toStringAsFixed(0);
           if (_maxPrice != null) _maxPriceCtrl.text = _maxPrice!.toStringAsFixed(0);
           if (_minArea  != null) _minAreaCtrl.text  = _minArea!.toStringAsFixed(0);
           if (_maxArea  != null) _maxAreaCtrl.text  = _maxArea!.toStringAsFixed(0);
         });
+        // Auto-detect location only when filter exists but has no regions set yet
+        if (savedRegions.isEmpty) _detectLocation();
+      } else {
+        // No saved filter at all — auto-detect location as default
+        _detectLocation();
       }
     } catch (_) {
       // Silently fall through — user starts with defaults
@@ -215,30 +299,46 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       title: 'Location',
       subtitle: 'Select regions to watch — leave empty for all locations',
       isDark: isDark,
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          FilterChip(
-            label: const Text('📍  All Locations'),
-            selected: allSelected,
-            onSelected: (_) => setState(() => _selectedRegions.clear()),
-            selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
-            checkmarkColor: ThemeConfig.getPrimaryColor(context),
+          // Detect button
+          OutlinedButton.icon(
+            onPressed: _isDetectingLocation ? null : _detectLocation,
+            icon: _isDetectingLocation
+                ? const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.my_location_rounded, size: 18),
+            label: Text(_isDetectingLocation ? 'Detecting location…' : 'Use my current location'),
           ),
-          ..._kTanzaniaRegions.map((region) => FilterChip(
-            label: Text(region),
-            selected: _selectedRegions.contains(region),
-            onSelected: (sel) => setState(() {
-              if (sel) {
-                _selectedRegions.add(region);
-              } else {
-                _selectedRegions.remove(region);
-              }
-            }),
-            selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
-            checkmarkColor: ThemeConfig.getPrimaryColor(context),
-          )),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('📍  All Locations'),
+                selected: allSelected,
+                onSelected: (_) => setState(() => _selectedRegions.clear()),
+                selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
+                checkmarkColor: ThemeConfig.getPrimaryColor(context),
+              ),
+              ..._kTanzaniaRegions.map((region) => FilterChip(
+                label: Text(region),
+                selected: _selectedRegions.contains(region),
+                onSelected: (sel) => setState(() {
+                  if (sel) {
+                    _selectedRegions.add(region);
+                  } else {
+                    _selectedRegions.remove(region);
+                  }
+                }),
+                selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
+                checkmarkColor: ThemeConfig.getPrimaryColor(context),
+              )),
+            ],
+          ),
         ],
       ),
     );
@@ -579,6 +679,8 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       _minAreaCtrl.clear();
       _maxAreaCtrl.clear();
     });
+    // Re-detect location as new default
+    _detectLocation();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Reset to defaults'), duration: Duration(seconds: 2)),
     );

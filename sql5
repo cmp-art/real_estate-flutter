@@ -1080,3 +1080,150 @@ DO $$ BEGIN
     RAISE NOTICE '  • Rate limit: max 3 per user per day';
     RAISE NOTICE '=========================================';
 END $$;
+
+-- ============================================================================
+-- PART 20: REAL-TIME MESSAGE PUSH NOTIFICATIONS + UNREAD REMINDER
+-- ============================================================================
+-- notify_new_message()  — fires on every messages INSERT, sends push to
+--   recipient with 60-second burst protection (no spam when someone types fast)
+-- notify_unread_message_reminders() — cron function, runs hourly, sends one
+--   reminder push per conversation where unread messages are ~24h old
+-- ============================================================================
+
+-- ── 1. Real-time message notification trigger ─────────────────────────────────
+
+CREATE OR REPLACE FUNCTION notify_new_message()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    v_recipient_id   UUID;
+    v_last_notified  TIMESTAMPTZ;
+    v_preview        TEXT;
+BEGIN
+    -- Determine recipient from conversations table
+    SELECT CASE WHEN user1_id = NEW.sender_id THEN user2_id ELSE user1_id END
+    INTO   v_recipient_id
+    FROM   conversations
+    WHERE  id = NEW.conversation_id;
+
+    IF v_recipient_id IS NULL THEN RETURN NEW; END IF;
+    -- Don't notify sender of their own message
+    IF v_recipient_id = NEW.sender_id THEN RETURN NEW; END IF;
+
+    -- ── Burst protection: skip push if already sent within 60 seconds ─────────
+    SELECT last_notified_at INTO v_last_notified
+    FROM   message_notification_tracking
+    WHERE  user_id = v_recipient_id AND conversation_id = NEW.conversation_id;
+
+    IF v_last_notified IS NOT NULL AND v_last_notified > NOW() - INTERVAL '60 seconds' THEN
+        -- Still increment count so we know how many were batched
+        UPDATE message_notification_tracking
+        SET notification_count = notification_count + 1
+        WHERE user_id = v_recipient_id AND conversation_id = NEW.conversation_id;
+        RETURN NEW;
+    END IF;
+
+    -- Upsert tracking record
+    INSERT INTO message_notification_tracking(user_id, conversation_id, last_notified_at, notification_count)
+    VALUES (v_recipient_id, NEW.conversation_id, NOW(), 1)
+    ON CONFLICT (user_id, conversation_id)
+    DO UPDATE SET last_notified_at   = NOW(),
+                  notification_count = message_notification_tracking.notification_count + 1;
+
+    -- Build a human-readable preview
+    v_preview := CASE NEW.type
+        WHEN 'image'                  THEN '📷 Sent a photo'
+        WHEN 'file'                   THEN '📎 Sent a file'
+        WHEN 'property'               THEN '🏠 Sent a property listing'
+        WHEN 'property_text'          THEN '🏠 ' || LEFT(NEW.content, 80)
+        ELSE LEFT(NEW.content, 100)
+    END;
+
+    -- Insert into user_notifications → pg_net trigger handles FCM push
+    INSERT INTO user_notifications(user_id, type, title, message, data)
+    VALUES (
+        v_recipient_id,
+        'message',
+        COALESCE(NEW.sender_name, 'New message'),
+        v_preview,
+        jsonb_build_object(
+            'conversation_id', NEW.conversation_id,
+            'sender_id',       NEW.sender_id
+        )
+    );
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_new_message ON messages;
+CREATE TRIGGER on_new_message
+    AFTER INSERT ON messages
+    FOR EACH ROW EXECUTE FUNCTION notify_new_message();
+
+-- ── 2. Unread message reminder (called by hourly cron) ────────────────────────
+
+CREATE OR REPLACE FUNCTION notify_unread_message_reminders()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v_row RECORD;
+BEGIN
+    FOR v_row IN
+        -- Find conversations where the newest unread message is ~24h old (22-26h window)
+        -- and we haven't already sent a reminder for this conversation in the last 20h
+        SELECT DISTINCT ON (m.conversation_id)
+            m.conversation_id,
+            m.sender_name,
+            CASE WHEN c.user1_id = m.sender_id THEN c.user2_id ELSE c.user1_id END AS recipient_id
+        FROM   messages m
+        JOIN   conversations c ON c.id = m.conversation_id
+        WHERE  m.is_read    = FALSE
+          AND  m.is_deleted = FALSE
+          AND  m.created_at BETWEEN NOW() - INTERVAL '26 hours'
+                                AND NOW() - INTERVAL '22 hours'
+          AND  NOT EXISTS (
+              SELECT 1 FROM user_notifications un
+              WHERE  un.user_id = CASE WHEN c.user1_id = m.sender_id THEN c.user2_id ELSE c.user1_id END
+                AND  un.type   = 'unread_message_reminder'
+                AND  (un.data->>'conversation_id')::UUID = m.conversation_id
+                AND  un.created_at > NOW() - INTERVAL '20 hours'
+          )
+        ORDER BY m.conversation_id, m.created_at DESC
+    LOOP
+        -- Skip if recipient = sender (should never happen, safety guard)
+        CONTINUE WHEN v_row.recipient_id IS NULL;
+
+        INSERT INTO user_notifications(user_id, type, title, message, data)
+        VALUES (
+            v_row.recipient_id,
+            'unread_message_reminder',
+            '💬 Unread message',
+            'You have an unread message from ' || COALESCE(v_row.sender_name, 'someone'),
+            jsonb_build_object('conversation_id', v_row.conversation_id)
+        );
+    END LOOP;
+END;
+$$;
+
+-- ── 3. Hourly cron for unread reminder ────────────────────────────────────────
+
+DO $$
+BEGIN
+    PERFORM cron.unschedule('unread-message-reminder')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'unread-message-reminder');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('unread-message-reminder', '0 * * * *',
+        'SELECT notify_unread_message_reminders()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — unread message reminder cron skipped.';
+END $$;
+
+DO $$ BEGIN
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  Part 20: Message push notifications';
+    RAISE NOTICE '  • notify_new_message() trigger (60s burst protection)';
+    RAISE NOTICE '  • notify_unread_message_reminders() (hourly cron)';
+    RAISE NOTICE '=========================================';
+END $$;
