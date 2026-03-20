@@ -1711,6 +1711,9 @@ CREATE TABLE IF NOT EXISTS property_reports (
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Migrate existing tables that may have been created without reporter_id
+ALTER TABLE property_reports ADD COLUMN IF NOT EXISTS reporter_id UUID;
+
 CREATE INDEX IF NOT EXISTS idx_property_reports_property ON property_reports(property_id);
 CREATE INDEX IF NOT EXISTS idx_property_reports_status   ON property_reports(status);
 CREATE INDEX IF NOT EXISTS idx_property_reports_reporter ON property_reports(reporter_id);
@@ -1726,6 +1729,9 @@ CREATE TABLE IF NOT EXISTS ad_reports (
                              CHECK (status IN ('pending','reviewed','dismissed')),
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrate existing tables that may have been created without reporter_id
+ALTER TABLE ad_reports ADD COLUMN IF NOT EXISTS reporter_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_ad_reports_creative  ON ad_reports(creative_id);
 CREATE INDEX IF NOT EXISTS idx_ad_reports_status    ON ad_reports(status);
