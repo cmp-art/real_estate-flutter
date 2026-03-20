@@ -1,5 +1,4 @@
 // features/properties/presentation/widgets/property_list_card.dart
-// Redesigned to match PropertyGridCard visual style — no archive button.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +12,7 @@ import '../../../../core/services/cdn_service.dart';
 import '../../../../core/utils/dialog_utils.dart';
 import '../../../../core/utils/snackbar_utils.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
@@ -37,21 +37,22 @@ class PropertyListCard extends ConsumerStatefulWidget {
 }
 
 class _PropertyListCardState extends ConsumerState<PropertyListCard> {
-  // ── Owner actions ──────────────────────────────────────────────────────────
 
   Future<void> _handleShare() async {
-    final currentLanguage = ref.read(languageProvider).languageCode;
     final currentCurrency = ref.read(currencyProvider);
-    String t(String key) => AppTranslations.translate(key, currentLanguage);
     try {
-      final text = '${t('property')}: ${widget.property.title}\n'
-          '${t('price')}: ${Formatters.formatCurrency(widget.property.price, currencyCode: currentCurrency)}\n'
-          '${t('location')}: ${widget.property.location}\n'
-          '${t('bedrooms')}: ${widget.property.bedrooms}, ${t('bathrooms')}: ${widget.property.bathrooms}\n'
-          '${t('area')}: ${widget.property.area.toInt()} ${t('sqft')}';
-      await Share.share(text);
+      final p = widget.property;
+      final price = Formatters.formatCurrency(p.price, currencyCode: currentCurrency);
+      final isRent = p.type == PropertyType.rent;
+      final rentSuffix = isRent ? '/month' : '';
+      final msg = '🏠 *${p.title}*\n\n'
+          '💰 $price$rentSuffix\n'
+          '📍 ${p.location}\n'
+          '🛏 ${p.bedrooms} beds  🚿 ${p.bathrooms} baths  📐 ${p.area.toInt()} sqft\n\n'
+          'Check it out on Patamjengo 👇\nhttps://patamjengo.netlify.app';
+      await Share.share(msg, subject: p.title);
     } catch (e) {
-      if (mounted) SnackbarUtils.showError(context, 'error');
+      if (mounted) SnackbarUtils.showError(context, 'Could not share. Please try again.');
     }
   }
 
@@ -98,7 +99,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
     }
   }
 
-  void _showMoreOptions() {
+  void _showMoreOptions(bool isOwner) {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
     final currentLanguage = ref.read(languageProvider).languageCode;
@@ -114,7 +115,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+            const SizedBox(height: 12),
             Container(
               width: 40, height: 4,
               decoration: BoxDecoration(
@@ -123,36 +124,57 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
               ),
             ),
             const SizedBox(height: 20),
+            // Share — available to everyone
             ListTile(
               leading: Icon(Icons.share_outlined,
-                  color: isDarkMode ? Colors.grey[400] : ThemeConfig.textSecondaryColor),
-              title: Text(t('share'),
+                  color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
+              title: Text('Share',
                   style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
+              subtitle: Text('WhatsApp, email, SMS & more',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: isDarkMode ? Colors.grey[500] : Colors.grey[600])),
               onTap: () { Navigator.pop(context); _handleShare(); },
             ),
-            ListTile(
-              leading: Icon(Icons.edit_outlined,
-                  color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
-              title: Text(t('edit'),
-                  style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
-              onTap: () { Navigator.pop(context); _handleEdit(); },
-            ),
-            ListTile(
-              leading: Icon(Icons.delete_outline,
-                  color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor),
-              title: Text(t('delete'),
-                  style: TextStyle(
-                      color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor)),
-              onTap: () { Navigator.pop(context); _handleDelete(); },
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+            if (isOwner) ...[
+              ListTile(
+                leading: Icon(Icons.edit_outlined,
+                    color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
+                title: Text(t('edit'),
+                    style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
+                onTap: () { Navigator.pop(context); _handleEdit(); },
+              ),
+              ListTile(
+                leading: Icon(Icons.delete_outline,
+                    color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor),
+                title: Text(t('delete'),
+                    style: TextStyle(
+                        color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor)),
+                onTap: () { Navigator.pop(context); _handleDelete(); },
+              ),
+            ] else ...[
+              ListTile(
+                leading: Icon(Icons.flag_outlined,
+                    color: isDarkMode ? Colors.red[400] : Colors.red[600]),
+                title: Text('Report Listing',
+                    style: TextStyle(
+                        color: isDarkMode ? Colors.red[400] : Colors.red[600])),
+                subtitle: Text('Scam, wrong info, duplicate...',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: isDarkMode ? Colors.grey[500] : Colors.grey[600])),
+                onTap: () {
+                  Navigator.pop(context);
+                  ReportBottomSheet.showProperty(context, widget.property.id);
+                },
+              ),
+            ],
+            const SizedBox(height: 8),
           ],
         ),
       ),
     );
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -213,7 +235,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Media section — first image only (reduces CDN egress) ────────
+            // ── Image section ─────────────────────────────────────────────
             Stack(
               children: [
                 Container(
@@ -221,11 +243,13 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                   width: double.infinity,
                   decoration: BoxDecoration(
                     color: backgroundColor,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(12)),
                   ),
                   child: widget.property.images.isNotEmpty
                       ? ClipRRect(
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                          borderRadius:
+                              const BorderRadius.vertical(top: Radius.circular(12)),
                           child: CachedNetworkImage(
                             imageUrl: widget.property.images.first,
                             cacheManager: CustomCacheManager.instance,
@@ -233,60 +257,77 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                             width: double.infinity,
                             placeholder: (context, url) => Container(
                               color: backgroundColor,
-                              child: const Center(child: CircularProgressIndicator(color: ThemeConfig.primaryColor)),
+                              child: const Center(
+                                  child: CircularProgressIndicator(
+                                      color: ThemeConfig.primaryColor)),
                             ),
                             errorWidget: (context, url, error) => Container(
                               color: backgroundColor,
-                              child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor),
+                              child: Icon(Icons.home,
+                                  size: ResponsiveHelper.getResponsiveIconSize(context),
+                                  color: iconColor),
                             ),
                             fadeInDuration: const Duration(milliseconds: 300),
                             fadeOutDuration: const Duration(milliseconds: 100),
                           ),
                         )
-                      : Center(child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor)),
+                      : Center(
+                          child: Icon(Icons.home,
+                              size: ResponsiveHelper.getResponsiveIconSize(context),
+                              color: iconColor)),
                 ),
-
                 // Status badge — top left
                 Positioned(
                   top: 8, left: 8,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(6)),
+                    decoration: BoxDecoration(
+                        color: statusColor,
+                        borderRadius: BorderRadius.circular(6)),
                     child: Text(
                       widget.property.status.displayName.toUpperCase(),
                       style: TextStyle(
                         color: statusTextColor,
-                        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                        fontSize:
+                            ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ),
-
                 // Tier badge — top right
-                if (widget.property.ownerTier == 'pro' || widget.property.ownerTier == 'basic')
+                if (widget.property.ownerTier == 'pro' ||
+                    widget.property.ownerTier == 'basic')
                   Positioned(
                     top: 8, right: 8,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: widget.property.ownerTier == 'pro' ? Colors.green[700] : Colors.blue[700],
+                        color: widget.property.ownerTier == 'pro'
+                            ? Colors.green[700]
+                            : Colors.blue[700],
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            widget.property.ownerTier == 'pro' ? Icons.workspace_premium : Icons.verified,
+                            widget.property.ownerTier == 'pro'
+                                ? Icons.workspace_premium
+                                : Icons.verified,
                             color: Colors.white,
                             size: ResponsiveHelper.getResponsiveIconSize(context),
                           ),
-                          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
+                          SizedBox(
+                              width:
+                                  ResponsiveHelper.getResponsiveSpacing(context) / 2),
                           Text(
                             widget.property.ownerTier == 'pro' ? 'PRO' : 'BASIC',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                              fontSize: ResponsiveHelper.getResponsiveFontSize(
+                                  context, mobile: 10),
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -294,27 +335,30 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                       ),
                     ),
                   ),
-
                 // Media count — bottom right
                 if (totalMedia > 1)
                   Positioned(
                     bottom: 8, right: 8,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.black54,
-                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
+                        borderRadius: BorderRadius.circular(
+                            ResponsiveHelper.getResponsiveBorderRadius(context)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.photo_library_outlined, color: Colors.white, size: 12),
+                          const Icon(Icons.photo_library_outlined,
+                              color: Colors.white, size: 12),
                           const SizedBox(width: 3),
                           Text(
                             '$totalMedia',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
+                              fontSize: ResponsiveHelper.getResponsiveFontSize(
+                                  context, mobile: 10),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -322,27 +366,31 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                       ),
                     ),
                   ),
-
                 // VIDEO badge — bottom left
                 if (hasVideo)
                   Positioned(
                     bottom: 8, left: 8,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.blue.shade700,
-                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
+                        borderRadius: BorderRadius.circular(
+                            ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.videocam_rounded, color: Colors.white, size: 12),
+                          const Icon(Icons.videocam_rounded,
+                              color: Colors.white, size: 12),
                           const SizedBox(width: 3),
-                          Text('VIDEO', style: TextStyle(
-                            color: Colors.white,
-                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-                            fontWeight: FontWeight.bold,
-                          )),
+                          Text('VIDEO',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: ResponsiveHelper.getResponsiveFontSize(
+                                    context, mobile: 10),
+                                fontWeight: FontWeight.bold,
+                              )),
                         ],
                       ),
                     ),
@@ -350,21 +398,19 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
               ],
             ),
 
-            // ── Details section ──────────────────────────────────────────────
+            // ── Details section ───────────────────────────────────────────
             Padding(
-              padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(
-                  context,
-                  multiplier: 1.5)),
+              padding: EdgeInsets.all(
+                  ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Price row + owner actions
+                  // Price row + action buttons (ALL users see three dots)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Price
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -385,9 +431,8 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                                   rentDurationText,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: secondaryTextColor,
-                                    fontSize:
-                                        ResponsiveHelper.getResponsiveFontSize(
-                                            context, mobile: 12),
+                                    fontSize: ResponsiveHelper.getResponsiveFontSize(
+                                        context, mobile: 12),
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -395,51 +440,35 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                           ],
                         ),
                       ),
-
-                      // Action buttons
-                      if (isOwner)
-                        // Owner: favorite + more options (NO archive)
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _CircleIconButton(
-                              bg: buttonBg,
-                              shadow: shadowColor,
-                              child: FavoriteButton(
-                                  propertyId: widget.property.id),
+                      // Favorite + three dots — shown to ALL users
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _CircleIconButton(
+                            bg: buttonBg,
+                            shadow: shadowColor,
+                            child: FavoriteButton(propertyId: widget.property.id),
+                          ),
+                          SizedBox(
+                              width: ResponsiveHelper.getResponsiveSpacing(context)),
+                          _CircleIconButton(
+                            bg: buttonBg,
+                            shadow: shadowColor,
+                            child: IconButton(
+                              onPressed: () => _showMoreOptions(isOwner),
+                              icon: Icon(Icons.more_vert, color: iconColor),
+                              iconSize: 20,
+                              padding: const EdgeInsets.all(6),
+                              constraints: const BoxConstraints(),
                             ),
-                            SizedBox(
-                                width: ResponsiveHelper.getResponsiveSpacing(
-                                    context)),
-                            _CircleIconButton(
-                              bg: buttonBg,
-                              shadow: shadowColor,
-                              child: IconButton(
-                                onPressed: _showMoreOptions,
-                                icon: Icon(Icons.more_vert, color: iconColor),
-                                iconSize: 20,
-                                padding: const EdgeInsets.all(6),
-                                constraints: const BoxConstraints(),
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        // Non-owner: just favorite
-                        _CircleIconButton(
-                          bg: buttonBg,
-                          shadow: shadowColor,
-                          child: FavoriteButton(
-                              propertyId: widget.property.id),
-                        ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
 
-                  SizedBox(
-                      height:
-                          ResponsiveHelper.getResponsiveSpacing(context)),
+                  SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
 
-                  // Title
                   Text(
                     widget.property.title,
                     style: theme.textTheme.titleMedium?.copyWith(
@@ -451,19 +480,15 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                   ),
 
                   SizedBox(
-                      height: ResponsiveHelper.getResponsiveSpacing(context) /
-                          2),
+                      height: ResponsiveHelper.getResponsiveSpacing(context) / 2),
 
-                  // Location
                   Row(
                     children: [
                       Icon(Icons.location_on,
                           size: ResponsiveHelper.getResponsiveIconSize(context),
                           color: secondaryTextColor),
                       SizedBox(
-                          width:
-                              ResponsiveHelper.getResponsiveSpacing(context) /
-                                  2),
+                          width: ResponsiveHelper.getResponsiveSpacing(context) / 2),
                       Expanded(
                         child: Text(
                           widget.property.location,
@@ -480,7 +505,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                       height: ResponsiveHelper.getResponsiveSpacing(context,
                           multiplier: 1.5)),
 
-                  // Stats row
                   Row(
                     children: [
                       if (!isLandOrCommercial) ...[
@@ -493,8 +517,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                           labelColor: secondaryTextColor,
                         ),
                         SizedBox(
-                            width: ResponsiveHelper.getResponsivePadding(
-                                context)),
+                            width: ResponsiveHelper.getResponsivePadding(context)),
                         _PropertyDetailItem(
                           icon: Icons.bathtub,
                           value: '${widget.property.bathrooms}',
@@ -504,8 +527,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                           labelColor: secondaryTextColor,
                         ),
                         SizedBox(
-                            width: ResponsiveHelper.getResponsivePadding(
-                                context)),
+                            width: ResponsiveHelper.getResponsivePadding(context)),
                       ],
                       _PropertyDetailItem(
                         icon: Icons.square_foot,
@@ -516,7 +538,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                         labelColor: secondaryTextColor,
                       ),
                       const Spacer(),
-                      // Rent / Sale badge
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
@@ -578,7 +599,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
 
 // ── Shared helper widgets ──────────────────────────────────────────────────
 
-/// Wraps any widget in a circular card with shadow — matches grid card's button style.
 class _CircleIconButton extends StatelessWidget {
   final Widget child;
   final Color bg;
@@ -635,13 +655,11 @@ class _PropertyDetailItem extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(value,
-                style: TextStyle(
-                    fontWeight: FontWeight.w600, color: valueColor)),
+                style: TextStyle(fontWeight: FontWeight.w600, color: valueColor)),
             Text(label,
                 style: TextStyle(
                   color: labelColor,
-                  fontSize: ResponsiveHelper.getResponsiveFontSize(context,
-                      mobile: 10),
+                  fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
                 )),
           ],
         ),

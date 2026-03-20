@@ -15,6 +15,7 @@ import '../providers/video_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
 import '../../../settings/presentation/screens/app_translations.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
+import '../../../../core/widgets/report_bottom_sheet.dart';
 
 /// Widget for displaying direct ads in property listings
 /// - Native-style design that matches the app theme
@@ -216,9 +217,12 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Sponsored Label
+                // Sponsored Label + Report button
                 Padding(
-                  padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5),
+                    vertical: ResponsiveHelper.getResponsiveSpacing(context),
+                  ),
                   child: Row(
                     children: [
                       Icon(
@@ -234,6 +238,19 @@ class _DirectAdWidgetState extends ConsumerState<DirectAdWidget> {
                           fontWeight: FontWeight.w600,
                           color: ThemeConfig.getTextSecondaryColor(context),
                           letterSpacing: 0.5,
+                        ),
+                      ),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: () => ReportBottomSheet.showAd(
+                          context,
+                          widget.ad.creativeId,
+                          widget.ad.campaignId,
+                        ),
+                        child: Icon(
+                          Icons.more_vert,
+                          size: ResponsiveHelper.getResponsiveIconSize(context),
+                          color: ThemeConfig.getTextSecondaryColor(context),
                         ),
                       ),
                     ],

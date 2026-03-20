@@ -17,6 +17,7 @@ import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
 import '../screens/property_edit_screen.dart';
 import 'package:share_plus/share_plus.dart';
+import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 class PropertyGridCard extends ConsumerStatefulWidget {
@@ -134,22 +135,20 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
   }
 
   Future<void> _handleShare() async {
-    final currentLanguage = ref.read(languageProvider).languageCode;
     final currentCurrency = ref.read(currencyProvider);
-    String t(String key) => AppTranslations.translate(key, currentLanguage);
-    
     try {
-      final propertyUrl = '${t('property')}: ${widget.property.title}\n'
-          '${t('price')}: ${Formatters.formatCurrency(widget.property.price, currencyCode: currentCurrency)}\n'
-          '${t('location')}: ${widget.property.location}\n'
-          '${t('bedrooms')}: ${widget.property.bedrooms}, ${t('bathrooms')}: ${widget.property.bathrooms}\n'
-          '${t('area')}: ${widget.property.area.toInt()} ${t('sqft')}';
-      
-      await Share.share(propertyUrl);
+      final p = widget.property;
+      final price = Formatters.formatCurrency(p.price, currencyCode: currentCurrency);
+      final isRent = p.type == PropertyType.rent;
+      final rentSuffix = isRent ? '/month' : '';
+      final msg = '🏠 *${p.title}*\n\n'
+          '💰 $price$rentSuffix\n'
+          '📍 ${p.location}\n'
+          '🛏 ${p.bedrooms} beds  🚿 ${p.bathrooms} baths  📐 ${p.area.toInt()} sqft\n\n'
+          'Check it out on Patamjengo 👇\nhttps://patamjengo.netlify.app';
+      await Share.share(msg, subject: p.title);
     } catch (e) {
-      if (mounted) {
-        SnackbarUtils.showError(context, t('error'));
-      }
+      if (mounted) SnackbarUtils.showError(context, 'Could not share. Please try again.');
     }
   }
 
@@ -205,12 +204,12 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
     }
   }
 
-  void _showMoreOptions() {
+  void _showMoreOptions(bool isOwner) {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
     final currentLanguage = ref.read(languageProvider).languageCode;
     String t(String key) => AppTranslations.translate(key, currentLanguage);
-    
+
     showModalBottomSheet(
       context: context,
       backgroundColor: isDarkMode ? Colors.grey[900] : Colors.white,
@@ -221,10 +220,9 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+            const SizedBox(height: 12),
             Container(
-              width: 40,
-              height: 4,
+              width: 40, height: 4,
               decoration: BoxDecoration(
                 color: isDarkMode ? Colors.grey[700] : Colors.grey[300],
                 borderRadius: BorderRadius.circular(2),
@@ -232,54 +230,57 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
             ),
             const SizedBox(height: 20),
             ListTile(
-              leading: Icon(
-                Icons.share_outlined,
-                color: isDarkMode ? Colors.grey[400] : ThemeConfig.textSecondaryColor,
-              ),
-              title: Text(
-                t('share'),
-                style: TextStyle(
-                  color: isDarkMode ? Colors.white : Colors.black,
-                ),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _handleShare();
-              },
+              leading: Icon(Icons.share_outlined,
+                  color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
+              title: Text('Share',
+                  style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
+              subtitle: Text('WhatsApp, email, SMS & more',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: isDarkMode ? Colors.grey[500] : Colors.grey[600])),
+              onTap: () { Navigator.pop(context); _handleShare(); },
             ),
-            ListTile(
-              leading: Icon(
-                Icons.edit_outlined,
-                color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor,
+            if (isOwner) ...[
+              ListTile(
+                leading: Icon(Icons.archive_outlined,
+                    color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
+                title: Text(t('archive'),
+                    style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
+                onTap: () { Navigator.pop(context); _handleArchive(); },
               ),
-              title: Text(
-                t('edit'),
-                style: TextStyle(
-                  color: isDarkMode ? Colors.white : Colors.black,
-                ),
+              ListTile(
+                leading: Icon(Icons.edit_outlined,
+                    color: isDarkMode ? Colors.grey[400] : ThemeConfig.primaryColor),
+                title: Text(t('edit'),
+                    style: TextStyle(color: isDarkMode ? Colors.white : Colors.black)),
+                onTap: () { Navigator.pop(context); _handleEdit(); },
               ),
-              onTap: () {
-                Navigator.pop(context);
-                _handleEdit();
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.delete_outline,
-                color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor,
+              ListTile(
+                leading: Icon(Icons.delete_outline,
+                    color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor),
+                title: Text(t('delete'),
+                    style: TextStyle(
+                        color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor)),
+                onTap: () { Navigator.pop(context); _handleDelete(); },
               ),
-              title: Text(
-                t('delete'),
-                style: TextStyle(
-                  color: isDarkMode ? Colors.red[400] : ThemeConfig.errorColor,
-                ),
+            ] else ...[
+              ListTile(
+                leading: Icon(Icons.flag_outlined,
+                    color: isDarkMode ? Colors.red[400] : Colors.red[600]),
+                title: Text('Report Listing',
+                    style: TextStyle(
+                        color: isDarkMode ? Colors.red[400] : Colors.red[600])),
+                subtitle: Text('Scam, wrong info, duplicate...',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: isDarkMode ? Colors.grey[500] : Colors.grey[600])),
+                onTap: () {
+                  Navigator.pop(context);
+                  ReportBottomSheet.showProperty(context, widget.property.id);
+                },
               ),
-              onTap: () {
-                Navigator.pop(context);
-                _handleDelete();
-              },
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
+            ],
+            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -591,7 +592,7 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                                 ],
                               ),
                               child: IconButton(
-                                onPressed: _showMoreOptions,
+                                onPressed: () => _showMoreOptions(isOwner),
                                 icon: Icon(
                                   Icons.more_vert,
                                   color: iconColor,
@@ -604,21 +605,47 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                           ],
                         )
                       else
-                        Container(
-                          decoration: BoxDecoration(
-                            color: buttonBackgroundColor,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: shadowColor,
-                                blurRadius: 4,
-                                offset: const Offset(0, 1),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              decoration: BoxDecoration(
+                                color: buttonBackgroundColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: shadowColor,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: FavoriteButton(
-                            propertyId: widget.property.id,
-                          ),
+                              child: FavoriteButton(
+                                propertyId: widget.property.id,
+                              ),
+                            ),
+                            SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: buttonBackgroundColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: shadowColor,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                              child: IconButton(
+                                onPressed: () => _showMoreOptions(false),
+                                icon: Icon(Icons.more_vert, color: iconColor),
+                                iconSize: 20,
+                                padding: const EdgeInsets.all(6),
+                                constraints: const BoxConstraints(),
+                              ),
+                            ),
+                          ],
                         ),
                     ],
                   ),
