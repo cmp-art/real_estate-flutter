@@ -651,19 +651,6 @@ Consumer(
             },
           ),
           _SettingsTile(
-            icon: Icons.privacy_tip_outlined,
-            title: t('privacy'),
-            subtitle: t('manage_privacy_settings'),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const PrivacySettingsScreen(),
-                ),
-              );
-            },
-          ),
-          _SettingsTile(
             icon: Icons.archive_outlined,
             title: t('archived_properties'),
             subtitle: t('view_archived_properties'),

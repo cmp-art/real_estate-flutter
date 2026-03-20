@@ -193,12 +193,12 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
       case 1:
         final daily = double.tryParse(_dailyBudgetController.text) ?? 0;
         final total = double.tryParse(_totalBudgetController.text) ?? 0;
-        if (daily < 2000) {
-          _snackError('Minimum daily budget is TSh 2,000.');
+        if (daily < 500) {
+          _snackError('Minimum daily budget is TSh 500.');
           return false;
         }
-        if (total < 5000) {
-          _snackError('Minimum total budget is TSh 5,000.');
+        if (total < 500) {
+          _snackError('Minimum total budget is TSh 500.');
           return false;
         }
         if (daily > total) {
@@ -544,7 +544,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
   // ── STEP 2: Budget & bidding ──────────────────────────────────────────────
 
   Widget _buildStep2Budget() {
-    final quickAmounts = [10000.0, 25000.0, 50000.0, 100000.0, 250000.0];
+    final quickAmounts = [500.0, 1000.0, 5000.0, 10000.0, 50000.0];
 
     return Column(
       key: const ValueKey(1),
@@ -557,7 +557,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         _sectionTitle('Daily Budget (TSh)'),
         const SizedBox(height: 6),
         Text(
-          'Minimum: TSh 2,000/day — controls how fast your budget is spent',
+          'Minimum: TSh 500/day — controls how fast your budget is spent',
           style: TextStyle(fontSize: 12, color: ThemeConfig.getTextSecondaryColor(context)),
         ),
         const SizedBox(height: 8),
@@ -574,7 +574,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         _sectionTitle('Total Campaign Budget (TSh)'),
         const SizedBox(height: 6),
         Text(
-          'Minimum: TSh 5,000 — your ad stops when this is used up',
+          'Minimum: TSh 500 — your ad stops when this is used up',
           style: TextStyle(fontSize: 12, color: ThemeConfig.getTextSecondaryColor(context)),
         ),
         const SizedBox(height: 8),
@@ -1324,11 +1324,12 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
         ),
         const SizedBox(height: 28),
 
-        // ── Geographic targeting ───────────────────────────────────────────
-        _sectionTitle('Geographic Targeting'),
+        // ── Tanzania region targeting ──────────────────────────────────────
+        _sectionTitle('Tanzania Region Targeting'),
         const SizedBox(height: 6),
         Text(
-          'Choose your coverage area across Tanzania.',
+          'Narrow your Tanzanian audience by region. '
+          'Users in other target countries always see your ad regardless of this setting.',
           style: TextStyle(
               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
               color: ThemeConfig.getTextSecondaryColor(context)),
@@ -1382,7 +1383,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Show your ad to users in all 31 regions',
+                        'No region filter — show to all Tanzanian users',
                         style: TextStyle(
                           fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
                           color: ThemeConfig.getTextSecondaryColor(context),
@@ -1565,7 +1566,7 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           _reviewRow(
             'Locations',
             _targetWholeCountry
-                ? 'Whole Tanzania (all 31 regions)'
+                ? 'All Tanzania (no region filter)'
                 : _selectedLocations.isEmpty
                     ? 'Not set'
                     : _selectedLocations.join(', '),
