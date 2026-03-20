@@ -478,6 +478,26 @@
 
     window.showInstallInstructions = showInstallInstructions;
 
+    // ── Web foreground notification (called by Flutter via dart:js_interop) ──
+    //
+    // patamjengoShowNotification(title, body)
+    //   • Shows a native browser Notification when the tab is in the foreground
+    //   • Called by PushNotificationService.show() on web (from Supabase Realtime)
+    //   • Background / PWA-closed delivery is handled by firebase-messaging-sw.js
+    //
+    window.patamjengoShowNotification = function(title, body) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification(title, {
+          body:     body,
+          icon:     '/icons/Icon-192.png',
+          badge:    '/icons/Icon-192.png',
+          tag:      'patamjengo-realtime',
+          renotify: true,
+        });
+        n.onclick = function() { window.focus(); n.close(); };
+      }
+    };
+
     // ── Online / Offline banner ───────────────────────────────────────────────
     const showBanner = (msg, color) => {
       const b = document.createElement('div');

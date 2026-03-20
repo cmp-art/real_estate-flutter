@@ -870,15 +870,78 @@ DO $realtime$ BEGIN
     END IF;
 END $realtime$;
 
+-- ============================================================================
+-- PART: FCM PUSH TRIGGER via pg_net
+-- Calls the send-push-notification Edge Function on every user_notifications INSERT.
+-- This replaces the Supabase Webhook UI — no webhook configuration needed.
+-- ============================================================================
+
+-- Enable pg_net (already enabled on Supabase by default)
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- Store project ref and service role key so the trigger can read them
+CREATE TABLE IF NOT EXISTS _push_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- ⚠️  Replace YOUR_SERVICE_ROLE_KEY_HERE with your real service_role key
+--     Supabase Dashboard → Settings → API → service_role (secret key)
+INSERT INTO _push_config(key, value)
+VALUES
+    ('project_ref',  'qeddjlmexurmeiuslgqn'),
+    ('service_role', 'YOUR_SERVICE_ROLE_KEY_HERE')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Lock down — authenticated users cannot read this table
+ALTER TABLE _push_config ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS push_config_deny_all ON _push_config;
+CREATE POLICY push_config_deny_all ON _push_config
+    AS RESTRICTIVE FOR ALL TO authenticated USING (false);
+
+-- Trigger function: fires async HTTP POST to Edge Function after each INSERT
+CREATE OR REPLACE FUNCTION trigger_send_push_notification()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    _ref  TEXT;
+    _key  TEXT;
+    _url  TEXT;
+BEGIN
+    SELECT value INTO _ref FROM _push_config WHERE key = 'project_ref';
+    SELECT value INTO _key FROM _push_config WHERE key = 'service_role';
+
+    _url := 'https://' || _ref || '.supabase.co/functions/v1/send-push-notification';
+
+    PERFORM net.http_post(
+        url     := _url,
+        body    := to_jsonb(NEW)::text,
+        headers := jsonb_build_object(
+            'Content-Type',  'application/json',
+            'Authorization', 'Bearer ' || _key
+        )
+    );
+
+    RETURN NEW;
+END $$;
+
+-- Attach trigger to user_notifications
+DROP TRIGGER IF EXISTS on_user_notification_insert ON user_notifications;
+
+CREATE TRIGGER on_user_notification_insert
+    AFTER INSERT ON user_notifications
+    FOR EACH ROW
+    EXECUTE FUNCTION trigger_send_push_notification();
+
 DO $$ BEGIN
     RAISE NOTICE '=========================================';
-    RAISE NOTICE '  sql10 Extension E: device_push_tokens, notification_rate_limits,';
+    RAISE NOTICE '  sql5: device_push_tokens, notification_rate_limits,';
     RAISE NOTICE '  send_notification(), get_unread_notification_count(),';
     RAISE NOTICE '  mark_all_notifications_read() — DONE';
     RAISE NOTICE '  Realtime enabled on user_notifications';
+    RAISE NOTICE '  FCM push trigger installed (pg_net)';
     RAISE NOTICE '=========================================';
-    RAISE NOTICE '  ALL 5 SQL FILES + EXTENSIONS COMPLETE';
-    RAISE NOTICE '  Run order: sql6 -> sql7 -> sql8 -> sql9 -> sql10';
-    RAISE NOTICE '  Then run each *_extension.sql in same order';
+    RAISE NOTICE '  ALL 5 SQL FILES COMPLETE';
+    RAISE NOTICE '  Run order: sql1 -> sql2 -> sql3 -> sql4 -> sql5';
     RAISE NOTICE '=========================================';
 END $$;

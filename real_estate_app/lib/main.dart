@@ -1,6 +1,7 @@
 // lib/main.dart
-// PRODUCTION VERSION - SUPABASE ONLY (No Firebase!)
-// With Analytics, Error Logging, and Performance Monitoring
+// PRODUCTION VERSION — Supabase + Firebase Cloud Messaging (FCM)
+// FCM is free (no cost per message, no limits) and handles push for
+// Android (background/killed), iOS (background/killed), and Web/PWA.
 
 // ignore_for_file: unused_import
 
@@ -13,6 +14,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:app_links/app_links.dart';
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
 import 'app.dart';
 import 'core/utils/app_lifecycle_observer.dart';
 import 'core/utils/logger.dart';
@@ -20,6 +24,19 @@ import 'core/services/analytics_supabase_service.dart';
 import 'core/services/error_logging_service.dart';
 import 'core/services/performance_monitor_service.dart';
 import 'core/services/push_notification_service.dart';
+import 'firebase_options.dart';
+
+// ── FCM background message handler ──────────────────────────────────────────
+// Must be a TOP-LEVEL function (not a method). Runs in a separate Dart isolate
+// when a data-only FCM message arrives while the app is killed/backgrounded.
+// Messages that include a `notification` field are shown automatically by the
+// OS without this handler being called.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // FlutterFire auto-initialises Firebase before calling this handler.
+  // Only needed for data-only messages — notification messages are shown by OS.
+  debugPrint('[FCM] Background message: ${message.notification?.title}');
+}
 
 late final SupabaseClient supabase;
 late AppLinks _appLinks;
@@ -33,6 +50,21 @@ late final PerformanceMonitorService performanceMonitor;
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   logger.init();
+
+  // Register FCM background handler BEFORE Firebase.initializeApp()
+  // (Required by firebase_messaging — must be first thing after ensureInitialized)
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // ── FIREBASE INITIALIZATION ─────────────────────────────────────────────
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    logger.d('✅ Firebase initialized');
+  } catch (e, s) {
+    logger.e('❌ Firebase initialization error', error: e, stackTrace: s);
+    // App can still run without FCM; Supabase Realtime covers foreground push
+  }
 
   // ========================================
   // ENVIRONMENT VARIABLES - LOAD FIRST
@@ -187,7 +219,9 @@ void main() async {
   }
 
   // ========================================
-  // PUSH NOTIFICATIONS (Supabase Realtime → local banner, NO Firebase)
+  // PUSH NOTIFICATIONS
+  // Foreground: Supabase Realtime → local banner (all platforms)
+  // Background/killed: FCM → OS push (Android, iOS, Web/PWA)
   // ========================================
   try {
     await PushNotificationService.instance.initialize();

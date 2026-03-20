@@ -1,19 +1,33 @@
 // lib/core/services/push_notification_service.dart
-// Supabase-powered push notifications — NO Firebase dependency.
 //
-// Strategy:
-//   • Foreground  → Supabase Realtime INSERT on user_notifications → local banner
-//   • Background  → flutter_local_notifications scheduled/periodic check
-//   • Web (PWA)   → Browser Notification API via JS interop
-//   • Device token stored in device_push_tokens so a Supabase Edge Function
-//     can deliver server-side push in the future via FCM HTTP v1 (service-account
-//     only — the Flutter app never imports firebase_messaging).
+// Unified push notification service — Supabase + Firebase Cloud Messaging (FCM).
+//
+// FCM is 100% free (no cost per message, no limits):
+//   https://firebase.google.com/pricing
+//
+// Delivery strategy:
+//   ┌─────────────────────────┬──────────────────────────────────────────────┐
+//   │ Situation               │ Mechanism                                    │
+//   ├─────────────────────────┼──────────────────────────────────────────────┤
+//   │ App open (all platforms)│ Supabase Realtime → local banner (instant)   │
+//   │ Android background/kill │ FCM → OS shows push banner                   │
+//   │ iOS background/killed   │ FCM → APNs → OS shows push banner            │
+//   │ Web tab open            │ Browser Notification API (JS interop)        │
+//   │ Web tab closed / PWA    │ FCM → firebase-messaging-sw.js shows banner  │
+//   └─────────────────────────┴──────────────────────────────────────────────┘
 
 // ignore_for_file: avoid_print
 
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+// Conditional import: web_push_js.dart on Flutter web (dart:js_interop),
+// web_push_stub.dart (no-ops) on Android / iOS.
+// dart.library.io is available on native but NOT on Flutter web.
+import 'web_push_js.dart' if (dart.library.io) 'web_push_stub.dart';
 
 class PushNotificationService {
   PushNotificationService._();
@@ -23,82 +37,64 @@ class PushNotificationService {
   RealtimeChannel? _realtimeChannel;
   bool _initialized = false;
 
-  // ── Initialise the local-notification plugin ────────────────────────────
+  // ── Initialise ────────────────────────────────────────────────────────────
   Future<void> initialize() async {
     if (_initialized) return;
 
-    if (kIsWeb) {
-      // Web: request browser notification permission via JS
-      _requestWebPermission();
-      _initialized = true;
-      return;
+    if (!kIsWeb) {
+      // Android / iOS: set up flutter_local_notifications for foreground banners
+      const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const darwin = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
+      await _plugin.initialize(
+        const InitializationSettings(
+            android: android, iOS: darwin, macOS: darwin),
+        onDidReceiveNotificationResponse: _onNotificationTap,
+      );
+      // Android 13+ explicit permission request
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
     }
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const darwin = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+    // ── FCM permission + foreground / tap handlers ──────────────────────────
+    final messaging = FirebaseMessaging.instance;
+
+    await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
     );
 
-    await _plugin.initialize(
-      const InitializationSettings(android: android, iOS: darwin, macOS: darwin),
-      onDidReceiveNotificationResponse: _onNotificationTap,
-    );
+    // Foreground FCM message: Supabase Realtime already shows a banner faster,
+    // so we intentionally skip here to prevent duplicate notifications.
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      debugPrint(
+          '[FCM] Foreground message (handled by Realtime): ${message.notification?.title}');
+    });
 
-    // Android 13+ explicit permission request
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    // User tapped a notification while the app was in the background (not killed)
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('[FCM] Notification tapped from background: ${message.data}');
+      // The app's router can listen to this stream for navigation.
+    });
+
+    // Check if app was launched by tapping a notification (killed state)
+    final initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint(
+          '[FCM] App launched from notification: ${initialMessage.data}');
+    }
 
     _initialized = true;
-    debugPrint('✅ PushNotificationService initialized');
+    debugPrint('✅ PushNotificationService initialized (FCM + Realtime)');
   }
 
-  // ── Show a local notification banner ────────────────────────────────────
-  Future<void> show({
-    required String title,
-    required String body,
-    String? payload,
-    int id = 0,
-  }) async {
-    if (kIsWeb) {
-      _showWebNotification(title, body);
-      return;
-    }
-    if (!_initialized) await initialize();
-
-    const androidDetails = AndroidNotificationDetails(
-      'patamjengo_main',
-      'Patamjengo Alerts',
-      channelDescription:
-          'Property price drops, new listings, messages, and system alerts',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
-      playSound: true,
-      enableVibration: true,
-    );
-
-    const details = NotificationDetails(
-      android: androidDetails,
-      iOS: DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
-      macOS: DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
-    );
-
-    await _plugin.show(id, title, body, details, payload: payload);
-  }
-
-  // ── Subscribe to Supabase Realtime → fire local banner ──────────────────
+  // ── Subscribe to Supabase Realtime (foreground banners) ──────────────────
   void subscribeToNotifications(String userId) {
     _realtimeChannel?.unsubscribe();
 
@@ -118,11 +114,13 @@ class PushNotificationService {
             final title = row['title'] as String? ?? 'New Notification';
             final message = row['message'] as String? ?? '';
             final id = row['id'] as String? ?? '';
-            // Use hashCode of id as int notification id (avoids duplicates)
             show(title: title, body: message, payload: id, id: id.hashCode);
           },
         )
         .subscribe();
+
+    // Register FCM token so the Edge Function can deliver background pushes
+    _registerFcmToken(userId);
 
     debugPrint('📡 PushNotificationService subscribed for user $userId');
   }
@@ -132,31 +130,66 @@ class PushNotificationService {
     _realtimeChannel = null;
   }
 
-  // ── Store device token in Supabase (for server-side push via Edge Fn) ───
-  Future<void> registerDeviceToken({
-    required String userId,
-    required String token,
-    required String platform, // 'android' | 'ios' | 'web'
-  }) async {
+  // ── Register FCM token in Supabase device_push_tokens ────────────────────
+  Future<void> _registerFcmToken(String userId) async {
     try {
-      await Supabase.instance.client.from('device_push_tokens').upsert(
-        {
-          'user_id': userId,
-          'token': token,
-          'platform': platform,
-          'is_active': true,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        },
-        onConflict: 'user_id,platform',
-      );
-      debugPrint('✅ Device push token registered ($platform)');
+      final messaging = FirebaseMessaging.instance;
+      String? token;
+
+      if (kIsWeb) {
+        // Web: use custom VAPID key if set, otherwise Firebase uses its default key.
+        // VAPID key: Firebase Console → Project Settings → Cloud Messaging →
+        // Web configuration → Generate key pair → add to .env as FIREBASE_VAPID_KEY
+        final vapidKey = dotenv.env['FIREBASE_VAPID_KEY'] ?? '';
+        token = vapidKey.isNotEmpty
+            ? await messaging.getToken(vapidKey: vapidKey)
+            : await messaging.getToken();
+      } else {
+        token = await messaging.getToken();
+      }
+
+      if (token == null || token.isEmpty) return;
+
+      final platform = kIsWeb
+          ? 'web'
+          : defaultTargetPlatform == TargetPlatform.android
+              ? 'android'
+              : 'ios';
+
+      await _upsertToken(userId: userId, token: token, platform: platform);
+
+      // Keep token fresh on refresh
+      messaging.onTokenRefresh.listen((newToken) {
+        _upsertToken(userId: userId, token: newToken, platform: platform);
+      });
+
+      debugPrint('✅ FCM token registered ($platform)');
     } catch (e) {
-      debugPrint('⚠️  Failed to register device token: $e');
+      debugPrint('⚠️  FCM token registration failed: $e');
     }
   }
 
+  Future<void> _upsertToken({
+    required String userId,
+    required String token,
+    required String platform,
+  }) async {
+    await Supabase.instance.client.from('device_push_tokens').upsert(
+      {
+        'user_id': userId,
+        'token': token,
+        'platform': platform,
+        'is_active': true,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      onConflict: 'user_id,platform',
+    );
+  }
+
+  // ── Deregister token on logout ────────────────────────────────────────────
   Future<void> deregisterDeviceToken(String userId, String platform) async {
     try {
+      await FirebaseMessaging.instance.deleteToken();
       await Supabase.instance.client
           .from('device_push_tokens')
           .update({'is_active': false})
@@ -165,25 +198,54 @@ class PushNotificationService {
     } catch (_) {}
   }
 
-  // ── Notification tap handler ─────────────────────────────────────────────
+  // ── Show a local notification banner ─────────────────────────────────────
+  Future<void> show({
+    required String title,
+    required String body,
+    String? payload,
+    int id = 0,
+  }) async {
+    if (kIsWeb) {
+      // Web foreground: use browser Notification API via JS interop
+      showWebNotification(title, body);
+      return;
+    }
+    if (!_initialized) await initialize();
+
+    const androidDetails = AndroidNotificationDetails(
+      'patamjengo_main',
+      'Patamjengo Alerts',
+      channelDescription:
+          'Property price drops, new listings, messages, and system alerts',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+      playSound: true,
+      enableVibration: true,
+    );
+
+    await _plugin.show(
+      id,
+      title,
+      body,
+      const NotificationDetails(
+        android: androidDetails,
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+        macOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
+      payload: payload,
+    );
+  }
+
   void _onNotificationTap(NotificationResponse response) {
-    // payload = notification UUID → navigate to notifications screen
     debugPrint('Notification tapped: ${response.payload}');
-    // Navigation handled by the app's router listening to this service.
-  }
-
-  // ── Web: browser Notification API (via dart:js_interop) ─────────────────
-  void _requestWebPermission() {
-    // Handled in index.html / service worker; Flutter web cannot call
-    // Notification.requestPermission() directly without js_interop.
-    // The service-worker.js handles push subscription.
-    debugPrint('Web push: permission handled by browser');
-  }
-
-  void _showWebNotification(String title, String body) {
-    // On web the Supabase Realtime subscription triggers this path,
-    // but we rely on the browser's built-in Notification API which is
-    // registered in the service worker for background delivery.
-    debugPrint('Web notification: $title — $body');
   }
 }
