@@ -34,39 +34,75 @@ class WebDropZone extends StatefulWidget {
 class _WebDropZoneState extends State<WebDropZone> {
   bool _isDragging = false;
 
-  void _handleDragOver(html.MouseEvent event) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!_isDragging && mounted) setState(() => _isDragging = true);
+  // Use html.EventListener type alias (Function(Event)) — avoids DragEvent
+  // which is not exported in all dart:html versions.
+  late final html.EventListener _overListener;
+  late final html.EventListener _leaveListener;
+  late final html.EventListener _dropListener;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _overListener = (html.Event e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!_isDragging && mounted) setState(() => _isDragging = true);
+    };
+
+    _leaveListener = (html.Event e) {
+      e.preventDefault();
+      if (_isDragging && mounted) setState(() => _isDragging = false);
+    };
+
+    _dropListener = (html.Event e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (mounted) setState(() => _isDragging = false);
+
+      // Access dataTransfer dynamically — DragEvent may not be exported.
+      // ignore: avoid_dynamic_calls
+      final dynamic dt = (e as dynamic).dataTransfer;
+      if (dt == null) return;
+
+      // ignore: avoid_dynamic_calls
+      final html.FileList? files = dt.files as html.FileList?;
+      if (files == null || files.isEmpty) return;
+
+      _processFiles(files);
+    };
+
+    final body = html.document.body;
+    if (body != null) {
+      body.addEventListener('dragover',  _overListener);
+      body.addEventListener('dragleave', _leaveListener);
+      body.addEventListener('drop',      _dropListener);
+    }
   }
 
-  void _handleDragLeave(html.MouseEvent event) {
-    if (_isDragging && mounted) setState(() => _isDragging = false);
-  }
-
-  void _handleDrop(html.MouseEvent event) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (mounted) setState(() => _isDragging = false);
-
-    final dt = (event as html.DragEvent).dataTransfer;
-    if (dt == null) return;
-
-    final files = dt.files;
-    if (files == null || files.isEmpty) return;
-
-    _processFiles(files);
+  @override
+  void dispose() {
+    final body = html.document.body;
+    if (body != null) {
+      body.removeEventListener('dragover',  _overListener);
+      body.removeEventListener('dragleave', _leaveListener);
+      body.removeEventListener('drop',      _dropListener);
+    }
+    super.dispose();
   }
 
   Future<void> _processFiles(html.FileList files) async {
     final validXFiles = <XFile>[];
     int skipped = 0;
 
-    final allowed = <String>['image/jpeg', 'image/jpg', 'image/png', 'image/webp',
-                             'image/heic', 'image/heif'];
+    const allowed = <String>[
+      'image/jpeg', 'image/jpg', 'image/png',
+      'image/webp', 'image/heic', 'image/heif',
+    ];
 
     for (int i = 0; i < files.length && validXFiles.length < widget.maxFiles; i++) {
-      final file = files[i]!;
+      final file = files.item(i);
+      if (file == null) continue;
       if (!allowed.contains(file.type)) continue;
       if (file.size > widget.maxBytesPerFile) {
         skipped++;
@@ -79,14 +115,13 @@ class _WebDropZoneState extends State<WebDropZone> {
       await reader.onLoad.first;
 
       final bytes = (reader.result as ByteBuffer).asUint8List();
-      final blob = html.Blob([bytes], file.type);
-      final url  = html.Url.createObjectUrl(blob);
+      final blob  = html.Blob([bytes], file.type);
+      final url   = html.Url.createObjectUrl(blob);
       validXFiles.add(XFile(url, name: file.name, length: file.size));
     }
 
     if (skipped > 0) {
-      widget.onOversized?.call(
-          skipped, widget.maxBytesPerFile / (1024 * 1024));
+      widget.onOversized?.call(skipped, widget.maxBytesPerFile / (1024 * 1024));
     }
 
     if (validXFiles.isNotEmpty) {
@@ -96,95 +131,16 @@ class _WebDropZoneState extends State<WebDropZone> {
 
   @override
   Widget build(BuildContext context) {
-    // Attach native HTML event listeners to the document body so the entire
-    // drop zone is covered, regardless of Flutter's event-loop interception.
-    return MouseRegion(
-      child: Listener(
-        onPointerDown: (_) {},
-        child: GestureDetector(
-          onTap: () {},
-          child: _HtmlDropTarget(
-            isDragging: _isDragging,
-            onDragOver: _handleDragOver,
-            onDragLeave: _handleDragLeave,
-            onDrop: _handleDrop,
-            child: widget.child,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Thin widget that registers dart:html drag event listeners on the Flutter
-/// platform view element so OS-level file drags are captured.
-class _HtmlDropTarget extends StatefulWidget {
-  final Widget child;
-  final bool isDragging;
-  final void Function(html.MouseEvent) onDragOver;
-  final void Function(html.MouseEvent) onDragLeave;
-  final void Function(html.MouseEvent) onDrop;
-
-  const _HtmlDropTarget({
-    required this.child,
-    required this.isDragging,
-    required this.onDragOver,
-    required this.onDragLeave,
-    required this.onDrop,
-  });
-
-  @override
-  State<_HtmlDropTarget> createState() => _HtmlDropTargetState();
-}
-
-class _HtmlDropTargetState extends State<_HtmlDropTarget> {
-  List<html.EventListener> _listeners = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _attachListeners();
-  }
-
-  void _attachListeners() {
-    final body = html.document.body!;
-
-    final overListener  = (html.Event e) => widget.onDragOver(e as html.MouseEvent);
-    final leaveListener = (html.Event e) => widget.onDragLeave(e as html.MouseEvent);
-    final dropListener  = (html.Event e) => widget.onDrop(e as html.MouseEvent);
-
-    body.addEventListener('dragover',  overListener);
-    body.addEventListener('dragleave', leaveListener);
-    body.addEventListener('drop',      dropListener);
-
-    _listeners = [overListener, leaveListener, dropListener];
-  }
-
-  @override
-  void dispose() {
-    final body = html.document.body!;
-    final events = ['dragover', 'dragleave', 'drop'];
-    for (int i = 0; i < _listeners.length; i++) {
-      body.removeEventListener(events[i], _listeners[i]);
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
-      decoration: widget.isDragging
+      decoration: _isDragging
           ? BoxDecoration(
               border: Border.all(
                 color: Theme.of(context).colorScheme.primary,
                 width: 2,
               ),
               borderRadius: BorderRadius.circular(12),
-              color: Theme.of(context)
-                  .colorScheme
-                  .primary
-                  .withOpacity(0.05),
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
             )
           : null,
       child: widget.child,
