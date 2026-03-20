@@ -81,8 +81,14 @@ class ImageHelper {
     }
   }
 
-  // Pick multiple images from gallery — returns XFile (works on web + native)
-  Future<List<XFile>> pickMultipleImages({int maxImages = 10}) async {
+  // Pick multiple images from gallery — returns XFile (works on web + native).
+  // [onOversized] is called when one or more images are skipped because they
+  // exceed [AppConstants.maxImageSize].  The callback receives the number of
+  // skipped files and the limit in MB so the caller can show a snackbar.
+  Future<List<XFile>> pickMultipleImages({
+    int maxImages = 10,
+    void Function(int skippedCount, double maxMB)? onOversized,
+  }) async {
     if (_isPickerActive) return [];     // already open — silently ignore
     _isPickerActive = true;
     try {
@@ -94,15 +100,23 @@ class ImageHelper {
 
       if (images.isEmpty) return [];
 
-      // Limit number of images
+      // Limit number of images to remaining slots
       final limitedImages = images.take(maxImages).toList();
 
       final List<XFile> validImages = [];
+      int skipped = 0;
       for (final image in limitedImages) {
         final size = await image.length();
         if (size <= AppConstants.maxImageSize) {
           validImages.add(image);
+        } else {
+          skipped++;
         }
+      }
+
+      // Notify caller about skipped images so it can show a snackbar
+      if (skipped > 0 && onOversized != null) {
+        onOversized(skipped, AppConstants.maxImageSize / (1024 * 1024));
       }
 
       return validImages;

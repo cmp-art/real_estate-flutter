@@ -9,6 +9,8 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:video_compress/video_compress.dart';
 import '../../../../core/utils/video_web_utils.dart'
     if (dart.library.io) '../../../../core/utils/video_web_utils_stub.dart';
+import '../../../../core/utils/web_drop_zone.dart'
+    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
@@ -603,12 +605,41 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   }
 
   Future<void> _pickImages() async {
+    final remainingSlots =
+        AppConstants.maxImagesPerProperty - _selectedImages.length;
+    if (remainingSlots <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Maximum ${AppConstants.maxImagesPerProperty} photos allowed'),
+          backgroundColor: ThemeConfig.errorColor,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
+
     final images = await _imageHelper.pickMultipleImages(
-      maxImages: AppConstants.maxImagesPerProperty,
+      maxImages: remainingSlots,
+      onOversized: (skipped, maxMB) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+                'each must be under ${maxMB.toStringAsFixed(0)} MB'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      },
     );
-    setState(() {
-      _selectedImages = images;
-    });
+
+    if (images.isNotEmpty && mounted) {
+      setState(() {
+        // APPEND to existing list — never replace
+        _selectedImages = [..._selectedImages, ...images];
+      });
+    }
   }
 
   Future<void> _pickVideo() async {
@@ -1030,10 +1061,35 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           ),
         ],
       ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+      body: WebDropZone(
+        maxFiles: AppConstants.maxImagesPerProperty,
+        maxBytesPerFile: AppConstants.maxImageSize,
+        onFilesDropped: (dropped) {
+          final remaining =
+              AppConstants.maxImagesPerProperty - _selectedImages.length;
+          if (remaining <= 0) return;
+          if (mounted) {
+            setState(() => _selectedImages = [
+                  ..._selectedImages,
+                  ...dropped.take(remaining),
+                ]);
+          }
+        },
+        onOversized: (skipped, maxMB) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+                  'each must be under ${maxMB.toStringAsFixed(0)} MB'),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ));
+          }
+        },
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
           children: [
             // ── Instructions banner ──────────────────────────────────
             _InstructionsBanner(
@@ -1049,6 +1105,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             ),
             const SizedBox(height: 4),
             _FieldTip(s.mediaTip),
+            if (kIsWeb) ...[
+              const SizedBox(height: 4),
+              _FieldTip('On desktop you can also drag & drop photos directly onto this form'),
+            ],
             const SizedBox(height: 10),
 
             // Empty state — two tap targets side by side (shown until at least one image is added)
@@ -1545,6 +1605,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           ],
         ),
       ),
+      ), // WebDropZone
     );
   }
 }

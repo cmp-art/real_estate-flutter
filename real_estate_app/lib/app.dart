@@ -1,5 +1,7 @@
 // lib/app.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -34,6 +36,14 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
   void initState() {
     super.initState();
     _listenToAuthChanges();
+    // Re-enforce portrait lock here in case the OS reset it after a custom tab
+    // or other full-screen overlay returned to the app.
+    if (!kIsWeb) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
+    }
   }
 
   void _listenToAuthChanges() {
@@ -89,10 +99,33 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
     });
   }
 
+  /// Re-apply the correct status-bar style whenever the theme changes so
+  /// there is never a stale blue bar from a previous build pass.
+  void _applyStatusBarStyle(ThemeMode mode) {
+    final isDark = mode == ThemeMode.dark ||
+        (mode == ThemeMode.system &&
+            WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+                Brightness.dark);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor:
+          isDark ? const Color(0xFF121212) : const Color(0xFFFFFFFF),
+      systemNavigationBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeActualProvider);
     final locale = ref.watch(languageProvider);
+
+    // Apply status-bar style on every theme change (including first build).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _applyStatusBarStyle(themeMode);
+    });
 
     return MaterialApp(
       navigatorKey: _navigatorKey,

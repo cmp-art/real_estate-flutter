@@ -6,7 +6,7 @@ class AppConstants {
   static const String appVersion = '1.0.0';
   static const int defaultPageSize = 20;
   static const int maxPageSize = 50;
-  static const int maxImageSize = 5 * 1024 * 1024;
+  static const int maxImageSize = 15 * 1024 * 1024;
   static const int maxImagesPerProperty = 10;
   static const List<String> allowedImageFormats = ['jpg', 'jpeg', 'png', 'webp'];
   static const int minPasswordLength = 8;

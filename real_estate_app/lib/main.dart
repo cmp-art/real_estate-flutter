@@ -100,9 +100,8 @@ void main() async {
 
   AppLifecycleObserver().initialize();
 
-  // Orientation: portrait-only on mobile (respects device lock), all on web/desktop.
-  // Passing DeviceOrientation.values on mobile overrides the device's auto-rotate
-  // lock and forces the app to rotate even when the user has rotation locked off.
+  // Orientation: portrait-only on mobile (hard lock — ignores system auto-rotate).
+  // DeviceOrientation.values on web/desktop allows all orientations.
   if (kIsWeb) {
     await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
   } else {
@@ -111,6 +110,17 @@ void main() async {
       DeviceOrientation.portraitDown,
     ]);
   }
+
+  // Apply initial status-bar style BEFORE the first frame so there is no
+  // brief flash of the default Android blue bar.  The AppBarTheme's
+  // systemOverlayStyle only takes effect once an AppBar widget is on screen,
+  // so we must also set it here for splash / login screens that have no AppBar.
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // will be overridden per-theme
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
 
   // ========================================
   // SUPABASE INITIALIZATION

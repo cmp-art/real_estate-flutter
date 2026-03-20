@@ -305,7 +305,7 @@ class PropertyRemoteDataSource {
 
   /// OPTIMIZED: Upload images with compression
   /// NOTE: Images should be compressed on client-side BEFORE upload
-  /// Max size: 5MB per image (enforced by storage bucket)
+  /// Max size: 15MB per image (enforced by storage bucket)
   Future<List<String>> uploadImages(String propertyId, List<XFile> images) async {
     try {
       final userId = supabaseClient.auth.currentUser?.id;

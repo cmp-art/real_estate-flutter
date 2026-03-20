@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import '../../../../core/utils/web_drop_zone.dart'
+    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/validators.dart';
@@ -115,6 +117,17 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
 
     final images = await _imageHelper.pickMultipleImages(
       maxImages: remainingSlots,
+      onOversized: (skipped, maxMB) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+                'each must be under ${maxMB.toStringAsFixed(0)} MB'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      },
     );
 
     if (images.isNotEmpty && mounted) {
@@ -313,13 +326,36 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
         title: Text(t('edit_property')),
         elevation: 0,
       ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-          children: [
-            Text(
-              t('property_images'),
+      body: WebDropZone(
+        maxFiles: AppConstants.maxImagesPerProperty,
+        maxBytesPerFile: AppConstants.maxImageSize,
+        onFilesDropped: (dropped) {
+          final remaining = AppConstants.maxImagesPerProperty -
+              _existingImages.length -
+              _selectedImages.length;
+          if (remaining <= 0) return;
+          if (mounted) {
+            setState(() => _selectedImages.addAll(dropped.take(remaining)));
+          }
+        },
+        onOversized: (skipped, maxMB) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+                  'each must be under ${maxMB.toStringAsFixed(0)} MB'),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ));
+          }
+        },
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
+            children: [
+              Text(
+                t('property_images'),
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -750,6 +786,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           ],
         ),
       ),
+      ), // WebDropZone
     );
   }
 }
