@@ -1,5 +1,6 @@
 // core/config/theme_config.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class ThemeConfig {
   // ==================== LIGHT MODE COLORS ====================
@@ -137,6 +138,12 @@ class ThemeConfig {
         fontSize: 20,
         fontWeight: FontWeight.w600,
       ),
+      // Status bar: transparent so app bar colour shows through; white icons on blue
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
     ),
     
     bottomNavigationBarTheme: const BottomNavigationBarThemeData(
@@ -226,6 +233,12 @@ class ThemeConfig {
         color: darkAppBarForeground,
         fontSize: 20,
         fontWeight: FontWeight.w600,
+      ),
+      // Status bar: transparent so dark app bar shows through; white icons on dark
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
       ),
     ),
     

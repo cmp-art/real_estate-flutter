@@ -15,6 +15,7 @@ import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/utils/share_utils.dart';
 import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../presentation/providers/auth_provider.dart';
+import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
@@ -294,8 +295,9 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                   ),
                 ),
                 // Tier badge — top right
-                if (widget.property.ownerTier == 'pro' ||
-                    widget.property.ownerTier == 'basic')
+                // Hidden for PRO subscribers (they already have full access; badge clutters the card)
+                if ((widget.property.ownerTier == 'pro' || widget.property.ownerTier == 'basic') &&
+                    !(ref.watch(userSubscriptionProvider)?.isPro ?? false))
                   Positioned(
                     top: 8, right: 8,
                     child: Container(
