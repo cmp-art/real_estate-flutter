@@ -65,6 +65,16 @@ class NotificationFilterScreen extends ConsumerStatefulWidget {
   ConsumerState<NotificationFilterScreen> createState() => _NotificationFilterScreenState();
 }
 
+// Tanzania regions — used for location-based notification filter
+const _kTanzaniaRegions = [
+  'Arusha', 'Dar es Salaam', 'Dodoma', 'Geita', 'Iringa', 'Kagera',
+  'Katavi', 'Kigoma', 'Kilimanjaro', 'Lindi', 'Manyara', 'Mara',
+  'Mbeya', 'Morogoro', 'Mtwara', 'Mwanza', 'Njombe', 'Pemba North',
+  'Pemba South', 'Pwani', 'Rukwa', 'Ruvuma', 'Shinyanga', 'Simiyu',
+  'Singida', 'Songwe', 'Tabora', 'Tanga', 'Unguja North', 'Unguja South',
+  'Zanzibar West',
+];
+
 class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScreen> {
   final _formKey = GlobalKey<FormState>();
 
@@ -85,6 +95,9 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   double? _maxArea;
   final _minAreaCtrl = TextEditingController();
   final _maxAreaCtrl = TextEditingController();
+
+  // Location filter — empty set = any location
+  Set<String> _selectedRegions = {};
 
   bool _isLoading = false;
   bool _isLoadingFilter = false;
@@ -128,6 +141,8 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
           _maxBathrooms = filter.maxBathrooms;
           _minArea = filter.minArea;
           _maxArea = filter.maxArea;
+          // Load saved regions — treat null/empty as no restriction
+          _selectedRegions = (filter.regions ?? []).toSet();
 
           if (_minPrice != null) _minPriceCtrl.text = _minPrice!.toStringAsFixed(0);
           if (_maxPrice != null) _maxPriceCtrl.text = _maxPrice!.toStringAsFixed(0);
@@ -172,6 +187,8 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
                 children: [
                   _buildInfoCard(isDark),
                   SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
+                  _buildLocationSection(isDark),
+                  SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
                   _buildPropertyTypesSection(isDark),
                   SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
                   _buildPriceRangeSection(isDark),
@@ -187,6 +204,43 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
                 ],
               ),
             ),
+    );
+  }
+
+  // ── LOCATION SECTION ───────────────────────────────────────────────────────
+
+  Widget _buildLocationSection(bool isDark) {
+    final allSelected = _selectedRegions.isEmpty;
+    return _Section(
+      title: 'Location',
+      subtitle: 'Select regions to watch — leave empty for all locations',
+      isDark: isDark,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          FilterChip(
+            label: const Text('📍  All Locations'),
+            selected: allSelected,
+            onSelected: (_) => setState(() => _selectedRegions.clear()),
+            selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
+            checkmarkColor: ThemeConfig.getPrimaryColor(context),
+          ),
+          ..._kTanzaniaRegions.map((region) => FilterChip(
+            label: Text(region),
+            selected: _selectedRegions.contains(region),
+            onSelected: (sel) => setState(() {
+              if (sel) {
+                _selectedRegions.add(region);
+              } else {
+                _selectedRegions.remove(region);
+              }
+            }),
+            selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
+            checkmarkColor: ThemeConfig.getPrimaryColor(context),
+          )),
+        ],
+      ),
     );
   }
 
@@ -479,6 +533,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
         maxBathrooms: _maxBathrooms,
         minArea: _minArea,
         maxArea: _maxArea,
+        regions: _selectedRegions.isEmpty ? [] : _selectedRegions.toList(),
         isActive: true,
       );
 
@@ -514,6 +569,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   void _resetToDefaults() {
     setState(() {
       _selectedTypes = PropertyType.values.toSet();
+      _selectedRegions = {};
       _minPrice = _maxPrice = null;
       _minPriceCtrl.clear();
       _maxPriceCtrl.clear();
@@ -545,6 +601,8 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _HelpItem('Location',
+                  'Pick one or more Tanzania regions to watch. Leave as "All Locations" to receive alerts from anywhere.'),
               _HelpItem('Property Categories',
                   'Choose which property types to receive alerts for. At least one must be selected.'),
               _HelpItem('Price Range',

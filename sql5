@@ -1,0 +1,1059 @@
+-- ============================================================================
+-- REAL ESTATE APP — FILE 5 OF 5: NOTIFICATIONS & PRICE ALERTS
+-- Tables: property_price_history, price_drop_alerts,
+--         user_notification_preferences, notification_property_filters,
+--         notification_queue, user_notifications, message_notification_tracking
+-- Run this LAST (fifth) after sql4_admin_rbac.sql
+-- ============================================================================
+
+-- ============================================================================
+-- PART 1: CLEANUP
+-- ============================================================================
+
+-- Drop ALL price-related triggers on the properties table first.
+-- This kills any stale trigger (from any old schema version) that might
+-- reference property_price_history.price — the column that no longer exists.
+-- This runs BEFORE the DO block below so CASCADE from DROP FUNCTION doesn't
+-- fight with a trigger whose function was already dropped here.
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN
+        SELECT t.tgname
+        FROM   pg_trigger t
+        JOIN   pg_class   c ON c.oid = t.tgrelid
+        JOIN   pg_namespace n ON n.oid = c.relnamespace
+        WHERE  c.relname   = 'properties'
+          AND  n.nspname   = 'public'
+          AND  NOT t.tgisinternal
+          AND  (t.tgname ILIKE '%price%' OR t.tgname ILIKE '%notify%')
+    LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.properties', r.tgname);
+        RAISE NOTICE 'Dropped stale trigger on properties: %', r.tgname;
+    END LOOP;
+END $$;
+
+DO $$
+BEGIN
+    DROP FUNCTION IF EXISTS is_pro_subscriber(UUID)                               CASCADE;
+    DROP FUNCTION IF EXISTS create_price_drop_alert(UUID,UUID,DECIMAL,TEXT)      CASCADE;
+    DROP FUNCTION IF EXISTS check_price_drops()                                   CASCADE;
+    DROP FUNCTION IF EXISTS log_property_price_change(UUID,DECIMAL,DECIMAL,UUID) CASCADE;
+    DROP FUNCTION IF EXISTS get_unread_price_drop_count(UUID)                    CASCADE;
+    DROP FUNCTION IF EXISTS get_user_alerts_count(UUID)                          CASCADE;
+    DROP FUNCTION IF EXISTS get_active_alerts_count(UUID)                        CASCADE;
+    DROP FUNCTION IF EXISTS get_notification_stats(UUID)                         CASCADE;
+    DROP FUNCTION IF EXISTS mark_notification_read(UUID,UUID)                    CASCADE;
+    DROP FUNCTION IF EXISTS mark_all_notifications_read(UUID)                    CASCADE;
+    DROP FUNCTION IF EXISTS trigger_price_change_check()                         CASCADE;
+    DROP FUNCTION IF EXISTS notify_price_drop()                                   CASCADE;
+    DROP FUNCTION IF EXISTS notify_new_property()                                 CASCADE;
+    DROP FUNCTION IF EXISTS cleanup_old_notifications()                           CASCADE;
+    DROP FUNCTION IF EXISTS alert_manual_review_sla_breach()                     CASCADE;
+    -- Also drop sql4's handle_property_price_change to avoid duplicate triggers
+    DROP FUNCTION IF EXISTS handle_property_price_change()                        CASCADE;
+
+    DROP TABLE IF EXISTS message_notification_tracking CASCADE;
+    DROP TABLE IF EXISTS notification_property_filters CASCADE;
+    DROP TABLE IF EXISTS user_notifications            CASCADE;
+    DROP TABLE IF EXISTS notification_queue            CASCADE;
+    DROP TABLE IF EXISTS user_notification_preferences CASCADE;
+    DROP TABLE IF EXISTS price_drop_alerts             CASCADE;
+    DROP TABLE IF EXISTS property_price_history        CASCADE;
+    RAISE NOTICE 'Cleanup complete';
+END $$;
+
+-- ============================================================================
+-- PART 2: TABLES
+-- ============================================================================
+
+CREATE TABLE property_price_history (
+    id           UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    property_id  UUID          NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    old_price    DECIMAL(15,2) NOT NULL,
+    new_price    DECIMAL(15,2) NOT NULL,
+    price_change DECIMAL(15,2) GENERATED ALWAYS AS (new_price - old_price) STORED,
+    change_pct   DECIMAL(8,4)  GENERATED ALWAYS AS (
+                     CASE WHEN old_price > 0
+                          THEN ((new_price - old_price) / old_price) * 100
+                          ELSE 0 END) STORED,
+    changed_by   UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    change_reason TEXT,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_price_history_property ON property_price_history(property_id);
+CREATE INDEX idx_price_history_date     ON property_price_history(created_at DESC);
+
+CREATE TABLE price_drop_alerts (
+    id                 UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id            UUID          NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    property_id        UUID          NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    target_price       DECIMAL(15,2),
+    alert_threshold    DECIMAL(5,2)  DEFAULT 5.0
+                           CHECK (alert_threshold > 0 AND alert_threshold <= 100),
+    alert_type         TEXT          DEFAULT 'any_drop'
+                           CHECK (alert_type IN ('any_drop','target_price','percentage')),
+    is_active          BOOLEAN       DEFAULT TRUE,
+    last_alerted_at    TIMESTAMPTZ,
+    last_alerted_price DECIMAL(15,2),
+    notification_method TEXT[]       DEFAULT ARRAY['in_app'],
+    created_at         TIMESTAMPTZ   DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ   DEFAULT NOW(),
+    UNIQUE(user_id, property_id)
+);
+CREATE INDEX idx_price_alerts_user_id     ON price_drop_alerts(user_id);
+CREATE INDEX idx_price_alerts_property_id ON price_drop_alerts(property_id);
+CREATE INDEX idx_price_alerts_active      ON price_drop_alerts(is_active) WHERE is_active = TRUE;
+
+CREATE TABLE user_notification_preferences (
+    id                      UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                 UUID    UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    price_drop_alerts       BOOLEAN DEFAULT TRUE,
+    new_property_alerts     BOOLEAN DEFAULT TRUE,
+    message_notifications   BOOLEAN DEFAULT TRUE,
+    system_notifications    BOOLEAN DEFAULT TRUE,
+    marketing_notifications BOOLEAN DEFAULT FALSE,
+    email_notifications     BOOLEAN DEFAULT TRUE,
+    push_notifications      BOOLEAN DEFAULT FALSE,   -- disabled; in-app only for now
+    sms_notifications       BOOLEAN DEFAULT FALSE,
+    notification_frequency  TEXT    DEFAULT 'immediate'
+                                CHECK (notification_frequency IN ('immediate','daily','weekly')),
+    quiet_hours_start       TIME,
+    quiet_hours_end         TIME,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- notification_property_filters
+-- Stores filter criteria for 'new_property' and 'price_change' alert categories.
+-- Columns match exactly what NotificationFilterService reads/writes.
+CREATE TABLE notification_property_filters (
+    id                    UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id               UUID          NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    notification_category TEXT          NOT NULL
+                              CHECK (notification_category IN ('new_property','price_change')),
+    property_types        TEXT[]        DEFAULT '{}',
+    min_price             DECIMAL(15,2),
+    max_price             DECIMAL(15,2),
+    regions               TEXT[]        DEFAULT '{}',
+    cities                TEXT[]        DEFAULT '{}',
+    min_bedrooms          INTEGER,
+    max_bedrooms          INTEGER,
+    min_bathrooms         INTEGER,
+    max_bathrooms         INTEGER,
+    min_area              DECIMAL(10,2),
+    max_area              DECIMAL(10,2),
+    is_active             BOOLEAN       DEFAULT TRUE,
+    created_at            TIMESTAMPTZ   DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ   DEFAULT NOW(),
+    UNIQUE (user_id, notification_category)
+);
+CREATE INDEX idx_notification_filters_user   ON notification_property_filters(user_id);
+CREATE INDEX idx_notification_filters_active ON notification_property_filters(user_id)
+    WHERE is_active = TRUE;
+
+CREATE TABLE notification_queue (
+    id                UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID    NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    notification_type TEXT    NOT NULL,
+    title             TEXT    NOT NULL,
+    body              TEXT    NOT NULL,
+    data              JSONB   DEFAULT '{}'::JSONB,
+    priority          TEXT    DEFAULT 'normal'
+                          CHECK (priority IN ('low','normal','high','urgent')),
+    status            TEXT    DEFAULT 'pending'
+                          CHECK (status IN ('pending','processing','sent','failed','cancelled')),
+    channel           TEXT    DEFAULT 'in_app'
+                          CHECK (channel IN ('in_app','email','push','sms')),
+    scheduled_at      TIMESTAMPTZ DEFAULT NOW(),
+    sent_at           TIMESTAMPTZ,
+    failed_at         TIMESTAMPTZ,
+    error_message     TEXT,
+    retry_count       INTEGER DEFAULT 0,
+    max_retries       INTEGER DEFAULT 3,
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_notification_queue_user_id   ON notification_queue(user_id);
+CREATE INDEX idx_notification_queue_status    ON notification_queue(status);
+CREATE INDEX idx_notification_queue_scheduled ON notification_queue(scheduled_at);
+
+-- user_notifications — the in-app inbox.
+-- 'type' column maps to NotificationType enum values in notification_service.dart.
+CREATE TABLE user_notifications (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    type       TEXT        NOT NULL,
+    title      TEXT        NOT NULL,
+    message    TEXT        NOT NULL,
+    data       JSONB       DEFAULT '{}'::JSONB,
+    is_read    BOOLEAN     DEFAULT FALSE,
+    read_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Composite index for the inbox query: user + unread + newest first
+CREATE INDEX idx_user_notifications_inbox ON user_notifications(user_id, is_read, created_at DESC);
+CREATE INDEX idx_user_notifications_type  ON user_notifications(type);
+
+CREATE TABLE message_notification_tracking (
+    id                 UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id            UUID    NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    conversation_id    UUID    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    last_notified_at   TIMESTAMPTZ DEFAULT NOW(),
+    notification_count INTEGER DEFAULT 1,
+    UNIQUE(user_id, conversation_id)
+);
+CREATE INDEX idx_msg_notif_tracking_user ON message_notification_tracking(user_id);
+
+-- ============================================================================
+-- PART 3: FUNCTIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION is_pro_subscriber(p_user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM user_subscriptions us
+        JOIN   subscription_tiers st ON st.id = us.tier_id
+        WHERE  us.user_id = p_user_id AND us.status = 'active'
+          AND  st.name IN ('pro') AND us.expires_at > NOW()
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION create_price_drop_alert(
+    p_user_id UUID, p_property_id UUID,
+    p_target_price DECIMAL DEFAULT NULL, p_alert_type TEXT DEFAULT 'any_drop'
+)
+RETURNS JSONB AS $$
+DECLARE v_alert_id UUID;
+BEGIN
+    IF NOT is_pro_subscriber(p_user_id) THEN
+        RETURN jsonb_build_object('success',false,'error','Price drop alerts require a Pro subscription','upgrade_required',true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM properties WHERE id=p_property_id AND deleted_at IS NULL) THEN
+        RETURN jsonb_build_object('success',false,'error','Property not found');
+    END IF;
+    INSERT INTO price_drop_alerts (user_id, property_id, target_price, alert_type)
+    VALUES (p_user_id, p_property_id, p_target_price, p_alert_type)
+    ON CONFLICT (user_id, property_id) DO UPDATE SET
+        target_price=EXCLUDED.target_price, alert_type=EXCLUDED.alert_type,
+        is_active=TRUE, updated_at=NOW()
+    RETURNING id INTO v_alert_id;
+    RETURN jsonb_build_object('success',true,'alert_id',v_alert_id);
+EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('success',false,'error',SQLERRM);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION log_property_price_change(
+    p_property_id UUID, p_old_price DECIMAL, p_new_price DECIMAL, p_changed_by UUID DEFAULT NULL
+)
+RETURNS void AS $$
+BEGIN
+    INSERT INTO property_price_history (property_id, old_price, new_price, changed_by)
+    VALUES (p_property_id, p_old_price, p_new_price, p_changed_by);
+    PERFORM check_price_drops();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Fires per-property watch alerts (price_drop_alerts table)
+CREATE OR REPLACE FUNCTION check_price_drops()
+RETURNS void AS $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN
+        SELECT pda.id AS alert_id, pda.user_id, pda.property_id,
+               pda.target_price, pda.alert_threshold, pda.alert_type,
+               p.title, p.price AS current_price, pda.last_alerted_price AS old_price
+        FROM   price_drop_alerts pda
+        JOIN   properties p ON p.id = pda.property_id
+        WHERE  pda.is_active = TRUE AND p.deleted_at IS NULL
+          AND  (pda.last_alerted_price IS NULL OR p.price < pda.last_alerted_price)
+          AND  (
+              pda.alert_type = 'any_drop'
+              OR (pda.alert_type = 'target_price' AND pda.target_price IS NOT NULL AND p.price <= pda.target_price)
+              OR (pda.alert_type = 'percentage' AND pda.last_alerted_price IS NOT NULL
+                  AND pda.last_alerted_price > 0
+                  AND ((pda.last_alerted_price - p.price) / pda.last_alerted_price * 100) >= pda.alert_threshold)
+          )
+    LOOP
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read, created_at)
+        VALUES (r.user_id, 'price_drop', '💰 Price Drop Alert!',
+            'The price for "' || r.title || '" dropped to TZS ' ||
+                TO_CHAR(r.current_price, 'FM999,999,999') || '.',
+            jsonb_build_object('property_id',r.property_id,'old_price',r.old_price,
+                'new_price',r.current_price,'alert_type',r.alert_type,'target_price',r.target_price),
+            FALSE, NOW());
+
+        UPDATE price_drop_alerts
+        SET    last_alerted_at=NOW(), last_alerted_price=r.current_price, updated_at=NOW()
+        WHERE  id = r.alert_id;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Fires filter-based alerts (notification_property_filters) AND logs price history
+CREATE OR REPLACE FUNCTION notify_price_drop()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    v_filter   RECORD;
+    v_drop_pct NUMERIC;
+BEGIN
+    IF NEW.price >= OLD.price THEN RETURN NEW; END IF;
+
+    -- Log the change
+    INSERT INTO property_price_history (property_id, old_price, new_price)
+    VALUES (NEW.id, OLD.price, NEW.price);
+
+    v_drop_pct := ROUND(((OLD.price - NEW.price) / OLD.price) * 100, 1);
+    IF v_drop_pct < 1 THEN RETURN NEW; END IF;
+
+    -- Per-property watch alerts
+    PERFORM check_price_drops();
+
+    -- Filter-based alerts
+    FOR v_filter IN
+        SELECT DISTINCT f.user_id
+        FROM   notification_property_filters f
+        WHERE  f.notification_category = 'price_change'
+          AND  f.is_active = TRUE
+          AND  f.user_id  <> COALESCE(NEW.owner_id, '00000000-0000-0000-0000-000000000000'::UUID)
+          AND  (f.min_price    IS NULL OR NEW.price                       >= f.min_price)
+          AND  (f.max_price    IS NULL OR NEW.price                       <= f.max_price)
+          AND  (f.min_bedrooms IS NULL OR COALESCE(NEW.bedrooms,  0)      >= f.min_bedrooms)
+          AND  (f.max_bedrooms IS NULL OR COALESCE(NEW.bedrooms,  0)      <= f.max_bedrooms)
+          AND  (f.min_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0)      >= f.min_bathrooms)
+          AND  (f.max_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0)      <= f.max_bathrooms)
+          AND  (f.min_area     IS NULL OR COALESCE(NEW.area,      0)      >= f.min_area)
+          AND  (f.max_area     IS NULL OR COALESCE(NEW.area,      0)      <= f.max_area)
+          AND  (f.property_types = '{}' OR f.property_types IS NULL OR NEW.category::TEXT = ANY(f.property_types))
+    LOOP
+        -- Deduplicate: max one filter-based alert per user per property per day
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read)
+        SELECT v_filter.user_id, 'price_drop',
+            '📉 Price drop ' || v_drop_pct::TEXT || '% — ' || COALESCE(NEW.title,'A property'),
+            'Dropped from TZS ' || TO_CHAR(OLD.price,'FM999,999,999') ||
+                ' to TZS ' || TO_CHAR(NEW.price,'FM999,999,999'),
+            jsonb_build_object('property_id',NEW.id,'old_price',OLD.price,
+                'new_price',NEW.price,'drop_pct',v_drop_pct),
+            FALSE
+        WHERE NOT EXISTS (
+            SELECT 1 FROM user_notifications un
+            WHERE  un.user_id = v_filter.user_id
+              AND  un.type    = 'price_drop'
+              AND  un.data->>'property_id' = NEW.id::TEXT
+              AND  un.created_at > NOW() - INTERVAL '1 day'
+        );
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_property_price_update ON properties;
+CREATE TRIGGER on_property_price_update
+    AFTER UPDATE OF price ON properties FOR EACH ROW
+    EXECUTE FUNCTION notify_price_drop();
+
+-- Re-create handle_property_price_change (defined in sql4) here so it survives
+-- after sql5's cleanup drops it via CASCADE. Inserts into property_price_changes
+-- and notifies users who favorited the property.
+CREATE OR REPLACE FUNCTION handle_property_price_change()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    IF NEW.price >= OLD.price THEN RETURN NEW; END IF;
+
+    INSERT INTO property_price_changes(property_id, old_price, new_price, changed_by)
+    VALUES (NEW.id, OLD.price, NEW.price, auth.uid());
+
+    INSERT INTO user_notifications(user_id, type, title, message, data)
+    SELECT
+        f.user_id,
+        'price_drop',
+        'Price Drop on ' || NEW.title,
+        'Price dropped from TSh ' || OLD.price::BIGINT::TEXT ||
+        ' to TSh ' || NEW.price::BIGINT::TEXT || ' — save ' ||
+        ABS(((NEW.price - OLD.price) / OLD.price * 100))::INT::TEXT || '%!',
+        jsonb_build_object('property_id', NEW.id, 'old_price', OLD.price, 'new_price', NEW.price)
+    FROM favorites f
+    WHERE f.property_id = NEW.id
+      AND f.user_id != COALESCE(auth.uid(), '00000000-0000-0000-0000-000000000000'::UUID)
+    ON CONFLICT DO NOTHING;
+
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_property_price_drop ON properties;
+CREATE TRIGGER trg_property_price_drop
+    AFTER UPDATE OF price ON properties
+    FOR EACH ROW EXECUTE FUNCTION handle_property_price_change();
+
+-- Fires when a new property becomes active — notifies matching subscribers
+CREATE OR REPLACE FUNCTION notify_new_property()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v_filter RECORD;
+BEGIN
+    IF NEW.status IS DISTINCT FROM 'active' THEN RETURN NEW; END IF;
+    IF TG_OP = 'UPDATE' AND OLD.status = 'active' THEN RETURN NEW; END IF;
+
+    FOR v_filter IN
+        SELECT DISTINCT f.user_id
+        FROM   notification_property_filters f
+        WHERE  f.notification_category = 'new_property'
+          AND  f.is_active = TRUE
+          AND  f.user_id  <> COALESCE(NEW.owner_id,'00000000-0000-0000-0000-000000000000'::UUID)
+          AND  (f.min_price    IS NULL OR NEW.price                  >= f.min_price)
+          AND  (f.max_price    IS NULL OR NEW.price                  <= f.max_price)
+          AND  (f.min_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   >= f.min_bedrooms)
+          AND  (f.max_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   <= f.max_bedrooms)
+          AND  (f.min_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) >= f.min_bathrooms)
+          AND  (f.max_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) <= f.max_bathrooms)
+          AND  (f.min_area     IS NULL OR COALESCE(NEW.area,0)       >= f.min_area)
+          AND  (f.max_area     IS NULL OR COALESCE(NEW.area,0)       <= f.max_area)
+          AND  (f.property_types = '{}' OR f.property_types IS NULL OR NEW.category::TEXT = ANY(f.property_types))
+    LOOP
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read)
+        VALUES (v_filter.user_id, 'new_property',
+            '🏠 New property matching your filter',
+            COALESCE(NEW.title,'New property') || ' — TZS ' ||
+                TO_CHAR(COALESCE(NEW.price,0),'FM999,999,999'),
+            jsonb_build_object('property_id',NEW.id), FALSE);
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_new_property_approved ON properties;
+CREATE TRIGGER on_new_property_approved
+    AFTER INSERT OR UPDATE OF status ON properties FOR EACH ROW
+    EXECUTE FUNCTION notify_new_property();
+
+CREATE OR REPLACE FUNCTION get_unread_price_drop_count(p_user_id UUID)
+RETURNS INTEGER AS $$
+    SELECT COUNT(*)::INTEGER FROM user_notifications
+    WHERE user_id=p_user_id AND type='price_drop' AND is_read=FALSE;
+$$ LANGUAGE sql SECURITY DEFINER STABLE;
+
+CREATE OR REPLACE FUNCTION get_user_alerts_count(p_user_id UUID)
+RETURNS INTEGER AS $$
+    SELECT COUNT(*)::INTEGER FROM price_drop_alerts WHERE user_id=p_user_id;
+$$ LANGUAGE sql SECURITY DEFINER STABLE;
+
+CREATE OR REPLACE FUNCTION get_active_alerts_count(p_user_id UUID)
+RETURNS INTEGER AS $$
+    SELECT COUNT(*)::INTEGER FROM price_drop_alerts WHERE user_id=p_user_id AND is_active=TRUE;
+$$ LANGUAGE sql SECURITY DEFINER STABLE;
+
+CREATE OR REPLACE FUNCTION get_notification_stats(p_user_id UUID)
+RETURNS JSONB AS $$
+    SELECT jsonb_build_object(
+        'total',              COUNT(*),
+        'unread',             COUNT(*) FILTER (WHERE is_read=FALSE),
+        'unread_price_drops', COUNT(*) FILTER (WHERE type='price_drop' AND is_read=FALSE),
+        'unread_messages',    COUNT(*) FILTER (WHERE type='message'    AND is_read=FALSE),
+        'unread_system',      COUNT(*) FILTER (WHERE type='system'     AND is_read=FALSE)
+    ) FROM user_notifications WHERE user_id=p_user_id;
+$$ LANGUAGE sql SECURITY DEFINER STABLE;
+
+CREATE OR REPLACE FUNCTION mark_notification_read(p_notification_id UUID, p_user_id UUID)
+RETURNS BOOLEAN AS $$
+DECLARE v_rows INT;
+BEGIN
+    UPDATE user_notifications SET is_read=TRUE, read_at=NOW()
+    WHERE id=p_notification_id AND user_id=p_user_id AND is_read=FALSE;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    RETURN v_rows > 0;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION mark_all_notifications_read(p_user_id UUID)
+RETURNS INTEGER AS $$
+DECLARE v_rows INT;
+BEGIN
+    UPDATE user_notifications SET is_read=TRUE, read_at=NOW()
+    WHERE user_id=p_user_id AND is_read=FALSE;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    RETURN v_rows;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Deletes read notifications older than 90 days (nightly cleanup)
+-- Requires pg_cron extension — enable in: Supabase Dashboard → Database → Extensions → pg_cron
+CREATE OR REPLACE FUNCTION cleanup_old_notifications()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v_deleted INT;
+BEGIN
+    DELETE FROM user_notifications WHERE is_read=TRUE AND created_at < NOW() - INTERVAL '90 days';
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RAISE NOTICE '[cleanup_old_notifications] Deleted % old notifications at %', v_deleted, NOW();
+END;
+$$;
+
+-- Alerts admins when manual review items breach the 24-hour SLA (hourly check)
+CREATE OR REPLACE FUNCTION alert_manual_review_sla_breach()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v_breach_count INTEGER; v_admin RECORD;
+BEGIN
+    SELECT COUNT(*) INTO v_breach_count FROM manual_review_queue
+    WHERE status='pending' AND created_at < NOW() - INTERVAL '24 hours';
+    IF v_breach_count = 0 THEN RETURN; END IF;
+
+    FOR v_admin IN SELECT id AS user_id FROM user_profiles WHERE role IN ('admin','super_admin')
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM user_notifications
+            WHERE user_id=v_admin.user_id AND type='system'
+              AND data->>'alert_type'='sla_breach'
+              AND created_at > NOW() - INTERVAL '4 hours'
+        ) THEN
+            INSERT INTO user_notifications (user_id, type, title, message, data, is_read)
+            VALUES (v_admin.user_id, 'system', '⚠️ Manual Review SLA Breach',
+                v_breach_count::TEXT || ' item' ||
+                    CASE WHEN v_breach_count>1 THEN 's have' ELSE ' has' END ||
+                    ' been pending manual review for over 24 hours.',
+                jsonb_build_object('breach_count',v_breach_count,'alert_type','sla_breach'),
+                FALSE);
+        END IF;
+    END LOOP;
+END;
+$$;
+
+-- Schedule cron jobs (requires pg_cron extension)
+-- Enable pg_cron in: Supabase Dashboard → Database → Extensions → pg_cron
+DO $$
+BEGIN
+    -- Remove existing jobs first so re-running this file is safe
+    PERFORM cron.unschedule('cleanup-old-notifications')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup-old-notifications');
+    PERFORM cron.unschedule('manual-review-sla-check')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'manual-review-sla-check');
+EXCEPTION WHEN OTHERS THEN
+    NULL; -- pg_cron not installed yet — skip silently
+END;
+$$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('cleanup-old-notifications', '0 3 * * *',
+        'SELECT cleanup_old_notifications()');
+    PERFORM cron.schedule('manual-review-sla-check', '0 * * * *',
+        'SELECT alert_manual_review_sla_breach()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — cron jobs skipped. Enable pg_cron in Supabase Dashboard → Database → Extensions.';
+END;
+$$;
+
+-- ============================================================================
+-- PART 4: ROW LEVEL SECURITY
+-- ============================================================================
+
+ALTER TABLE property_price_history        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE price_drop_alerts             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_notification_preferences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_property_filters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_queue            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_notifications            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_notification_tracking ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view price history"             ON property_price_history;
+DROP POLICY IF EXISTS "Users can view their own price alerts"    ON price_drop_alerts;
+DROP POLICY IF EXISTS "Users can create their own price alerts"  ON price_drop_alerts;
+DROP POLICY IF EXISTS "Users can update their own price alerts"  ON price_drop_alerts;
+DROP POLICY IF EXISTS "Users can delete their own price alerts"  ON price_drop_alerts;
+DROP POLICY IF EXISTS "Users can view their preferences"         ON user_notification_preferences;
+DROP POLICY IF EXISTS "Users can insert their preferences"       ON user_notification_preferences;
+DROP POLICY IF EXISTS "Users can update their preferences"       ON user_notification_preferences;
+DROP POLICY IF EXISTS "Users can view their filters"             ON notification_property_filters;
+DROP POLICY IF EXISTS "Users can manage their filters"           ON notification_property_filters;
+DROP POLICY IF EXISTS "Users can view their queue"               ON notification_queue;
+DROP POLICY IF EXISTS "Service can manage queue"                 ON notification_queue;
+DROP POLICY IF EXISTS "Users can view their notifications"       ON user_notifications;
+DROP POLICY IF EXISTS "Users can update their notifications"     ON user_notifications;
+DROP POLICY IF EXISTS "Users can delete their notifications"     ON user_notifications;
+DROP POLICY IF EXISTS "Functions can insert notifications"       ON user_notifications;
+DROP POLICY IF EXISTS "Admins can insert notifications"          ON user_notifications;
+DROP POLICY IF EXISTS "Admins can view all notifications"        ON user_notifications;
+DROP POLICY IF EXISTS "Users can view their msg tracking"        ON message_notification_tracking;
+DROP POLICY IF EXISTS "Users can manage their msg tracking"      ON message_notification_tracking;
+
+CREATE POLICY "Users can view price history"
+    ON property_price_history FOR SELECT USING (TRUE);
+
+CREATE POLICY "Users can view their own price alerts"
+    ON price_drop_alerts FOR SELECT   USING (auth.uid() = user_id);
+CREATE POLICY "Users can create their own price alerts"
+    ON price_drop_alerts FOR INSERT   WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own price alerts"
+    ON price_drop_alerts FOR UPDATE   USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete their own price alerts"
+    ON price_drop_alerts FOR DELETE   USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view their preferences"
+    ON user_notification_preferences FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their preferences"
+    ON user_notification_preferences FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their preferences"
+    ON user_notification_preferences FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view their filters"
+    ON notification_property_filters FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage their filters"
+    ON notification_property_filters FOR ALL    USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can view their queue"
+    ON notification_queue FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Service can manage queue"
+    ON notification_queue FOR ALL    USING (auth.role() = 'service_role');
+
+CREATE POLICY "Users can view their notifications"
+    ON user_notifications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can update their notifications"
+    ON user_notifications FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete their notifications"
+    ON user_notifications FOR DELETE USING (auth.uid() = user_id);
+-- WITH CHECK (TRUE) allows SECURITY DEFINER triggers to insert cross-user rows
+CREATE POLICY "Functions can insert notifications"
+    ON user_notifications FOR INSERT WITH CHECK (TRUE);
+CREATE POLICY "Admins can view all notifications"
+    ON user_notifications FOR SELECT USING (is_admin(auth.uid()));
+
+CREATE POLICY "Users can view their msg tracking"
+    ON message_notification_tracking FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage their msg tracking"
+    ON message_notification_tracking FOR ALL    USING (auth.uid() = user_id);
+
+-- ============================================================================
+-- PART 5: GRANTS
+-- ============================================================================
+
+GRANT SELECT                    ON property_price_history        TO authenticated;
+GRANT ALL                       ON price_drop_alerts             TO authenticated;
+GRANT ALL                       ON user_notification_preferences TO authenticated;
+GRANT ALL                       ON notification_property_filters TO authenticated;
+GRANT SELECT                    ON notification_queue            TO authenticated;
+GRANT SELECT, UPDATE, DELETE    ON user_notifications            TO authenticated;
+GRANT ALL                       ON message_notification_tracking TO authenticated;
+
+GRANT ALL ON property_price_history        TO service_role;
+GRANT ALL ON price_drop_alerts             TO service_role;
+GRANT ALL ON user_notification_preferences TO service_role;
+GRANT ALL ON notification_property_filters TO service_role;
+GRANT ALL ON notification_queue            TO service_role;
+GRANT ALL ON user_notifications            TO service_role;
+GRANT ALL ON message_notification_tracking TO service_role;
+
+GRANT EXECUTE ON FUNCTION is_pro_subscriber(UUID)                               TO authenticated;
+GRANT EXECUTE ON FUNCTION create_price_drop_alert(UUID,UUID,DECIMAL,TEXT)       TO authenticated;
+GRANT EXECUTE ON FUNCTION log_property_price_change(UUID,DECIMAL,DECIMAL,UUID)  TO authenticated;
+GRANT EXECUTE ON FUNCTION check_price_drops()                                   TO authenticated;
+GRANT EXECUTE ON FUNCTION get_unread_price_drop_count(UUID)                     TO authenticated;
+GRANT EXECUTE ON FUNCTION get_user_alerts_count(UUID)                           TO authenticated;
+GRANT EXECUTE ON FUNCTION get_active_alerts_count(UUID)                         TO authenticated;
+GRANT EXECUTE ON FUNCTION get_notification_stats(UUID)                          TO authenticated;
+GRANT EXECUTE ON FUNCTION mark_notification_read(UUID,UUID)                     TO authenticated;
+GRANT EXECUTE ON FUNCTION mark_all_notifications_read(UUID)                     TO authenticated;
+
+-- ============================================================================
+-- PART 6: REALTIME
+-- ============================================================================
+-- user_notifications is published to Supabase Realtime so the Flutter app
+-- receives INSERT events instantly — no polling needed.
+-- NotificationsNotifier in notifications_screen.dart uses this channel.
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+        WHERE pubname='supabase_realtime' AND tablename='user_notifications') THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE user_notifications;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+        WHERE pubname='supabase_realtime' AND tablename='price_drop_alerts') THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE price_drop_alerts;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+        WHERE pubname='supabase_realtime' AND tablename='notification_property_filters') THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE notification_property_filters;
+    END IF;
+END $$;
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- PART 7: FINAL VERIFICATION — ALL 5 FILES
+-- ============================================================================
+DO $$
+DECLARE v_tbl INT; v_fns INT; v_triggers INT;
+        v_guest_users_grant BOOLEAN; v_guest_users_policy BOOLEAN;
+        v_guest_props_policy BOOLEAN; v_props_anon_grant BOOLEAN;
+        v_list_view_anon BOOLEAN;
+BEGIN
+    SELECT COUNT(*) INTO v_tbl FROM information_schema.tables
+    WHERE table_schema='public' AND table_name IN (
+        'property_price_history','price_drop_alerts','user_notification_preferences',
+        'notification_property_filters','notification_queue',
+        'user_notifications','message_notification_tracking');
+
+    SELECT COUNT(*) INTO v_fns FROM pg_proc WHERE proname IN (
+        'is_pro_subscriber','create_price_drop_alert','check_price_drops',
+        'log_property_price_change','notify_price_drop','notify_new_property',
+        'get_notification_stats','mark_all_notifications_read',
+        'cleanup_old_notifications','alert_manual_review_sla_breach');
+
+    SELECT COUNT(*) INTO v_triggers FROM pg_trigger
+    WHERE tgname IN ('on_property_price_update','on_new_property_approved');
+
+    -- ── Guest mode verification ──────────────────────────────────────────────
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'users'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_guest_users_grant;
+
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'users' AND schemaname = 'public'
+          AND policyname = 'Public can view users'
+    ) INTO v_guest_users_policy;
+
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'properties' AND schemaname = 'public'
+          AND policyname = 'Public can view non-deleted properties'
+    ) INTO v_guest_props_policy;
+
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'properties'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_props_anon_grant;
+
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'property_list_view'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_list_view_anon;
+
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  FILE 5: NOTIFICATIONS COMPLETE';
+    RAISE NOTICE '  Tables:    %/7',  v_tbl;
+    RAISE NOTICE '  Functions: %/10', v_fns;
+    RAISE NOTICE '  Triggers:  %/2',  v_triggers;
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  ALL 5 FILES COMPLETE — REAL ESTATE APP';
+    RAISE NOTICE '  Run order: sql1 -> sql2 -> sql3 -> sql4 -> sql5';
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '--- GUEST MODE CHECK (Android/iOS/Web/PWA) ---';
+    RAISE NOTICE '  anon SELECT on users table      : %', CASE WHEN v_guest_users_grant  THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  Public can view users policy    : %', CASE WHEN v_guest_users_policy THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  Public can view properties      : %', CASE WHEN v_guest_props_policy THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  anon SELECT on properties       : %', CASE WHEN v_props_anon_grant   THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  anon SELECT on property_list_view: %', CASE WHEN v_list_view_anon   THEN '✅' ELSE '❌ FAIL' END;
+    IF v_guest_users_grant AND v_guest_users_policy AND v_guest_props_policy
+       AND v_props_anon_grant AND v_list_view_anon THEN
+        RAISE NOTICE '✅ GUEST MODE FULLY ACTIVE — unauthenticated users can browse';
+    ELSE
+        RAISE WARNING '❌ Guest mode incomplete — re-run sql4 and check for errors.';
+    END IF;
+    RAISE NOTICE '=========================================';
+END $$;
+
+-- ============================================================================
+-- EXTENSION E: DEVICE PUSH TOKENS & ENHANCED NOTIFICATION FUNCTIONS
+-- (Appended to sql10 — runs after notification/price-alert system above)
+-- ============================================================================
+
+-- ── Device Push Tokens (Supabase-only, no Firebase SDK in Flutter) ────────────
+-- The Flutter app stores FCM/APNs tokens here.
+-- A Supabase Edge Function reads these to deliver server-side push via
+-- FCM HTTP v1 API (service account only — Flutter never imports firebase_messaging).
+CREATE TABLE IF NOT EXISTS device_push_tokens (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    token      TEXT        NOT NULL,
+    platform   TEXT        NOT NULL CHECK (platform IN ('android','ios','web')),
+    is_active  BOOLEAN     DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_user     ON device_push_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_active   ON device_push_tokens(is_active) WHERE is_active = TRUE;
+
+ALTER TABLE device_push_tokens ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own device tokens" ON device_push_tokens;
+DROP POLICY IF EXISTS "Service role reads all tokens"  ON device_push_tokens;
+CREATE POLICY "Users manage own device tokens" ON device_push_tokens
+    USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+-- Service role (Edge Functions) reads via service_role key — bypasses RLS automatically
+
+-- ── Rate Limiter for Notifications ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notification_rate_limits (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    notif_type TEXT        NOT NULL,
+    window_key TEXT        NOT NULL,   -- e.g. date string or property_id + date
+    count      INTEGER     DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, notif_type, window_key)
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_user ON notification_rate_limits(user_id, notif_type);
+
+-- ── Unified send_notification() with rate limiting + Pro check ────────────────
+CREATE OR REPLACE FUNCTION send_notification(
+    p_user_id    UUID,
+    p_type       TEXT,
+    p_title      TEXT,
+    p_message    TEXT,
+    p_data       JSONB        DEFAULT '{}'::JSONB,
+    p_pro_only   BOOLEAN      DEFAULT FALSE,
+    p_window_key TEXT         DEFAULT NULL,
+    p_rate_limit INT          DEFAULT 1   -- max per window key
+) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    v_tier TEXT;
+    v_window TEXT;
+BEGIN
+    -- Pro-only gate
+    IF p_pro_only THEN
+        SELECT st.name INTO v_tier
+        FROM user_subscriptions us
+        JOIN subscription_tiers  st ON st.id = us.tier_id
+        WHERE us.user_id = p_user_id AND us.status = 'active'
+        LIMIT 1;
+        IF v_tier IS NULL OR v_tier = 'free' THEN
+            RETURN FALSE;
+        END IF;
+    END IF;
+
+    -- Rate-limit gate
+    IF p_window_key IS NOT NULL THEN
+        INSERT INTO notification_rate_limits(user_id, notif_type, window_key, count)
+        VALUES (p_user_id, p_type, p_window_key, 1)
+        ON CONFLICT (user_id, notif_type, window_key)
+        DO UPDATE SET count = notification_rate_limits.count + 1;
+
+        IF (SELECT count FROM notification_rate_limits
+            WHERE user_id = p_user_id AND notif_type = p_type AND window_key = p_window_key
+           ) > p_rate_limit THEN
+            RETURN FALSE;
+        END IF;
+    END IF;
+
+    -- Insert the notification
+    INSERT INTO user_notifications(user_id, type, title, message, data)
+    VALUES (p_user_id, p_type, p_title, p_message, p_data);
+
+    -- Queue for push delivery (Edge Function will process)
+    INSERT INTO notification_queue(user_id, notification_type, title, body, data, channel)
+    VALUES (p_user_id, p_type, p_title, p_message, p_data, 'push')
+    ON CONFLICT DO NOTHING;
+
+    RETURN TRUE;
+END $$;
+
+GRANT EXECUTE ON FUNCTION send_notification(UUID,TEXT,TEXT,TEXT,JSONB,BOOLEAN,TEXT,INT) TO authenticated;
+
+-- ── Helper: unread notification count ────────────────────────────────────────
+CREATE OR REPLACE FUNCTION get_unread_notification_count(p_user_id UUID)
+RETURNS BIGINT LANGUAGE SQL STABLE SECURITY DEFINER AS $$
+    SELECT COUNT(*) FROM user_notifications
+    WHERE user_id = p_user_id AND is_read = FALSE;
+$$;
+
+-- ── Helper: mark all notifications as read ───────────────────────────────────
+-- DROP first because the original function returns INTEGER; we change it to void.
+DROP FUNCTION IF EXISTS mark_all_notifications_read(UUID);
+CREATE FUNCTION mark_all_notifications_read(p_user_id UUID)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    UPDATE user_notifications
+    SET is_read = TRUE, read_at = NOW()
+    WHERE user_id = p_user_id AND is_read = FALSE;
+END $$;
+
+GRANT EXECUTE ON FUNCTION get_unread_notification_count(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION mark_all_notifications_read(UUID)   TO authenticated;
+
+-- ── Cleanup: old processed notifications (older than 90 days) ────────────────
+CREATE OR REPLACE FUNCTION cleanup_processed_notifications() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    DELETE FROM notification_queue
+    WHERE status IN ('sent','cancelled')
+      AND created_at < NOW() - INTERVAL '30 days';
+
+    DELETE FROM user_notifications
+    WHERE is_read = TRUE
+      AND read_at  < NOW() - INTERVAL '90 days';
+
+    DELETE FROM notification_rate_limits
+    WHERE created_at < NOW() - INTERVAL '7 days';
+
+    -- property_price_history: keep 1 year — older records are rarely queried
+    DELETE FROM property_price_history
+    WHERE created_at < NOW() - INTERVAL '1 year';
+END $$;
+
+-- Schedule nightly at 3:30 AM UTC (offset from other crons to spread DB load)
+DO $$
+BEGIN
+    PERFORM cron.unschedule('cleanup-processed-notifications')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup-processed-notifications');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('cleanup-processed-notifications', '30 3 * * *',
+        'SELECT cleanup_processed_notifications()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — notification cleanup cron skipped. Enable pg_cron in Supabase Dashboard.';
+END $$;
+
+-- Enable Realtime on user_notifications (safe guard — won't fail if already added)
+DO $realtime$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables
+        WHERE pubname = 'supabase_realtime' AND tablename = 'user_notifications'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE user_notifications;
+    END IF;
+END $realtime$;
+
+-- ============================================================================
+-- PART: FCM PUSH TRIGGER via pg_net
+-- Calls the send-push-notification Edge Function on every user_notifications INSERT.
+-- This replaces the Supabase Webhook UI — no webhook configuration needed.
+-- ============================================================================
+
+-- Enable pg_net (already enabled on Supabase by default)
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- Store project ref and service role key so the trigger can read them
+CREATE TABLE IF NOT EXISTS _push_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- ⚠️  Replace YOUR_SERVICE_ROLE_KEY_HERE with your real service_role key
+--     Supabase Dashboard → Settings → API → service_role (secret key)
+INSERT INTO _push_config(key, value)
+VALUES
+    ('project_ref',  'qeddjlmexurmeiuslgqn'),
+    ('service_role', 'YOUR_SERVICE_ROLE_KEY_HERE')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Lock down — authenticated users cannot read this table
+ALTER TABLE _push_config ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS push_config_deny_all ON _push_config;
+CREATE POLICY push_config_deny_all ON _push_config
+    AS RESTRICTIVE FOR ALL TO authenticated USING (false);
+
+-- Trigger function: fires async HTTP POST to Edge Function after each INSERT
+CREATE OR REPLACE FUNCTION trigger_send_push_notification()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    _ref  TEXT;
+    _key  TEXT;
+    _url  TEXT;
+BEGIN
+    SELECT value INTO _ref FROM _push_config WHERE key = 'project_ref';
+    SELECT value INTO _key FROM _push_config WHERE key = 'service_role';
+
+    _url := 'https://' || _ref || '.supabase.co/functions/v1/send-push-notification';
+
+    PERFORM net.http_post(
+        url     := _url,
+        body    := to_jsonb(NEW)::text,
+        headers := jsonb_build_object(
+            'Content-Type',  'application/json',
+            'Authorization', 'Bearer ' || _key
+        )
+    );
+
+    RETURN NEW;
+END $$;
+
+-- Attach trigger to user_notifications
+DROP TRIGGER IF EXISTS on_user_notification_insert ON user_notifications;
+
+CREATE TRIGGER on_user_notification_insert
+    AFTER INSERT ON user_notifications
+    FOR EACH ROW
+    EXECUTE FUNCTION trigger_send_push_notification();
+
+DO $$ BEGIN
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  sql5: device_push_tokens, notification_rate_limits,';
+    RAISE NOTICE '  send_notification(), get_unread_notification_count(),';
+    RAISE NOTICE '  mark_all_notifications_read() — DONE';
+    RAISE NOTICE '  Realtime enabled on user_notifications';
+    RAISE NOTICE '  FCM push trigger installed (pg_net)';
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  ALL 5 SQL FILES COMPLETE';
+    RAISE NOTICE '  Run order: sql1 -> sql2 -> sql3 -> sql4 -> sql5';
+    RAISE NOTICE '=========================================';
+END $$;
+
+-- ============================================================================
+-- PART 19: LOCATION-AWARE NEW PROPERTY NOTIFICATIONS
+-- Adds region/city matching to notify_new_property() trigger.
+-- If the user has selected regions, only notify them when the new
+-- property's location contains at least one of their chosen regions.
+-- Empty/null regions = notify for all locations (no restriction).
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_new_property()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v_filter RECORD;
+BEGIN
+    IF NEW.status IS DISTINCT FROM 'active' THEN RETURN NEW; END IF;
+    IF TG_OP = 'UPDATE' AND OLD.status = 'active' THEN RETURN NEW; END IF;
+
+    FOR v_filter IN
+        SELECT DISTINCT f.user_id
+        FROM   notification_property_filters f
+        WHERE  f.notification_category = 'new_property'
+          AND  f.is_active = TRUE
+          AND  f.user_id  <> COALESCE(NEW.owner_id,'00000000-0000-0000-0000-000000000000'::UUID)
+          AND  (f.min_price    IS NULL OR NEW.price                  >= f.min_price)
+          AND  (f.max_price    IS NULL OR NEW.price                  <= f.max_price)
+          AND  (f.min_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   >= f.min_bedrooms)
+          AND  (f.max_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   <= f.max_bedrooms)
+          AND  (f.min_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) >= f.min_bathrooms)
+          AND  (f.max_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) <= f.max_bathrooms)
+          AND  (f.min_area     IS NULL OR COALESCE(NEW.area,0)       >= f.min_area)
+          AND  (f.max_area     IS NULL OR COALESCE(NEW.area,0)       <= f.max_area)
+          AND  (f.property_types = '{}' OR f.property_types IS NULL OR NEW.category::TEXT = ANY(f.property_types))
+          -- Location filter: if user chose specific regions, new property's location must match at least one
+          AND  (
+              f.regions IS NULL
+              OR cardinality(f.regions) = 0
+              OR EXISTS (
+                  SELECT 1 FROM unnest(f.regions) AS r
+                  WHERE NEW.location ILIKE '%' || r || '%'
+              )
+          )
+    LOOP
+        INSERT INTO user_notifications (user_id, type, title, message, data, is_read)
+        VALUES (v_filter.user_id, 'new_property',
+            '🏠 New property matching your filter',
+            COALESCE(NEW.title,'New property') || ' — TZS ' ||
+                TO_CHAR(COALESCE(NEW.price,0),'FM999,999,999'),
+            jsonb_build_object('property_id',NEW.id), FALSE);
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+
+-- Re-attach trigger (safe — drops then recreates)
+DROP TRIGGER IF EXISTS on_new_property_approved ON properties;
+CREATE TRIGGER on_new_property_approved
+    AFTER INSERT OR UPDATE OF status ON properties FOR EACH ROW
+    EXECUTE FUNCTION notify_new_property();
+
+DO $$ BEGIN
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  Part 19: notify_new_property() updated';
+    RAISE NOTICE '  New: location/region filter support';
+    RAISE NOTICE '  Empty regions = notify for all locations';
+    RAISE NOTICE '=========================================';
+END $$;
