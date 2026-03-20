@@ -1098,6 +1098,23 @@ CREATE POLICY "Owners can update their own properties"
 CREATE POLICY "Admins can update any property"
     ON properties FOR UPDATE USING (is_admin(auth.uid()));
 
+-- ============================================================================
+-- GUEST MODE: users table public read access
+-- Allows unauthenticated (anon) users to see property owner names & avatars
+-- when browsing listings. Safe — only exposes what's already shown on listings.
+-- Works for: Android, iOS, Web, PWA (all use the same Supabase anon key).
+-- ============================================================================
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+-- Drop and recreate idempotently so re-runs are safe
+DROP POLICY IF EXISTS "Public can view users" ON public.users;
+
+CREATE POLICY "Public can view users"
+    ON public.users FOR SELECT
+    TO public
+    USING (TRUE);
+
 -- Admin RLS for ads and user management (idempotent)
 DO $$
 BEGIN
@@ -1124,6 +1141,9 @@ END $$;
 GRANT USAGE ON SCHEMA public TO authenticated, anon, public;
 GRANT SELECT ON user_profiles       TO authenticated, anon, public;
 GRANT INSERT, UPDATE ON user_profiles TO authenticated;
+-- Guest mode: allow unauthenticated (anon) users to read public user info
+-- needed for property owner names/avatars to appear for browsing guests
+GRANT SELECT ON public.users        TO anon;
 GRANT SELECT ON admin_activity_log  TO authenticated;
 
 GRANT SELECT ON admin_all_accounts                 TO authenticated, service_role;
@@ -1482,6 +1502,8 @@ CREATE POLICY "Admins manage all appeals"
 DO $$
 DECLARE v_profiles INT; v_super_admin TEXT; v_view_exists BOOLEAN;
         v_list_view_exists BOOLEAN; v_has_videos BOOLEAN; v_has_images BOOLEAN;
+        v_guest_users_grant BOOLEAN; v_guest_users_policy BOOLEAN;
+        v_guest_props_policy BOOLEAN;
 BEGIN
     SELECT COUNT(*) INTO v_profiles FROM user_profiles;
     SELECT u.email INTO v_super_admin FROM auth.users u JOIN user_profiles p ON p.id=u.id WHERE p.role='super_admin' LIMIT 1;
@@ -1501,6 +1523,24 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'properties' AND column_name = 'images'
     ) INTO v_has_images;
+
+    -- Guest mode checks
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'users'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_guest_users_grant;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'users' AND schemaname = 'public'
+          AND policyname = 'Public can view users'
+    ) INTO v_guest_users_policy;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'properties' AND schemaname = 'public'
+          AND policyname = 'Public can view non-deleted properties'
+    ) INTO v_guest_props_policy;
+
     RAISE NOTICE '=== FILE 4: ADMIN & RBAC SYSTEM COMPLETE ===';
     RAISE NOTICE '  Profiles: %  Super admin: %', v_profiles, COALESCE(v_super_admin,'None yet');
     RAISE NOTICE '  properties_with_tier view: %', CASE WHEN v_view_exists THEN '✅ created' ELSE '❌ missing' END;
@@ -1511,10 +1551,17 @@ BEGIN
     RAISE NOTICE '  content_appeals table: %',
         CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
             WHERE table_name = 'content_appeals') THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '--- GUEST MODE (Android/iOS/Web/PWA) ---';
+    RAISE NOTICE '  anon SELECT on users table    : %', CASE WHEN v_guest_users_grant  THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  Public policy on users        : %', CASE WHEN v_guest_users_policy THEN '✅' ELSE '❌' END;
+    RAISE NOTICE '  Public policy on properties   : %', CASE WHEN v_guest_props_policy THEN '✅' ELSE '❌' END;
     IF v_list_view_exists THEN
         RAISE NOTICE '✅ YOUR APP WILL NOW WORK - BOTH VIEWS CREATED!';
     ELSE
         RAISE WARNING '❌ property_list_view missing - app will fail!';
+    END IF;
+    IF NOT (v_guest_users_grant AND v_guest_users_policy AND v_guest_props_policy) THEN
+        RAISE WARNING '⚠️  Guest mode incomplete — check the GUEST MODE section above.';
     END IF;
 END $$;
 

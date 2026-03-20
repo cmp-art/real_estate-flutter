@@ -9,6 +9,7 @@ import '../../features/authentication/presentation/widget/social_sign_in_buttons
 
 import '../providers/auth_provider.dart';
 import '../../features/main_navigation/presentation/screens/main_screen.dart';
+import '../../app.dart';
 import 'register_screen.dart';
 import 'forgot_password_screen.dart';
 
@@ -237,6 +238,47 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         child: const Text('Sign Up'),
                       ),
                     ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Row(
+                    children: [
+                      const Expanded(child: Divider()),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          'or',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: ThemeConfig.textSecondaryColor,
+                              ),
+                        ),
+                      ),
+                      const Expanded(child: Divider()),
+                    ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () {
+                              ref.read(isGuestModeProvider.notifier).state = true;
+                              Navigator.of(context).pushAndRemoveUntil(
+                                MaterialPageRoute(
+                                  builder: (_) => const MainScreen(),
+                                ),
+                                (route) => false,
+                              );
+                            },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('Continue as Guest'),
+                    ),
                   ),
                 ],
               ),

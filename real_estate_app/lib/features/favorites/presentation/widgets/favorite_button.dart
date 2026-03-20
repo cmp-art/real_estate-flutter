@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/widgets/guest_prompt_dialog.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 
 import '../providers/favorite_providers.dart';
@@ -20,7 +21,14 @@ class FavoriteButton extends ConsumerWidget {
     final user = ref.watch(authNotifierProvider).value;
     
     if (user == null) {
-      return const SizedBox.shrink();
+      return IconButton(
+        onPressed: () => GuestPromptDialog.show(
+          context,
+          title: 'Save to Favorites',
+          message: 'Sign in or create a free account to save properties.',
+        ),
+        icon: Icon(Icons.favorite_border, size: size, color: Colors.grey),
+      );
     }
 
     final isFavoriteAsync = ref.watch(isFavoriteProvider(propertyId));

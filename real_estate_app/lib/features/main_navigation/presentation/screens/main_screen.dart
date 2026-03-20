@@ -2,8 +2,10 @@
 // FULLY RESPONSIVE VERSION
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../app.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/widgets/guest_prompt_dialog.dart';
 import '../../../properties/presentation/screens/property_list_screen.dart';
 import '../../../chat/presentation/screens/conversations_screen.dart';
 import '../../../chat/presentation/providers/chat_providers.dart';
@@ -41,6 +43,22 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     ProfileScreen(),
   ];
 
+  // Tabs 1, 2, 3 require authentication
+  void _onTabSelected(int index) {
+    final isGuest = ref.read(isGuestModeProvider);
+    if (isGuest && index != 0) {
+      final labels = ['', 'Messages', 'Notifications', 'Profile'];
+      GuestPromptDialog.show(
+        context,
+        title: 'Sign In Required',
+        message:
+            'Sign in or create a free account to access ${labels[index]}.',
+      );
+      return;
+    }
+    setState(() => _currentIndex = index);
+  }
+
   @override
   Widget build(BuildContext context) {
     final unreadCount = ref.watch(unreadMessagesCountProvider);
@@ -59,9 +77,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
             // Side navigation rail
             NavigationRail(
               selectedIndex: _currentIndex,
-              onDestinationSelected: (index) {
-                setState(() => _currentIndex = index);
-              },
+              onDestinationSelected: _onTabSelected,
               labelType: NavigationRailLabelType.all,
               backgroundColor: Theme.of(context).cardColor,
               indicatorColor: ThemeConfig.primaryColor.withOpacity(0.2),
@@ -108,9 +124,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
           children: [
             NavigationRail(
               selectedIndex: _currentIndex,
-              onDestinationSelected: (index) {
-                setState(() => _currentIndex = index);
-              },
+              onDestinationSelected: _onTabSelected,
               labelType: NavigationRailLabelType.all,
               minWidth: 80,
               backgroundColor: Theme.of(context).cardColor,
@@ -158,9 +172,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() => _currentIndex = index);
-        },
+        onTap: _onTabSelected,
         type: BottomNavigationBarType.fixed,
         items: [
           BottomNavigationBarItem(

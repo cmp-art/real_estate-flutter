@@ -676,10 +676,13 @@ END $$;
 NOTIFY pgrst, 'reload schema';
 
 -- ============================================================================
--- PART 7: VERIFICATION
+-- PART 7: FINAL VERIFICATION — ALL 5 FILES
 -- ============================================================================
 DO $$
 DECLARE v_tbl INT; v_fns INT; v_triggers INT;
+        v_guest_users_grant BOOLEAN; v_guest_users_policy BOOLEAN;
+        v_guest_props_policy BOOLEAN; v_props_anon_grant BOOLEAN;
+        v_list_view_anon BOOLEAN;
 BEGIN
     SELECT COUNT(*) INTO v_tbl FROM information_schema.tables
     WHERE table_schema='public' AND table_name IN (
@@ -696,6 +699,37 @@ BEGIN
     SELECT COUNT(*) INTO v_triggers FROM pg_trigger
     WHERE tgname IN ('on_property_price_update','on_new_property_approved');
 
+    -- ── Guest mode verification ──────────────────────────────────────────────
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'users'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_guest_users_grant;
+
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'users' AND schemaname = 'public'
+          AND policyname = 'Public can view users'
+    ) INTO v_guest_users_policy;
+
+    SELECT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'properties' AND schemaname = 'public'
+          AND policyname = 'Public can view non-deleted properties'
+    ) INTO v_guest_props_policy;
+
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'properties'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_props_anon_grant;
+
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.role_table_grants
+        WHERE grantee = 'anon' AND table_name = 'property_list_view'
+          AND table_schema = 'public' AND privilege_type = 'SELECT'
+    ) INTO v_list_view_anon;
+
     RAISE NOTICE '=========================================';
     RAISE NOTICE '  FILE 5: NOTIFICATIONS COMPLETE';
     RAISE NOTICE '  Tables:    %/7',  v_tbl;
@@ -704,6 +738,19 @@ BEGIN
     RAISE NOTICE '=========================================';
     RAISE NOTICE '  ALL 5 FILES COMPLETE — REAL ESTATE APP';
     RAISE NOTICE '  Run order: sql1 -> sql2 -> sql3 -> sql4 -> sql5';
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '--- GUEST MODE CHECK (Android/iOS/Web/PWA) ---';
+    RAISE NOTICE '  anon SELECT on users table      : %', CASE WHEN v_guest_users_grant  THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  Public can view users policy    : %', CASE WHEN v_guest_users_policy THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  Public can view properties      : %', CASE WHEN v_guest_props_policy THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  anon SELECT on properties       : %', CASE WHEN v_props_anon_grant   THEN '✅' ELSE '❌ FAIL' END;
+    RAISE NOTICE '  anon SELECT on property_list_view: %', CASE WHEN v_list_view_anon   THEN '✅' ELSE '❌ FAIL' END;
+    IF v_guest_users_grant AND v_guest_users_policy AND v_guest_props_policy
+       AND v_props_anon_grant AND v_list_view_anon THEN
+        RAISE NOTICE '✅ GUEST MODE FULLY ACTIVE — unauthenticated users can browse';
+    ELSE
+        RAISE WARNING '❌ Guest mode incomplete — re-run sql4 and check for errors.';
+    END IF;
     RAISE NOTICE '=========================================';
 END $$;
 

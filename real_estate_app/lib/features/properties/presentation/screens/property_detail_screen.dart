@@ -21,6 +21,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/snackbar_utils.dart';
 
+import '../../../../core/widgets/guest_prompt_dialog.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/error_widget.dart';
@@ -531,13 +532,15 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               ),
               child: FavoriteButton(propertyId: propertyId),
             ),
-            // Price drop alert button — only for non-owners who are logged in
+            // Price drop alert button — logged-in non-owners only
             if (user != null && !isOwner)
               _PriceAlertButton(
                 propertyId: propertyId,
                 propertyPrice: property.price,
                 userId: user.id,
-              ),
+              )
+            else if (user == null)
+              _GuestPriceAlertButton(),
             // Owner Actions Menu
             if (isOwner)
               Container(
@@ -1105,7 +1108,11 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     String Function(String) t,
   ) async {
     if (user == null) {
-      SnackbarUtils.showError(context, t('please_login_to_message'));
+      GuestPromptDialog.show(
+        context,
+        title: 'Sign In to Message',
+        message: 'Sign in or create a free account to contact the property owner.',
+      );
       return;
     }
 
@@ -1727,6 +1734,38 @@ class _CalcResult extends StatelessWidget {
               ?.copyWith(color: Colors.grey.shade500, fontSize: 11),
           textAlign: TextAlign.center),
     ]);
+  }
+}
+
+// ── Guest price alert button (prompts sign-in) ────────────────────────────────
+class _GuestPriceAlertButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        icon: const Icon(Icons.notifications_outlined, color: Colors.grey),
+        onPressed: () => GuestPromptDialog.show(
+          context,
+          title: 'Price Drop Alerts',
+          message:
+              'Sign in or create a free account to get notified when this property price drops.',
+        ),
+      ),
+    );
   }
 }
 

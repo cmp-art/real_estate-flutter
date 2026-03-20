@@ -17,6 +17,9 @@ import 'main.dart';
 // Provider to track password recovery state
 final isPasswordRecoveryProvider = StateProvider<bool>((ref) => false);
 
+// Provider to track guest mode (browsing without an account)
+final isGuestModeProvider = StateProvider<bool>((ref) => false);
+
 class PatamjengoApp extends ConsumerStatefulWidget {
   const PatamjengoApp({super.key});
 
@@ -77,6 +80,7 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
       else if (event == AuthChangeEvent.signedOut) {
         logger.d('🚪 User signed out - clearing recovery state');
         ref.read(isPasswordRecoveryProvider.notifier).state = false;
+        ref.read(isGuestModeProvider.notifier).state = false;
         // DO NOT invalidate authNotifierProvider here — logout() already sets
         // state = AsyncValue.data(null). Invalidating disposes the notifier
         // while logout() is still running, causing "Bad state: Tried to use
@@ -174,8 +178,13 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper>
       return const ResetPasswordScreen();
     }
 
-    // No session → login; also reset the refresh flag for the next sign-in
+    // No session → check guest mode first
     if (!hasActiveSession) {
+      final isGuestMode = ref.watch(isGuestModeProvider);
+      if (isGuestMode) {
+        logger.d('👤 Guest mode active - showing MainScreen');
+        return const MainScreen();
+      }
       logger.d('❌ No active session - showing LoginScreen');
       _refreshRequested = false;
       return const LoginScreen();
