@@ -13,6 +13,7 @@ import '../../../../core/utils/dialog_utils.dart';
 import '../../../../core/utils/snackbar_utils.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/middleware/feature_gate_middleware.dart';
+import '../../../subscriptions/data/models/subscription_model.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart' hide userSubscriptionProvider;
 import '../providers/property_providers.dart';
@@ -409,7 +410,7 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                 // Tier badge — top right
                 // Hidden for PRO subscribers (they already have full access; badge clutters the card)
                 if ((widget.property.ownerTier == 'pro' || widget.property.ownerTier == 'basic') &&
-                    !(ref.watch(userSubscriptionProvider)?.isPro ?? false))
+                    !(ref.watch(userSubscriptionProvider)?.tier == SubscriptionTier.pro))
                   Positioned(
                     top: 8, right: 8,
                     child: Container(
