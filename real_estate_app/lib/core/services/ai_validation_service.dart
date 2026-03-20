@@ -704,26 +704,19 @@ class AiValidationService {
       }
     ];
 
-    // Try Edge Function first (secure path — API key server-side).
-    // Falls back to direct Anthropic call if Edge Function not deployed yet.
+    // All AI calls go through the Edge Function — API key stays server-side.
     try {
       final response = await _supabase.functions.invoke(
         _edgeFn,
         body: {'max_tokens': 900, 'messages': messages},
       );
-      if (response.status == 404) {
-        _log('Edge Function not found — falling back to direct API call');
-        return await _callAnthropicDirect(
-          messages: messages, maxTokens: 900, apiKey: apiKey);
-      }
       if (response.status != 200) {
         throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
       }
       return _parseResponseMap(response.data as Map<String, dynamic>);
     } on FunctionException catch (e) {
-      _log('Edge Function exception (${e.status}) — falling back to direct API call');
-      return await _callAnthropicDirect(
-          messages: messages, maxTokens: 900, apiKey: apiKey);
+      _log('Edge Function exception (${e.status}): ${e.reasonPhrase}');
+      throw Exception('Edge Function failed: ${e.status} ${e.reasonPhrase}');
     }
   }
 
@@ -773,25 +766,18 @@ class AiValidationService {
       String prompt, {required String apiKey}) async {
     final messages = [{'role': 'user', 'content': prompt}];
 
-    // Try Edge Function first. Falls back to direct call if not deployed.
     try {
       final response = await _supabase.functions.invoke(
         _edgeFn,
         body: {'max_tokens': 600, 'messages': messages},
       );
-      if (response.status == 404) {
-        _log('Edge Function not found — falling back to direct API call');
-        return await _callAnthropicDirect(
-            messages: messages, maxTokens: 600, apiKey: apiKey);
-      }
       if (response.status != 200) {
         throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
       }
       return _parseResponseMap(response.data as Map<String, dynamic>);
     } on FunctionException catch (e) {
-      _log('Edge Function exception (${e.status}) — falling back to direct API call');
-      return await _callAnthropicDirect(
-          messages: messages, maxTokens: 600, apiKey: apiKey);
+      _log('Edge Function exception (${e.status}): ${e.reasonPhrase}');
+      throw Exception('Edge Function failed: ${e.status} ${e.reasonPhrase}');
     }
   }
 
@@ -1110,13 +1096,14 @@ class AiValidationService {
     final text = '${data['title']} ${data['description']} ${data['location']}'
         .toLowerCase();
 
+    // Hard-block: listing contains a clearly non-real-estate product keyword.
     final banned =
         _bannedKeywords.firstWhere((k) => text.contains(k), orElse: () => '');
     if (banned.isNotEmpty) {
       return ValidationResult(
         status: ValidationStatus.rejected, method: ValidationMethod.rules,
         approved: false, confidence: 85,
-        reason: 'Content is not related to real estate (keyword: "$banned").',
+        reason: 'Content is not related to real estate (found: "$banned").',
         suggestions: [
           'Only property listings are allowed: houses, apartments, land, commercial.',
           'Remove references to non-real-estate products.',
@@ -1124,10 +1111,28 @@ class AiValidationService {
       );
     }
 
+    // Score keyword matches.
     int          score = 0;
     final List<String> hits = [];
     for (final kw in _reKeywords) {
       if (text.contains(kw)) { score += 15; hits.add(kw); }
+    }
+
+    // GATE: at least one real-estate keyword is REQUIRED.
+    // Without this gate, any listing with a price and a long description
+    // would pass — making the fallback completely ineffective.
+    if (hits.isEmpty) {
+      return ValidationResult(
+        status: ValidationStatus.rejected, method: ValidationMethod.rules,
+        approved: false, confidence: 80,
+        reason: 'Listing does not appear to be about real estate. '
+                'No property-related words found.',
+        suggestions: [
+          'Describe the property: house, apartment, land, commercial space, etc.',
+          'Use words like "bedroom", "bathroom", "rent", "sale", "plot".',
+          'Swahili: nyumba, chumba, pango, ardhi, ofisi are all valid.',
+        ],
+      );
     }
 
     final price = (data['price'] as num?)?.toDouble() ?? 0;
@@ -1135,12 +1140,13 @@ class AiValidationService {
     final title = (data['title'] as String?)?.trim() ?? '';
     final desc  = (data['description'] as String?)?.trim() ?? '';
 
-    if (price >= 100 && price <= 500000000) score += 20;
+    if (price >= 100 && price <= 500000000) score += 15;
     if (area  >= 10)                         score += 10;
-    if (title.length >= 5)                   score += 10;
-    if (desc.length  >= 20)                  score += 10;
+    if (title.length >= 5)                   score += 5;
+    if (desc.length  >= 20)                  score += 5;
 
-    final approved = score >= 40;
+    // Require score >= 30 (at least 2 keyword hits, OR 1 keyword + valid price/area).
+    final approved = score >= 30;
     return ValidationResult(
       status:      approved ? ValidationStatus.approved : ValidationStatus.rejected,
       method:      ValidationMethod.rules,
@@ -1148,10 +1154,10 @@ class AiValidationService {
       confidence:  score.clamp(0, 100),
       reason:      approved
           ? 'Passed automated checks (matched: ${hits.take(3).join(", ")}).'
-          : 'Did not meet real-estate content requirements (score $score/100).',
+          : 'Insufficient real-estate content (score $score/100).',
       suggestions: approved ? [] : [
-        'Add property-specific words: house, apartment, bedroom, location.',
-        'Write a description of at least 20 characters.',
+        'Add more property-specific detail: describe the rooms, location, and features.',
+        'Include: number of bedrooms, type of property, and area size.',
       ],
     );
   }
@@ -1214,24 +1220,26 @@ class AiValidationService {
   // ══════════════════════════════════════════════════════════════════════════
 
   String _buildPropertyPrompt(Map<String, dynamic> d) => '''
-You are a listing moderator for a real estate platform in Tanzania.
-DEFAULT is APPROVE. Only reject listings with NO connection to real estate.
+You are a STRICT content moderator for a real estate listing platform in Tanzania.
+This platform is ONLY for real property (houses, apartments, land, commercial spaces) FOR SALE or FOR RENT.
 
-APPROVE any listing involving physical property, space, or land including:
-Residential: house, villa, bungalow, duplex, apartment, flat, studio, bedsitter, room,
-  self-contained unit, single room, master bedroom, guest house, hostel, dormitory, boys quarter
-Hospitality: hotel, lodge, motel, resort, Airbnb, serviced apartment, guesthouse, camp, chalet
-Commercial: office, shop, retail space, showroom, bank, clinic, hospital, school, church
-Industrial: warehouse, factory, go-down, storage, workshop, garage, petrol station
-Land: plot, farm, ranch, agricultural land, mixed-use land, subdivision, estate land
-Parking: parking lot, parking space, carport
-Mixed use: any building or space for multiple purposes
-Under construction: any property being developed or built
+APPROVE only if the listing is clearly about a physical property for sale or rent.
 
-REJECT ONLY if clearly and obviously selling something with NO property:
-vehicle only, food only, clothing only, electronics only, livestock only.
-Never reject a property listing just because it is brief or simply written.
-"Chumba" (room), "nyumba" (house), "plot", "gesti" are valid Swahili property terms — APPROVE.
+Valid property types (APPROVE):
+- Residential: house, villa, apartment, flat, studio, bedsitter, room, chumba, nyumba, gesti, hostel
+- Commercial: office, shop, warehouse, clinic, school, church, hotel, lodge, go-down
+- Land: plot, farm, ardhi, shamba, construction site
+- Any physical space a person lives in, works in, or uses as real estate
+
+REJECT if:
+- The listing is selling a vehicle (car, motorcycle, bus, truck, gari) — not a property
+- The listing is selling food, clothing, electronics, or consumer goods — not a property
+- The listing is for a service (cleaning, transport, delivery) — not a property
+- The title and description have NO property-related words at all
+- The listing is clearly a different type of business (restaurant, shop selling goods)
+
+When in doubt and the listing COULD be about property, APPROVE it.
+If a real estate term appears (even once), APPROVE.
 
 Listing:
 Title: "${d['title']}"
@@ -1241,43 +1249,44 @@ Location: "${d['location']}"
 Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
 
 Reply ONLY in this exact JSON (no markdown):
-{"approved":true,"confidence":85,"detected_category":"house/apartment/room/hotel/land/commercial/industrial/unrelated","reason":"","suggestions":[]}''';
+{"approved":true,"confidence":85,"detected_category":"house/apartment/room/hotel/land/commercial/industrial/vehicle/goods/unrelated","reason":"specific reason if rejected, empty string if approved","suggestions":[]}''';
 
   String _buildPropertyPromptWithImages(
       Map<String, dynamic> d, {required int imageCount}) => '''
-You are a photo moderator for a real estate listing platform in Tanzania.
+You are a STRICT content moderator for a real estate listing platform in Tanzania.
+This platform is ONLY for real property: houses, apartments, land, and commercial spaces FOR SALE or FOR RENT.
+
 You have $imageCount photo(s) and listing text to review.
 
-YOUR JOB: Approve legitimate property listings. Only reject clear violations.
-Be generous — if the photo could reasonably be a property photo, APPROVE it.
+APPROVE the listing ONLY if BOTH of these are true:
+1. The photo(s) clearly show a real property — a room interior, building exterior, land/plot, construction site, office, shop, warehouse, or any physical space associated with real estate.
+2. The text describes a real property for sale or rent.
+
+REJECT immediately if ANY photo shows:
+- A vehicle (car, motorcycle, truck, bus) as the main subject with NO property visible
+- Food, meals, a restaurant, or a food stall
+- Clothing, fashion items, or a fashion model
+- Electronic devices (phones, laptops, TVs) as the main subject
+- A live animal or livestock as the main subject
+- A selfie or a person posing (no property visible)
+- A screenshot of an app, WhatsApp chat, SMS, social media post, document, or receipt
+- A landscape photo (nature, sky, field) with NO buildings or constructed structures
+- Any product advertisement not related to property
+
+REJECT if the text is clearly selling something other than real property (cars, goods, services, food, etc.).
 
 APPROVE photos that show:
-- Any room interior: bedroom, living room, dining room, kitchen, bathroom, hallway, staircase
-- Hotel room, hostel dormitory, guest house interior, lodge cabin, resort villa
-- Building exterior: facade, gate, fence, compound, garden, balcony, rooftop, parking
-- Land: empty plot, fenced land, construction site, foundation, farm land
-- Office, shop, clinic, school, church, warehouse, commercial space interior or exterior
-- Furniture, decor, or fixtures inside a property (these prove it is a real interior)
-- Gardens, yards, swimming pool, or outdoor spaces belonging to a property
-- Aerial/drone view of land or buildings
+- Room interiors: bedroom, living room, kitchen, bathroom, hallway, staircase, balcony
+- Building exteriors: facade, gate, fence, compound, garden, rooftop, parking
+- Land: empty plot, farm, construction site, foundation, fenced land
+- Commercial space: office, shop, clinic, warehouse, school, church, hotel, lodge
+- Furniture or fixtures INSIDE a room (proves it is a room photo)
 
-REJECT ONLY if the photo is clearly and obviously:
-- A screenshot of a phone/computer screen (status bar, browser UI, app interface visible)
-- A WhatsApp conversation, SMS, or chat screenshot
-- A selfie or portrait photo of a person (the photo subject IS the person, not a building)
-- A product being sold: car, clothing, food, electronics — with NO property visible
-- A completely unrelated commercial photo (restaurant menu, fashion shoot, etc.)
+People in the BACKGROUND of a property photo = APPROVE (the property is the subject).
+Dark or blurry property photos = APPROVE.
+Construction sites = APPROVE.
 
-IMPORTANT RULES:
-- Artwork, paintings, or decorations on walls inside a room = APPROVE (it is a room photo)
-- Plants or trees inside or outside a property = APPROVE (normal property feature)
-- People visible in the background of a property photo = APPROVE (focus is the property)
-- Dark or slightly blurry photos of rooms = APPROVE (not everyone has perfect lighting)
-- Construction sites or unfinished buildings = APPROVE (valid real estate)
-- Do NOT reject a photo just because it is portrait orientation
-- Do NOT reject a photo just because it shows furniture or decor
-
-Text must describe a property for sale or rent. Reject if it is clearly selling something else (cars, phones, clothes).
+Be strict. If a photo does NOT clearly show property, REJECT.
 
 Listing:
 Title: "${d['title']}"
@@ -1287,7 +1296,7 @@ Location: "${d['location']}"
 Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
 
 Reply ONLY in this exact JSON (no markdown, no explanation outside JSON):
-{"approved":true,"confidence":85,"detected_category":"house/apartment/land/commercial/screenshot/unrelated","images_ok":true,"text_ok":true,"reason":"brief reason if rejected, empty string if approved","suggestions":[]}''';
+{"approved":true,"confidence":85,"detected_category":"house/apartment/land/commercial/screenshot/vehicle/food/unrelated","images_ok":true,"text_ok":true,"reason":"specific reason if rejected, empty string if approved","suggestions":[]}''';
 
   String _buildAdPrompt(Map<String, dynamic> d) => '''
 You are an ad moderator for a real estate platform in Tanzania.
