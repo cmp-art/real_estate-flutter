@@ -19,6 +19,7 @@ import '../screens/property_edit_screen.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/utils/share_utils.dart';
 
 class PropertyGridCard extends ConsumerStatefulWidget {
   final dynamic property;
@@ -136,20 +137,17 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
 
   Future<void> _handleShare() async {
     final currentCurrency = ref.read(currencyProvider);
-    try {
-      final p = widget.property;
-      final price = Formatters.formatCurrency(p.price, currencyCode: currentCurrency);
-      final isRent = p.type == PropertyType.rent;
-      final rentSuffix = isRent ? '/month' : '';
-      final msg = '🏠 *${p.title}*\n\n'
-          '💰 $price$rentSuffix\n'
-          '📍 ${p.location}\n'
-          '🛏 ${p.bedrooms} beds  🚿 ${p.bathrooms} baths  📐 ${p.area.toInt()} sqft\n\n'
-          'Check it out on Patamjengo 👇\nhttps://patamjengo.netlify.app';
-      await Share.share(msg, subject: p.title);
-    } catch (e) {
-      if (mounted) SnackbarUtils.showError(context, 'Could not share. Please try again.');
-    }
+    final p = widget.property;
+    await ShareUtils.shareProperty(
+      context,
+      title: p.title,
+      price: Formatters.formatCurrency(p.price, currencyCode: currentCurrency),
+      location: p.location,
+      bedrooms: p.bedrooms,
+      bathrooms: p.bathrooms,
+      area: p.area.toInt(),
+      isRent: p.type == PropertyType.rent,
+    );
   }
 
   Future<void> _handleEdit() async {
