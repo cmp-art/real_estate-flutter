@@ -84,18 +84,6 @@ class NotificationsSettingsScreen extends ConsumerWidget {
 
           const Divider(),
 
-          _AlertTile(
-            title: AppTranslations.translate('price_change_alerts', languageCode),
-            subtitle: AppTranslations.translate('get_notified_price_changes', languageCode),
-            value: settings.priceChangeAlerts,
-            settingKey: 'price_change_alerts',
-            filterCategory: 'price_change',
-            filterCategoryTitle: AppTranslations.translate('price_change_alerts', languageCode),
-            languageCode: languageCode,
-          ),
-
-          const Divider(),
-
           // ── Price Drop Alerts (Pro) ───────────────────────────────────────
           if (userId != null)
             _PriceDropAlertTile(userId: userId, settings: settings, languageCode: languageCode)

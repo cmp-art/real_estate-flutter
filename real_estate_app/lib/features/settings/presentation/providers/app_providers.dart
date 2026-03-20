@@ -496,9 +496,9 @@ class NotificationSettings {
   NotificationSettings({
     this.pushNotifications = true,
     this.emailNotifications = true,
-    this.newPropertyAlerts = true,
+    this.newPropertyAlerts = false, // Opt-in — user must enable explicitly
     this.priceChangeAlerts = true,
-    this.priceDropAlerts = false, // Default to false
+    this.priceDropAlerts = false,
     this.messageNotifications = true,
   });
 
@@ -535,7 +535,7 @@ class NotificationSettings {
     return NotificationSettings(
       pushNotifications: json['push_notifications'] as bool? ?? true,
       emailNotifications: json['email_notifications'] as bool? ?? true,
-      newPropertyAlerts: json['new_property_alerts'] as bool? ?? true,
+      newPropertyAlerts: json['new_property_alerts'] as bool? ?? false,
       priceChangeAlerts: json['price_change_alerts'] as bool? ?? true,
       priceDropAlerts: json['price_drop_alerts'] as bool? ?? false,
       messageNotifications: json['message_notifications'] as bool? ?? true,
@@ -554,7 +554,7 @@ class NotificationSettingsNotifier extends StateNotifier<NotificationSettings> {
       state = NotificationSettings(
         pushNotifications: prefs.getBool('push_notifications') ?? true,
         emailNotifications: prefs.getBool('email_notifications') ?? true,
-        newPropertyAlerts: prefs.getBool('new_property_alerts') ?? true,
+        newPropertyAlerts: prefs.getBool('new_property_alerts') ?? false,
         priceChangeAlerts: prefs.getBool('price_change_alerts') ?? true,
         priceDropAlerts: prefs.getBool('price_drop_alerts') ?? false,
         messageNotifications: prefs.getBool('message_notifications') ?? true,

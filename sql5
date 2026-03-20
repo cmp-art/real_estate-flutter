@@ -994,19 +994,24 @@ DO $$ BEGIN
 END $$;
 
 -- ============================================================================
--- PART 19: LOCATION-AWARE NEW PROPERTY NOTIFICATIONS
--- Adds region/city matching to notify_new_property() trigger.
--- If the user has selected regions, only notify them when the new
--- property's location contains at least one of their chosen regions.
--- Empty/null regions = notify for all locations (no restriction).
+-- PART 19: LOCATION-AWARE + RATE-LIMITED NEW PROPERTY NOTIFICATIONS
+-- • Matches property location against user's chosen regions (ILIKE)
+-- • Rate-limits to at most 3 new-property notifications per user per UTC day
+--   using the notification_rate_limits table (window_key = 'YYYY-MM-DD')
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION notify_new_property()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE v_filter RECORD;
+DECLARE
+    v_filter   RECORD;
+    v_day      TEXT;
+    v_count    INTEGER;
 BEGIN
     IF NEW.status IS DISTINCT FROM 'active' THEN RETURN NEW; END IF;
     IF TG_OP = 'UPDATE' AND OLD.status = 'active' THEN RETURN NEW; END IF;
+
+    -- Current UTC date — rate-limit window resets at midnight UTC
+    v_day := TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD');
 
     FOR v_filter IN
         SELECT DISTINCT f.user_id
@@ -1014,16 +1019,16 @@ BEGIN
         WHERE  f.notification_category = 'new_property'
           AND  f.is_active = TRUE
           AND  f.user_id  <> COALESCE(NEW.owner_id,'00000000-0000-0000-0000-000000000000'::UUID)
-          AND  (f.min_price    IS NULL OR NEW.price                  >= f.min_price)
-          AND  (f.max_price    IS NULL OR NEW.price                  <= f.max_price)
-          AND  (f.min_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   >= f.min_bedrooms)
-          AND  (f.max_bedrooms IS NULL OR COALESCE(NEW.bedrooms,0)   <= f.max_bedrooms)
-          AND  (f.min_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) >= f.min_bathrooms)
-          AND  (f.max_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0) <= f.max_bathrooms)
-          AND  (f.min_area     IS NULL OR COALESCE(NEW.area,0)       >= f.min_area)
-          AND  (f.max_area     IS NULL OR COALESCE(NEW.area,0)       <= f.max_area)
+          AND  (f.min_price     IS NULL OR NEW.price                  >= f.min_price)
+          AND  (f.max_price     IS NULL OR NEW.price                  <= f.max_price)
+          AND  (f.min_bedrooms  IS NULL OR COALESCE(NEW.bedrooms,0)   >= f.min_bedrooms)
+          AND  (f.max_bedrooms  IS NULL OR COALESCE(NEW.bedrooms,0)   <= f.max_bedrooms)
+          AND  (f.min_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0)  >= f.min_bathrooms)
+          AND  (f.max_bathrooms IS NULL OR COALESCE(NEW.bathrooms,0)  <= f.max_bathrooms)
+          AND  (f.min_area      IS NULL OR COALESCE(NEW.area,0)       >= f.min_area)
+          AND  (f.max_area      IS NULL OR COALESCE(NEW.area,0)       <= f.max_area)
           AND  (f.property_types = '{}' OR f.property_types IS NULL OR NEW.category::TEXT = ANY(f.property_types))
-          -- Location filter: if user chose specific regions, new property's location must match at least one
+          -- Location: empty/null regions = any location
           AND  (
               f.regions IS NULL
               OR cardinality(f.regions) = 0
@@ -1033,6 +1038,24 @@ BEGIN
               )
           )
     LOOP
+        -- Increment today's counter for this user (upsert)
+        INSERT INTO notification_rate_limits(user_id, notif_type, window_key, count)
+        VALUES (v_filter.user_id, 'new_property', v_day, 1)
+        ON CONFLICT (user_id, notif_type, window_key)
+        DO UPDATE SET count = notification_rate_limits.count + 1;
+
+        -- Read back the updated count
+        SELECT count INTO v_count
+        FROM   notification_rate_limits
+        WHERE  user_id    = v_filter.user_id
+          AND  notif_type = 'new_property'
+          AND  window_key = v_day;
+
+        -- Skip if over the daily cap (3 per day)
+        IF v_count > 3 THEN
+            CONTINUE;
+        END IF;
+
         INSERT INTO user_notifications (user_id, type, title, message, data, is_read)
         VALUES (v_filter.user_id, 'new_property',
             '🏠 New property matching your filter',
@@ -1053,7 +1076,7 @@ CREATE TRIGGER on_new_property_approved
 DO $$ BEGIN
     RAISE NOTICE '=========================================';
     RAISE NOTICE '  Part 19: notify_new_property() updated';
-    RAISE NOTICE '  New: location/region filter support';
-    RAISE NOTICE '  Empty regions = notify for all locations';
+    RAISE NOTICE '  • Location/region filter (ILIKE match)';
+    RAISE NOTICE '  • Rate limit: max 3 per user per day';
     RAISE NOTICE '=========================================';
 END $$;

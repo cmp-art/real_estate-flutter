@@ -493,69 +493,6 @@ Consumer(
           ),
 
           _SectionHeader(title: t('general')),
-          // ── Notification Inbox ──────────────────────────────────────────
-          Consumer(
-            builder: (context, ref, _) {
-              final unreadCount = ref.watch(unreadNotificationCountProvider);
-              return ListTile(
-                leading: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: ThemeConfig.primaryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(
-                        Icons.inbox_outlined,
-                        color: ThemeConfig.primaryColor,
-                        size: 22,
-                      ),
-                    ),
-                    if (unreadCount > 0)
-                      Positioned(
-                        top: -4,
-                        right: -4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            unreadCount > 99 ? '99+' : '$unreadCount',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 9),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                title: const Text('My Notifications'),
-                subtitle: Text(
-                  unreadCount > 0
-                      ? '$unreadCount unread notification${unreadCount > 1 ? 's' : ''}'
-                      : 'View all your notifications',
-                  style: const TextStyle(color: ThemeConfig.textSecondaryColor),
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const NotificationsScreen(),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-          const Divider(height: 1),
           // ── Notification Settings ───────────────────────────────────────
           _SettingsTile(
             icon: Icons.notifications_outlined,
