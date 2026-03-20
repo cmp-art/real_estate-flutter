@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
+import '../../../../core/utils/location_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -30,6 +30,8 @@ import 'property_filter_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 import '../../../../core/services/cdn_service.dart';
+import '../../../../core/services/admin_service.dart';
+import '../../../admin/admin_dashboard_screen.dart' show adminServiceProvider;
 
 class PropertyListScreen extends ConsumerStatefulWidget {
   const PropertyListScreen({super.key});
@@ -92,8 +94,6 @@ class _PropertyListScreenDirectAdsState
     super.dispose();
   }
 
-  static const String _adminEmail = 'collinmarine9@gmail.com';
-
   /// Returns the auth user ID for logged-in users, or a persistent device UUID
   /// for guests. The guest UUID is created once and stored in SharedPreferences
   /// so the same device always gets the same ID (frequency cap works correctly).
@@ -139,20 +139,10 @@ class _PropertyListScreenDirectAdsState
           ),
         ).timeout(const Duration(seconds: 8));
 
-        final placemarks = await placemarkFromCoordinates(
-          position.latitude,
-          position.longitude,
-        );
-
-        if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          final region = place.administrativeArea ??
-              place.subAdministrativeArea ??
-              place.locality;
-          if (region != null && region.isNotEmpty) {
-            debugPrint('🌍 ADS: GPS region=$region');
-            return region;
-          }
+        final region = await photonReverse(position.latitude, position.longitude);
+        if (region != null && region.isNotEmpty) {
+          debugPrint('🌍 ADS: GPS region=$region');
+          return region;
         }
       }
     } catch (e) {
@@ -209,12 +199,7 @@ class _PropertyListScreenDirectAdsState
             locationSettings:
                 const LocationSettings(accuracy: LocationAccuracy.low),
           ).timeout(const Duration(seconds: 8));
-          final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
-          if (marks.isNotEmpty) {
-            guestRegion = marks.first.administrativeArea ??
-                marks.first.subAdministrativeArea ??
-                marks.first.locality;
-          }
+          guestRegion = await photonReverse(pos.latitude, pos.longitude);
         }
       } catch (_) {}
 
@@ -250,8 +235,7 @@ class _PropertyListScreenDirectAdsState
     // ── Authenticated user path ───────────────────────────────────────────────
     debugPrint('🔵 ADS: loading for user ${user.id} (country: $ipCountry)');
 
-    final userEmail = user.email ?? '';
-    final isAdmin = userEmail == _adminEmail;
+    final isAdmin = await ref.read(adminServiceProvider).isAdmin(user.id);
 
     if (isAdmin) {
       debugPrint('🔵 ADS: admin user — bypassing subscription + frequency cap');
