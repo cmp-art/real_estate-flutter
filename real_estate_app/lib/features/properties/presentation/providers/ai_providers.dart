@@ -2,14 +2,12 @@
 //
 // Riverpod providers for AI Validation and AI Search.
 //
-// The Claude API key is stored in Supabase `app_config` table.
-// AiValidationService now fetches the key itself on first use (lazy load),
-// eliminating the race condition where the key wasn't ready at construction.
+// The Anthropic API key is stored ONLY as a Supabase Edge Function secret.
+// It is NEVER fetched to the client device.
+// All AI calls go through the validate_content Edge Function (server-side proxy).
 //
-// To set your key, run in the Supabase SQL Editor:
-//   UPDATE app_config
-//   SET value = 'sk-ant-api03-YOUR-KEY-HERE'
-//   WHERE key = 'claude_api_key';
+// To set/update the key:
+//   Supabase Dashboard → Edge Functions → Secrets → ANTHROPIC_API_KEY
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';

@@ -118,13 +118,14 @@ class _AiHealthMonitor {
 
   // Circuit-open metadata
   DateTime?  _openedAt;
-  Duration   _cooldown     = const Duration(seconds: 30); // doubles on each consecutive trip
+  Duration   _cooldown     = const Duration(seconds: 10); // doubles on each consecutive trip
 
-  // Thresholds
-  static const int    _minSamples     = 5;     // need at least 5 calls before tripping
-  static const double _maxFailureRate = 0.40;  // trip at 40% failure rate
-  static const Duration _windowDur    = Duration(minutes: 5);  // rolling window
-  static const Duration _maxCooldown  = Duration(minutes: 10); // cap on exponential backoff
+  // Thresholds — kept high so transient errors don't permanently block AI.
+  // Need at least 20 calls in the window before the breaker can trip.
+  static const int    _minSamples     = 20;    // need at least 20 calls before tripping
+  static const double _maxFailureRate = 0.80;  // trip only at 80% failure rate
+  static const Duration _windowDur    = Duration(minutes: 10); // rolling window
+  static const Duration _maxCooldown  = Duration(minutes: 5);  // cap on backoff
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -331,11 +332,45 @@ class AiValidationService {
   // the call throws and the circuit breaker / rule-based fallback handles it.
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Set to true after the first successful edge function call so we don't
+  // ping the health endpoint on every request.
+  bool _edgeFunctionVerified = false;
+
   Future<String> _getApiKey() async {
     // Return a non-empty sentinel — the real key lives in the Edge Function secret.
     // The client NEVER reads or stores the actual Anthropic API key.
-    _log('AI validation via Edge Function (key is server-side only)');
+    if (!_edgeFunctionVerified) {
+      // On the first call, ping /health so we log exactly what is wrong
+      // (wrong model, missing key, network error, etc.) without blocking.
+      _pingHealthOnce();
+    }
     return 'edge-function-active';
+  }
+
+  /// Fire-and-forget health check on the first AI call of the session.
+  /// Logs the result so you can see it in debug console / Supabase Function Logs.
+  void _pingHealthOnce() {
+    _edgeFunctionVerified = true; // prevent repeat pings
+    Future.microtask(() async {
+      try {
+        final response = await _supabase.functions
+            .invoke('$_edgeFn/health', body: {})
+            .timeout(const Duration(seconds: 30));
+        final data = response.data;
+        if (data is Map && data['ok'] == true) {
+          _log('✅ Edge Function health OK — model: ${data['model']}, '
+               'reply: "${data['reply']}"');
+        } else {
+          _log('⚠️  Edge Function health FAILED — stage: ${data?['stage']}, '
+               'detail: ${data?['detail']}');
+        }
+      } catch (e) {
+        _log('❌ Edge Function health ping threw: $e\n'
+             'Check: (1) validate_content is deployed in Supabase, '
+             '(2) ANTHROPIC_API_KEY secret is set, '
+             '(3) model name is correct.');
+      }
+    });
   }
 
   // Expose health stats for the admin monitoring widget.
