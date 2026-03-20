@@ -18,7 +18,6 @@ import '../../../../core/utils/responsive_helper.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 final notificationFilterServiceProvider = Provider<NotificationFilterService>((ref) {
-  // Use Supabase.instance.client — matches the rest of the app; no mock provider
   return NotificationFilterService(Supabase.instance.client);
 });
 
@@ -67,18 +66,9 @@ class NotificationFilterScreen extends ConsumerStatefulWidget {
   ConsumerState<NotificationFilterScreen> createState() => _NotificationFilterScreenState();
 }
 
-// Tanzania regions — used for location-based notification filter
-const _kTanzaniaRegions = [
-  'Arusha', 'Dar es Salaam', 'Dodoma', 'Geita', 'Iringa', 'Kagera',
-  'Katavi', 'Kigoma', 'Kilimanjaro', 'Lindi', 'Manyara', 'Mara',
-  'Mbeya', 'Morogoro', 'Mtwara', 'Mwanza', 'Njombe', 'Pemba North',
-  'Pemba South', 'Pwani', 'Rukwa', 'Ruvuma', 'Shinyanga', 'Simiyu',
-  'Singida', 'Songwe', 'Tabora', 'Tanga', 'Unguja North', 'Unguja South',
-  'Zanzibar West',
-];
-
 class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScreen> {
-  final _formKey = GlobalKey<FormState>();
+  final _formKey    = GlobalKey<FormState>();
+  final _locationInputCtrl = TextEditingController();
 
   // PropertyType comes from notification_filter_service.dart
   Set<PropertyType> _selectedTypes = PropertyType.values.toSet();
@@ -98,12 +88,13 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   final _minAreaCtrl = TextEditingController();
   final _maxAreaCtrl = TextEditingController();
 
-  // Location filter — empty set = any location
-  Set<String> _selectedRegions = {};
+  // Location tags — user-typed strings, empty = any location
+  // Each tag is matched with ILIKE against property location in the DB trigger
+  List<String> _locationTags = [];
   bool _isDetectingLocation = false;
 
-  bool _isLoading = false;
-  bool _isLoadingFilter = false;
+  bool _isLoading        = false;
+  bool _isLoadingFilter  = false;
 
   @override
   void initState() {
@@ -111,12 +102,38 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
     _loadExistingFilter();
   }
 
+  @override
+  void dispose() {
+    _locationInputCtrl.dispose();
+    _minPriceCtrl.dispose();
+    _maxPriceCtrl.dispose();
+    _minAreaCtrl.dispose();
+    _maxAreaCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Add a location tag ──────────────────────────────────────────────────────
+
+  void _addTag(String raw) {
+    final tag = raw.trim();
+    if (tag.isEmpty) return;
+    if (_locationTags.any((t) => t.toLowerCase() == tag.toLowerCase())) {
+      _locationInputCtrl.clear();
+      return; // duplicate
+    }
+    setState(() => _locationTags.add(tag));
+    _locationInputCtrl.clear();
+  }
+
+  void _removeTag(String tag) => setState(() => _locationTags.remove(tag));
+
   // ── GPS auto-detect ─────────────────────────────────────────────────────────
+  // Uses subLocality (e.g. "Masaki") → locality (e.g. "Dar es Salaam") →
+  // subAdministrativeArea (e.g. "Ilala") — most specific available is used.
 
   Future<void> _detectLocation() async {
     setState(() => _isDetectingLocation = true);
     try {
-      // Check / request permission
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -125,7 +142,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
           permission == LocationPermission.deniedForever) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Location permission denied — please select manually'),
+            content: Text('Location permission denied — type your location manually'),
           ));
         }
         return;
@@ -141,25 +158,29 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
       if (placemarks.isEmpty) return;
 
-      final area = placemarks.first.administrativeArea ?? '';
-      final matched = _matchTanzaniaRegion(area);
+      final p = placemarks.first;
+      // Pick the most specific non-empty field
+      final detected = (p.subLocality?.isNotEmpty == true ? p.subLocality
+          : p.locality?.isNotEmpty == true ? p.locality
+          : p.subAdministrativeArea?.isNotEmpty == true ? p.subAdministrativeArea
+          : null);
 
-      if (matched != null && mounted) {
-        setState(() => _selectedRegions = {matched});
+      if (detected != null && mounted) {
+        _addTag(detected);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('📍 Location set to $matched'),
+          content: Text('📍 Added "$detected" — edit if needed'),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 2),
         ));
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not detect your region — please select manually'),
+          content: Text('Could not detect your area — type it manually'),
         ));
       }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Location detection failed — please select manually'),
+          content: Text('Location detection failed — type it manually'),
         ));
       }
     } finally {
@@ -167,37 +188,9 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
     }
   }
 
-  /// Strips "Region", "Mkoa", etc. and fuzzy-matches against Tanzania regions list.
-  String? _matchTanzaniaRegion(String raw) {
-    final cleaned = raw
-        .replaceAll(RegExp(r'\s*(region|mkoa)\s*', caseSensitive: false), '')
-        .trim();
-    if (cleaned.isEmpty) return null;
-    // Exact match first
-    for (final r in _kTanzaniaRegions) {
-      if (r.toLowerCase() == cleaned.toLowerCase()) return r;
-    }
-    // Partial match
-    for (final r in _kTanzaniaRegions) {
-      if (r.toLowerCase().contains(cleaned.toLowerCase()) ||
-          cleaned.toLowerCase().contains(r.toLowerCase())) {
-        return r;
-      }
-    }
-    return null;
-  }
-
-  @override
-  void dispose() {
-    _minPriceCtrl.dispose();
-    _maxPriceCtrl.dispose();
-    _minAreaCtrl.dispose();
-    _maxAreaCtrl.dispose();
-    super.dispose();
-  }
+  // ── Load existing filter from DB ────────────────────────────────────────────
 
   Future<void> _loadExistingFilter() async {
-    // ── FIX: read userId from authNotifierProvider, not a TODO stub ──
     final userId = ref.read(authNotifierProvider).value?.id;
     if (userId == null) return;
 
@@ -210,36 +203,38 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       );
 
       if (filter != null && mounted) {
-        final savedRegions = (filter.regions ?? []).toSet();
+        final savedTags = (filter.regions ?? []);
         setState(() {
           _selectedTypes = filter.propertyTypes.toSet();
-          _minPrice = filter.minPrice;
-          _maxPrice = filter.maxPrice;
-          _minBedrooms = filter.minBedrooms;
-          _maxBedrooms = filter.maxBedrooms;
-          _minBathrooms = filter.minBathrooms;
-          _maxBathrooms = filter.maxBathrooms;
-          _minArea = filter.minArea;
-          _maxArea = filter.maxArea;
-          _selectedRegions = savedRegions;
+          _minPrice      = filter.minPrice;
+          _maxPrice      = filter.maxPrice;
+          _minBedrooms   = filter.minBedrooms;
+          _maxBedrooms   = filter.maxBedrooms;
+          _minBathrooms  = filter.minBathrooms;
+          _maxBathrooms  = filter.maxBathrooms;
+          _minArea       = filter.minArea;
+          _maxArea       = filter.maxArea;
+          _locationTags  = List<String>.from(savedTags);
 
           if (_minPrice != null) _minPriceCtrl.text = _minPrice!.toStringAsFixed(0);
           if (_maxPrice != null) _maxPriceCtrl.text = _maxPrice!.toStringAsFixed(0);
           if (_minArea  != null) _minAreaCtrl.text  = _minArea!.toStringAsFixed(0);
           if (_maxArea  != null) _maxAreaCtrl.text  = _maxArea!.toStringAsFixed(0);
         });
-        // Auto-detect location only when filter exists but has no regions set yet
-        if (savedRegions.isEmpty) _detectLocation();
+        // Auto-detect only if no location was previously saved
+        if (savedTags.isEmpty) _detectLocation();
       } else {
-        // No saved filter at all — auto-detect location as default
+        // First time opening — auto-detect location as starter
         _detectLocation();
       }
     } catch (_) {
-      // Silently fall through — user starts with defaults
+      // Fall through to defaults
     } finally {
       if (mounted) setState(() => _isLoadingFilter = false);
     }
   }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -294,15 +289,53 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   // ── LOCATION SECTION ───────────────────────────────────────────────────────
 
   Widget _buildLocationSection(bool isDark) {
-    final allSelected = _selectedRegions.isEmpty;
+    final primary = ThemeConfig.getPrimaryColor(context);
+    final chipBg  = primary.withOpacity(0.12);
+
     return _Section(
       title: 'Location',
-      subtitle: 'Select regions to watch — leave empty for all locations',
+      subtitle: 'Type a neighbourhood, district or city. Leave empty for anywhere.',
       isDark: isDark,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Detect button
+
+          // ── Input row ──────────────────────────────────────────────────
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _locationInputCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  hintText: 'e.g. Masaki, Westlands, Kololo…',
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  suffixIcon: _locationInputCtrl.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () => setState(() => _locationInputCtrl.clear()),
+                        )
+                      : null,
+                ),
+                onSubmitted: _addTag,
+                onChanged: (_) => setState(() {}), // refresh suffix icon
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: () => _addTag(_locationInputCtrl.text),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              ),
+              child: const Text('Add'),
+            ),
+          ]),
+
+          const SizedBox(height: 10),
+
+          // ── GPS detect button ──────────────────────────────────────────
           OutlinedButton.icon(
             onPressed: _isDetectingLocation ? null : _detectLocation,
             icon: _isDetectingLocation
@@ -310,35 +343,46 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
                     width: 16, height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.my_location_rounded, size: 18),
-            label: Text(_isDetectingLocation ? 'Detecting location…' : 'Use my current location'),
+            label: Text(
+              _isDetectingLocation ? 'Detecting…' : 'Use my current location',
+              style: const TextStyle(fontSize: 13),
+            ),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilterChip(
-                label: const Text('📍  All Locations'),
-                selected: allSelected,
-                onSelected: (_) => setState(() => _selectedRegions.clear()),
-                selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
-                checkmarkColor: ThemeConfig.getPrimaryColor(context),
+
+          const SizedBox(height: 14),
+
+          // ── Tags ───────────────────────────────────────────────────────
+          if (_locationTags.isEmpty)
+            Text(
+              '📍 Any location — alerts for all areas',
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black45,
+                fontSize: 13,
+                fontStyle: FontStyle.italic,
               ),
-              ..._kTanzaniaRegions.map((region) => FilterChip(
-                label: Text(region),
-                selected: _selectedRegions.contains(region),
-                onSelected: (sel) => setState(() {
-                  if (sel) {
-                    _selectedRegions.add(region);
-                  } else {
-                    _selectedRegions.remove(region);
-                  }
-                }),
-                selectedColor: ThemeConfig.getPrimaryColor(context).withOpacity(0.2),
-                checkmarkColor: ThemeConfig.getPrimaryColor(context),
-              )),
-            ],
-          ),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _locationTags.map((tag) => Chip(
+                label: Text(tag, style: const TextStyle(fontSize: 13)),
+                backgroundColor: chipBg,
+                deleteIcon: Icon(Icons.close, size: 16, color: primary),
+                onDeleted: () => _removeTag(tag),
+              )).toList(),
+            ),
+
+          if (_locationTags.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Notified when a property location contains any of these.',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -418,7 +462,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
 
   Widget _buildPriceRangeSection(bool isDark) {
     final currentCurrency = ref.watch(currencyProvider);
-    final currencySymbol = CurrencyUtils.getSymbol(currentCurrency);
+    final currencySymbol  = CurrencyUtils.getSymbol(currentCurrency);
 
     return _Section(
       title: 'Price Range',
@@ -455,9 +499,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
               validator: (v) {
                 if (v != null && v.isNotEmpty && _minPrice != null) {
                   final max = double.tryParse(v);
-                  if (max != null && max <= _minPrice!) {
-                    return 'Must be greater than min';
-                  }
+                  if (max != null && max <= _minPrice!) return 'Must be greater than min';
                 }
                 return null;
               },
@@ -530,7 +572,6 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
 
   Widget _buildAreaSection(bool isDark) {
     return _Section(
-      // ── FIX: the app uses sq m not sq ft (Tanzania market) ──
       title: 'Area (sq m)',
       subtitle: 'Property area in square metres (optional)',
       isDark: isDark,
@@ -609,7 +650,6 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   Future<void> _saveFilter() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // ── FIX: use real auth provider ──
     final userId = ref.read(authNotifierProvider).value?.id;
     if (userId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -621,20 +661,20 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
     setState(() => _isLoading = true);
     try {
       final service = ref.read(notificationFilterServiceProvider);
-      final filter = await service.upsertFilter(
-        userId: userId,
-        category: widget.category,
+      final filter  = await service.upsertFilter(
+        userId:       userId,
+        category:     widget.category,
         propertyTypes: _selectedTypes.toList(),
-        minPrice: _minPrice,
-        maxPrice: _maxPrice,
-        minBedrooms: _minBedrooms,
-        maxBedrooms: _maxBedrooms,
+        minPrice:     _minPrice,
+        maxPrice:     _maxPrice,
+        minBedrooms:  _minBedrooms,
+        maxBedrooms:  _maxBedrooms,
         minBathrooms: _minBathrooms,
         maxBathrooms: _maxBathrooms,
-        minArea: _minArea,
-        maxArea: _maxArea,
-        regions: _selectedRegions.isEmpty ? [] : _selectedRegions.toList(),
-        isActive: true,
+        minArea:      _minArea,
+        maxArea:      _maxArea,
+        regions:      _locationTags, // free-text location tags stored in regions column
+        isActive:     true,
       );
 
       if (!mounted) return;
@@ -669,7 +709,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
   void _resetToDefaults() {
     setState(() {
       _selectedTypes = PropertyType.values.toSet();
-      _selectedRegions = {};
+      _locationTags  = [];
       _minPrice = _maxPrice = null;
       _minPriceCtrl.clear();
       _maxPriceCtrl.clear();
@@ -679,8 +719,7 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
       _minAreaCtrl.clear();
       _maxAreaCtrl.clear();
     });
-    // Re-detect location as new default
-    _detectLocation();
+    _detectLocation(); // re-suggest current location
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Reset to defaults'), duration: Duration(seconds: 2)),
     );
@@ -692,9 +731,12 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context))),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(
+                ResponsiveHelper.getResponsiveBorderRadius(context))),
         title: Row(children: [
-          Icon(Icons.help_outline_rounded, size: ResponsiveHelper.getResponsiveIconSize(context)),
+          Icon(Icons.help_outline_rounded,
+              size: ResponsiveHelper.getResponsiveIconSize(context)),
           SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
           const Text('Filter Help'),
         ]),
@@ -704,7 +746,9 @@ class _NotificationFilterScreenState extends ConsumerState<NotificationFilterScr
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _HelpItem('Location',
-                  'Pick one or more Tanzania regions to watch. Leave as "All Locations" to receive alerts from anywhere.'),
+                  'Type any neighbourhood, district or city name — e.g. "Masaki", "Westlands", "Kololo". '
+                  'Add multiple tags to watch several areas. Leave empty for alerts from anywhere. '
+                  'Tap "Use my current location" to auto-fill from GPS.'),
               _HelpItem('Property Categories',
                   'Choose which property types to receive alerts for. At least one must be selected.'),
               _HelpItem('Price Range',
@@ -762,7 +806,9 @@ class _Section extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Text(title,
-            style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 17), fontWeight: FontWeight.w700)),
+            style: TextStyle(
+                fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 17),
+                fontWeight: FontWeight.w700)),
         if (badge != null) ...[
           SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
           Container(
@@ -782,7 +828,8 @@ class _Section extends StatelessWidget {
       const SizedBox(height: 4),
       Text(subtitle,
           style: TextStyle(
-              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13), color: isDark ? Colors.white54 : Colors.black45)),
+              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
+              color: isDark ? Colors.white54 : Colors.black45)),
       const SizedBox(height: 14),
       child,
     ]);
@@ -790,14 +837,13 @@ class _Section extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NUMBER DROPDOWN  — FIX: DropdownButtonFormField has no 'initialValue' param;
-//                         use 'value' instead (the correct API)
+// NUMBER DROPDOWN
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _NumberDropdown extends StatelessWidget {
   final String label;
   final int? value;
-  final int? minValue;       // When set, filters out options below this
+  final int? minValue;
   final ValueChanged<int?> onChanged;
 
   const _NumberDropdown({
@@ -816,15 +862,12 @@ class _NumberDropdown extends StatelessWidget {
           .map((n) => DropdownMenuItem(value: n, child: Text('$n'))),
     ];
 
-    // Guard: if current value was filtered out (e.g. min increased past max), reset to null
     final effectiveValue = (value != null && items.any((item) => item.value == value))
         ? value
         : null;
 
     return DropdownButtonFormField<int?>(
       decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
-      // ── FIX: use 'value' not 'initialValue' ——
-      // 'initialValue' does not exist on DropdownButtonFormField
       initialValue: effectiveValue,
       items: items,
       onChanged: onChanged,
@@ -846,10 +889,13 @@ class _HelpItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        Text(title,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
         const SizedBox(height: 4),
         Text(description,
-            style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13), color: Colors.grey.shade600)),
+            style: TextStyle(
+                fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
+                color: Colors.grey.shade600)),
       ]),
     );
   }
