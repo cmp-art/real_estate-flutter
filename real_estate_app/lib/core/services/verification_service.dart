@@ -6,14 +6,14 @@
 // │  METHOD 1 — Near Owner (owner is at / near the property)│
 // │                                                         │
 // │  1. GPS check: distance from device to property.        │
-// │     0–300 m   → +40 pts                                 │
-// │     300–1000 m → +25 pts                                │
-// │     1–2 km    → +10 pts                                 │
+// │     0–300 m   → +70 pts  (auto-pass; ≥60 on its own)   │
+// │     300–1000 m → +35 pts                                │
+// │     1–2 km    → +15 pts                                 │
 // │     > 2 km    → 0 pts (fail immediately)                │
 // │                                                         │
-// │  2. Photo comparison: live camera shot vs listing photos │
-// │     (in device memory, not yet uploaded).               │
-// │     TFLite cosine similarity → 0–60 pts.                │
+// │  2. Photo: live camera shot vs listing photos.          │
+// │     Native: 15 base + cosine bonus → 0–30 pts.          │
+// │     Web:    20 pts if photo decodes, else 0.            │
 // │                                                         │
 // │  Total ≥ 60 / 100 → Verified ✅                         │
 // │  Total < 60 / 100 → Rejected ❌                         │
@@ -52,6 +52,12 @@ void _vlog(String msg) {
 const int    _kNearOwnerPassThreshold = 60;    // out of 100
 const double _kFarOwnerPassThreshold  = 70.0;  // percent
 const double _kMaxDistanceMeters      = 2000.0; // 2 km GPS tolerance
+
+// GPS score bands (out of 70):
+//   ≤ 300 m   → 70 pts  (auto-passes 60-point threshold on its own)
+//   300–1000 m → 35 pts
+//   1–2 km    → 15 pts
+//   > 2 km    → 0 pts / immediate fail
 
 class VerificationService {
   final PhotoSimilarityService _photoSim;
@@ -92,7 +98,7 @@ class VerificationService {
     final distanceM     = gpsResult.$2;
     final gpsFailReason = gpsResult.$3;
 
-    _vlog('GPS: ${distanceM.toStringAsFixed(0)} m → score $gpsScore/40');
+    _vlog('GPS: ${distanceM.toStringAsFixed(0)} m → score $gpsScore/70');
 
     if (gpsFailReason != null) {
       // > 2 km → immediate fail
@@ -112,7 +118,7 @@ class VerificationService {
       livePhoto:    livePhoto,
       listingPhotos: listingPhotos,
     );
-    _vlog('Photo score: $photoScore/60');
+    _vlog('Photo score: $photoScore/30');
 
     final totalScore = gpsScore + photoScore;
     final passed     = totalScore >= _kNearOwnerPassThreshold;
@@ -127,7 +133,8 @@ class VerificationService {
       rejectionReason: passed
           ? null
           : 'Score $totalScore/100 is below the required 60. '
-            'GPS: $gpsScore/40, Photo match: $photoScore/60.',
+            'GPS: $gpsScore/70, Photo: $photoScore/30. '
+            'Tip: being within 300 m of the property (GPS ≥ 70) alone is enough to pass.',
     );
 
     await _log(result, propertyId: null);
@@ -302,9 +309,9 @@ class VerificationService {
         );
       }
 
-      final score = dist <= 300  ? 40
-                  : dist <= 1000 ? 25
-                  :                10;
+      final score = dist <= 300  ? 70   // ≤300 m → auto-pass (70 ≥ 60 threshold)
+                  : dist <= 1000 ? 35   // 300–1000 m → 35 pts
+                  :                15;  // 1–2 km → 15 pts
 
       return (score, dist, null);
     } catch (e) {

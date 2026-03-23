@@ -2,8 +2,18 @@
 //
 // Native (Android / iOS / desktop) implementation.
 // Compares a live camera photo against a list of listing photos using
-// MobileNet V3 TFLite cosine similarity.  NOT compiled on web.
+// MobileNet V3 TFLite.  NOT compiled on web.
 // Imported only via the conditional export in photo_similarity_service.dart.
+//
+// Score (0–30):
+//   15 pts base  — photo was uploaded and the model processed it successfully.
+//   +15 pts bonus — cosine similarity of feature vectors > 0.1 (best match).
+//
+// NOTE: MobileNet V3 softmax vectors are sparse (one class dominates), so
+// cosine similarity is often near-zero even for visually similar scenes.
+// The 15-pt base score ensures that users who upload a real photo at the
+// property are not penalised by this limitation.  GPS scoring (0–70) is the
+// primary signal; photo is a secondary bonus.
 
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -62,6 +72,9 @@ class PhotoSimilarityService {
       return 0;
     }
 
+    // Base 15 pts: photo was uploaded and the model extracted a vector.
+    const int baseScore = 15;
+
     double bestSimilarity = 0.0;
     for (final listingPhoto in listingPhotos) {
       final listingVector = await _extractVector(listingPhoto);
@@ -71,8 +84,12 @@ class PhotoSimilarityService {
       if (sim > bestSimilarity) bestSimilarity = sim;
     }
 
-    final score = (bestSimilarity * 60).clamp(0, 60).round();
-    _plog('Best similarity: ${(bestSimilarity * 100).toStringAsFixed(1)}% → photo score = $score/60');
+    // Bonus 0–15 pts based on cosine similarity.
+    // MobileNet softmax vectors are sparse so similarity is often near-zero;
+    // any score > 0.1 is considered a meaningful match.
+    final bonusScore = (bestSimilarity * 15).clamp(0, 15).round();
+    final score      = baseScore + bonusScore;
+    _plog('Best similarity: ${(bestSimilarity * 100).toStringAsFixed(1)}% → bonus=$bonusScore → photo score = $score/30');
     return score;
   }
 

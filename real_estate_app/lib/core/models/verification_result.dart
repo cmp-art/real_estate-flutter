@@ -12,8 +12,8 @@ class VerificationResult {
   final VerificationMethod method;
 
   // ── Near owner ──────────────────────────────────────────────────────────
-  final int?    gpsScore;       // 0–40
-  final int?    photoScore;     // 0–60
+  final int?    gpsScore;       // 0–70  (≤300 m = 70, 300–1000 m = 35, 1–2 km = 15)
+  final int?    photoScore;     // 0–30  (15 base + up to 15 similarity bonus; web: 20 if decoded)
   final int?    totalScore;     // 0–100 (gps + photo)
   final double? distanceMeters;
 

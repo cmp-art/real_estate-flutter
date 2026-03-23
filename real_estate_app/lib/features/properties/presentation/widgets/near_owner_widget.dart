@@ -396,8 +396,10 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
               style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
           Text('2. Take or upload a photo of the property from where you are standing.',
               style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-          Text('3. Photo match 0–60 pts + GPS 0–40 pts. Total ≥ 60 → Verified.',
+          Text('3. GPS 0–70 pts + Photo 0–30 pts. Total ≥ 60 → Verified.',
               style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+          Text('   GPS ≤ 300 m alone (70 pts) is enough to pass.',
+              style: TextStyle(fontSize: 12, color: Colors.green.shade700, fontWeight: FontWeight.w500)),
           const SizedBox(height: 6),
           Text(
             'Property coordinates: ${widget.propertyLat!.toStringAsFixed(4)}, ${widget.propertyLng!.toStringAsFixed(4)}',
@@ -467,8 +469,8 @@ class _NearResultCard extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 15)),
           ]),
           const SizedBox(height: 10),
-          if (result.gpsScore   != null) _ScoreRow('GPS',    '${result.gpsScore}/40',     result.gpsScore!,   40),
-          if (result.photoScore != null) _ScoreRow('Photo',  '${result.photoScore}/60',   result.photoScore!, 60),
+          if (result.gpsScore   != null) _ScoreRow('GPS',    '${result.gpsScore}/70',     result.gpsScore!,   70),
+          if (result.photoScore != null) _ScoreRow('Photo',  '${result.photoScore}/30',   result.photoScore!, 30),
           if (result.totalScore != null) _ScoreRow('Total',  '${result.totalScore}/100',  result.totalScore!, 100, bold: true),
           if (result.rejectionReason != null) ...[
             const SizedBox(height: 8),
