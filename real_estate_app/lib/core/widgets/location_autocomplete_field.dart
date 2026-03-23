@@ -19,6 +19,10 @@ class LocationAutocompleteField extends StatefulWidget {
   final String? Function(String?)? validator;
   final void Function(String name, String displayName) onSelected;
 
+  /// Called with the lat/lng of the selected place (from Photon geometry or GPS).
+  /// Only fired when coordinates are available.
+  final void Function(double lat, double lng)? onCoordinatesSelected;
+
   /// true  → tag input: clears the field after the user selects a suggestion
   /// false → regular input: fills the field with the selected displayName
   final bool clearOnSelect;
@@ -30,6 +34,7 @@ class LocationAutocompleteField extends StatefulWidget {
     this.labelText,
     this.validator,
     required this.onSelected,
+    this.onCoordinatesSelected,
     this.clearOnSelect = false,
   });
 
@@ -95,21 +100,27 @@ class _LocationAutocompleteFieldState
           TextSelection.collapsed(offset: _ctrl.text.length);
     }
     widget.onSelected(place.name, place.displayName);
+    if (place.latitude != null && place.longitude != null) {
+      widget.onCoordinatesSelected?.call(place.latitude!, place.longitude!);
+    }
   }
 
   Future<void> _detectGps() async {
     _debounce?.cancel();
     setState(() { _isDetectingGps = true; _suggestions = []; });
-    final detected = await detectCurrentLocation();
+    final result = await detectCurrentLocationFull();
     if (!mounted) return;
     setState(() => _isDetectingGps = false);
-    if (detected != null) {
+    if (result.name != null) {
       if (!widget.clearOnSelect) {
-        _ctrl.text = detected;
+        _ctrl.text = result.name!;
         _ctrl.selection =
             TextSelection.collapsed(offset: _ctrl.text.length);
       }
-      widget.onSelected(detected, detected);
+      widget.onSelected(result.name!, result.name!);
+    }
+    if (result.latitude != null && result.longitude != null) {
+      widget.onCoordinatesSelected?.call(result.latitude!, result.longitude!);
     }
   }
 

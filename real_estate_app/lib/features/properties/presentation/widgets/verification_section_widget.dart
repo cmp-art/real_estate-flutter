@@ -10,10 +10,8 @@
 //   VerificationSectionWidget(
 //     listingPhotos: _selectedImages,      // XFile list (not yet uploaded)
 //     onVerified:    (r) => setState(() => _verificationResult = r),
-//     onLocationCaptured: (lat, lng) => setState(() {
-//       _propertyLat = lat;
-//       _propertyLng = lng;
-//     }),
+//     propertyLat: _propertyLat,
+//     propertyLng: _propertyLng,
 //   )
 
 import 'package:flutter/material.dart';
@@ -31,15 +29,16 @@ class VerificationSectionWidget extends StatefulWidget {
   /// Called every time a verification attempt completes (pass or fail).
   final void Function(VerificationResult) onVerified;
 
-  /// Called when the near-owner GPS capture completes so the parent can
-  /// store lat/lng on the property entity.
-  final void Function(double lat, double lng)? onLocationCaptured;
+  /// Property coordinates from the listing form address field.
+  final double? propertyLat;
+  final double? propertyLng;
 
   const VerificationSectionWidget({
     super.key,
     required this.listingPhotos,
     required this.onVerified,
-    this.onLocationCaptured,
+    this.propertyLat,
+    this.propertyLng,
   });
 
   @override
@@ -126,10 +125,11 @@ class _VerificationSectionWidgetState
         // ── Active verification widget ───────────────────────────────────
         if (_method == _OwnerMethod.near)
           NearOwnerWidget(
-            key:               const ValueKey('near'),
-            listingPhotos:     widget.listingPhotos,
-            onResult:          _handleResult,
-            onLocationCaptured: widget.onLocationCaptured,
+            key:           const ValueKey('near'),
+            listingPhotos: widget.listingPhotos,
+            onResult:      _handleResult,
+            propertyLat:   widget.propertyLat,
+            propertyLng:   widget.propertyLng,
           )
         else if (_method == _OwnerMethod.far)
           FarOwnerWidget(

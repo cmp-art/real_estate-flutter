@@ -151,9 +151,30 @@ class VerificationService {
   }) async {
     // ── 1. OCR both documents ──────────────────────────────────────────────
     _vlog('Running OCR on ID card...');
-    final idName   = await _ocr.extractName(idImage);
+    final idDoc   = await _ocr.processDocument(idImage);
     _vlog('Running OCR on Hati...');
-    final hatiName = await _ocr.extractName(hatiImage);
+    final hatiDoc = await _ocr.processDocument(hatiImage);
+
+    final idName   = idDoc.name;
+    final hatiName = hatiDoc.name;
+
+    // ── 2. Country check — both documents must be Tanzanian ───────────────
+    if (!idDoc.isTanzanian || !hatiDoc.isTanzanian) {
+      final which = !idDoc.isTanzanian && !hatiDoc.isTanzanian
+          ? 'ID card and Hati'
+          : !idDoc.isTanzanian ? 'ID card' : 'Hati';
+      final result = VerificationResult.farOwner(
+        verified: false,
+        nameMatchPct: 0.0,
+        idDocumentType: idDocumentType,
+        idNameExtracted: idDoc.name ?? '',
+        hatiNameExtracted: hatiDoc.name ?? '',
+        rejectionReason: '$which does not appear to be a Tanzanian document. '
+            'Only Tanzanian NIDA cards, Driving Licenses, Voter IDs, and Hati documents are accepted.',
+      );
+      await _log(result, propertyId: null);
+      return result;
+    }
 
     if (idName == null || hatiName == null) {
       final missing = idName == null && hatiName == null
@@ -174,7 +195,7 @@ class VerificationService {
       return result;
     }
 
-    // ── 2. Fuzzy name match ───────────────────────────────────────────────
+    // ── 3. Fuzzy name match ───────────────────────────────────────────────
     final matchPct = fuzzyNameMatch(idName, hatiName);
     final passed   = matchPct >= _kFarOwnerPassThreshold;
 

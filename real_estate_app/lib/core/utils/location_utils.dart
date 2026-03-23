@@ -17,11 +17,15 @@ class PhotonPlace {
   final String name;        // short label, e.g. "Masaki"
   final String context;     // e.g. "Dar es Salaam, Tanzania"
   final String displayName; // full, e.g. "Masaki, Dar es Salaam, Tanzania"
+  final double? latitude;   // from geometry.coordinates[1]
+  final double? longitude;  // from geometry.coordinates[0]
 
   const PhotonPlace({
     required this.name,
     required this.context,
     required this.displayName,
+    this.latitude,
+    this.longitude,
   });
 }
 
@@ -49,7 +53,10 @@ Future<List<PhotonPlace>> photonSearch(String query) async {
     final features = data['features'] as List<dynamic>? ?? [];
 
     return features.map<PhotonPlace>((f) {
-      final props   = (f as Map<String, dynamic>)['properties'] as Map<String, dynamic>? ?? {};
+      final feature = f as Map<String, dynamic>;
+      final props   = feature['properties'] as Map<String, dynamic>? ?? {};
+      final geometry = feature['geometry'] as Map<String, dynamic>?;
+
       final name    = (props['name']    as String?) ?? '';
       final city    = (props['city']    as String?)
                    ?? (props['county']  as String?)
@@ -60,10 +67,23 @@ Future<List<PhotonPlace>> photonSearch(String query) async {
       final context = [city, country].where((s) => s.isNotEmpty).join(', ');
       final display = [name, context].where((s) => s.isNotEmpty).join(', ');
 
+      // Photon GeoJSON: coordinates[0] = longitude, coordinates[1] = latitude
+      double? lat;
+      double? lng;
+      if (geometry != null) {
+        final coords = geometry['coordinates'] as List<dynamic>?;
+        if (coords != null && coords.length >= 2) {
+          lng = (coords[0] as num?)?.toDouble();
+          lat = (coords[1] as num?)?.toDouble();
+        }
+      }
+
       return PhotonPlace(
         name:        name.isNotEmpty ? name : display,
         context:     context,
         displayName: display.isNotEmpty ? display : name,
+        latitude:    lat,
+        longitude:   lng,
       );
     }).where((p) => p.name.isNotEmpty).toList();
   } catch (e) {
@@ -135,5 +155,35 @@ Future<String?> detectCurrentLocation() async {
   } catch (e) {
     debugPrint('detectCurrentLocation error: $e');
     return null;
+  }
+}
+
+/// Requests location permission, gets GPS position, reverse-geocodes via Photon.
+/// Returns a record with the place name, latitude, and longitude.
+/// Any field may be null on failure.
+Future<({String? name, double? latitude, double? longitude})>
+    detectCurrentLocationFull() async {
+  try {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return (name: null, latitude: null, longitude: null);
+    }
+
+    final pos = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.low,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+
+    final name = await photonReverse(pos.latitude, pos.longitude);
+    return (name: name, latitude: pos.latitude, longitude: pos.longitude);
+  } catch (e) {
+    debugPrint('detectCurrentLocationFull error: $e');
+    return (name: null, latitude: null, longitude: null);
   }
 }

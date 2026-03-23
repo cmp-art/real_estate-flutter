@@ -6,7 +6,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 
+// ── Document OCR result ──────────────────────────────────────────────────────
+
+class DocumentOcrResult {
+  final String? name;
+  final bool isTanzanian;
+  const DocumentOcrResult({this.name, required this.isTanzanian});
+}
+
 class OcrService {
+  /// Always returns a result with null name and isTanzanian=false on web (ML Kit not available).
+  Future<DocumentOcrResult> processDocument(XFile imageFile) async =>
+      const DocumentOcrResult(name: null, isTanzanian: false);
+
   /// Always returns null on web (ML Kit not available).
   Future<String?> extractName(XFile imageFile) async => null;
 

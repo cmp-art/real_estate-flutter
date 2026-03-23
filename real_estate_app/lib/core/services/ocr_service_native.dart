@@ -13,15 +13,23 @@ void _olog(String msg) {
   if (kDebugMode) debugPrint('[OCR] $msg');
 }
 
+// ── Document OCR result ──────────────────────────────────────────────────────
+
+class DocumentOcrResult {
+  final String? name;
+  final bool isTanzanian;
+  const DocumentOcrResult({this.name, required this.isTanzanian});
+}
+
 class OcrService {
   final TextRecognizer _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-  /// Extracts the owner's name from [imageFile].
-  /// Returns the extracted name string (trimmed), or null if recognition fails.
-  Future<String?> extractName(XFile imageFile) async {
+  /// Extracts the owner's name from [imageFile] and checks for Tanzanian document markers.
+  /// Returns a [DocumentOcrResult] with the extracted name and country check.
+  Future<DocumentOcrResult> processDocument(XFile imageFile) async {
     if (kIsWeb) {
       _olog('ML Kit OCR not supported on web');
-      return null;
+      return const DocumentOcrResult(name: null, isTanzanian: false);
     }
 
     try {
@@ -31,15 +39,42 @@ class OcrService {
 
       _olog('Raw OCR (${imageFile.name}):\n$text');
 
-      return _parseName(text);
+      final name        = _parseName(text);
+      final isTanzanian = _isTanzanianDocument(text);
+
+      return DocumentOcrResult(name: name, isTanzanian: isTanzanian);
     } catch (e) {
       _olog('OCR error for ${imageFile.name}: $e');
-      return null;
+      return const DocumentOcrResult(name: null, isTanzanian: false);
     }
+  }
+
+  /// Extracts the owner's name from [imageFile].
+  /// Returns the extracted name string (trimmed), or null if recognition fails.
+  Future<String?> extractName(XFile imageFile) async {
+    final doc = await processDocument(imageFile);
+    return doc.name;
   }
 
   Future<void> dispose() async {
     await _recognizer.close();
+  }
+
+  // ── Tanzania document check ──────────────────────────────────────────────
+
+  bool _isTanzanianDocument(String text) {
+    final upper = text.toUpperCase();
+    const markers = [
+      'UNITED REPUBLIC OF TANZANIA',
+      'JAMHURI YA MUUNGANO WA TANZANIA',
+      'TANZANIA',
+      'NIDA',
+      'WIZARA YA ARDHI',
+      'HATI YA MILIKI',
+      'LAND REGISTRY',
+      'MKURUGENZI WA ARDHI',
+    ];
+    return markers.any((m) => upper.contains(m));
   }
 
   // ── Name parsing ────────────────────────────────────────────────────────

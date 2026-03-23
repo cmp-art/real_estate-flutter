@@ -1,16 +1,14 @@
 // lib/features/properties/presentation/widgets/near_owner_widget.dart
 //
-// Near-owner verification — self-contained, no pre-set coordinates needed.
+// Near-owner verification — requires property coordinates from the listing form.
 //
 // Flow:
-//   1. Tap "Set Property Location" → captures current GPS as property location.
-//   2. Tap "Take Live Photo"       → opens camera.
-//   3. Tap "Verify"                → GPS score (40 since distance ≈ 0) +
-//                                    TFLite photo similarity (0–60).
+//   1. Tap "Check Distance" → gets device GPS, computes distance to property coordinates.
+//   2. Tap "Take/Upload Photo" → camera on native, gallery on web.
+//   3. Tap "Verify Ownership" → GPS score (0–40) + photo similarity (0–60).
 //   4. Total ≥ 60/100 → Verified ✅
 //
-// The captured GPS coordinates are passed back via [onResult] so the parent
-// can store them on the property entity (property.latitude / .longitude).
+// propertyLat / propertyLng must be passed from the listing form address field.
 
 import 'dart:io';
 
@@ -27,17 +25,19 @@ import '../../../../core/services/verification_service.dart';
 class NearOwnerWidget extends StatefulWidget {
   final List<XFile> listingPhotos;
 
+  /// Coordinates from the listing form address field.
+  final double? propertyLat;
+  final double? propertyLng;
+
   /// Called with the verification result.
   final void Function(VerificationResult result) onResult;
-
-  /// Called with the captured GPS so the parent can save it on the property.
-  final void Function(double lat, double lng)? onLocationCaptured;
 
   const NearOwnerWidget({
     super.key,
     required this.listingPhotos,
     required this.onResult,
-    this.onLocationCaptured,
+    this.propertyLat,
+    this.propertyLng,
   });
 
   @override
@@ -48,14 +48,15 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
   late final VerificationService _service;
   final ImagePicker _picker = ImagePicker();
 
-  double? _capturedLat;
-  double? _capturedLng;
   XFile?  _livePhoto;
-
   VerificationResult? _result;
-  bool    _locating  = false;
+
+  bool    _checking  = false;
   bool    _verifying = false;
   String? _statusMsg;
+
+  bool    _distanceChecked = false;
+  double? _detectedDistanceM;
 
   @override
   void initState() {
@@ -66,20 +67,23 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
     );
   }
 
-  // ── Step 1: Capture GPS location ──────────────────────────────────────────
-  Future<void> _captureLocation() async {
+  // ── Step 1: Check distance ────────────────────────────────────────────────
+  Future<void> _checkDistance() async {
+    if (widget.propertyLat == null || widget.propertyLng == null) return;
+
     setState(() {
-      _locating  = true;
+      _checking  = true;
       _statusMsg = 'Getting your GPS location…';
     });
 
     try {
-      final perm = await Geolocator.checkPermission();
+      LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
         final req = await Geolocator.requestPermission();
         if (req == LocationPermission.denied || req == LocationPermission.deniedForever) {
+          if (!mounted) return;
           setState(() {
-            _locating  = false;
+            _checking  = false;
             _statusMsg = 'Location permission denied. Please enable it in Settings.';
           });
           return;
@@ -93,26 +97,34 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
         ),
       );
 
-      setState(() {
-        _capturedLat = pos.latitude;
-        _capturedLng = pos.longitude;
-        _locating    = false;
-        _statusMsg   = null;
-      });
+      final dist = Geolocator.distanceBetween(
+        pos.latitude, pos.longitude,
+        widget.propertyLat!, widget.propertyLng!,
+      );
 
-      widget.onLocationCaptured?.call(pos.latitude, pos.longitude);
-    } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _locating  = false;
+        _checking         = false;
+        _distanceChecked  = true;
+        _detectedDistanceM = dist;
+        _statusMsg        = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _checking  = false;
         _statusMsg = 'Could not get location: $e';
       });
     }
   }
 
-  // ── Step 2: Take live photo ───────────────────────────────────────────────
-  Future<void> _takeLivePhoto() async {
+  // ── Step 2: Take / upload photo ───────────────────────────────────────────
+  Future<void> _takePhoto() async {
+    // On web, ImageSource.camera opens the file explorer on desktop — use gallery instead.
+    final source = kIsWeb ? ImageSource.gallery : ImageSource.camera;
+
     final photo = await _picker.pickImage(
-      source:       ImageSource.camera,
+      source:       source,
       maxWidth:     1280,
       maxHeight:    1280,
       imageQuality: 85,
@@ -127,12 +139,12 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
 
   // ── Step 3: Verify ────────────────────────────────────────────────────────
   Future<void> _verify() async {
-    if (_capturedLat == null) {
-      setState(() => _statusMsg = 'Please capture your location first (Step 1).');
+    if (widget.propertyLat == null || widget.propertyLng == null) {
+      setState(() => _statusMsg = 'Property coordinates are not set. Select an address above.');
       return;
     }
     if (_livePhoto == null) {
-      setState(() => _statusMsg = 'Please take a live photo first (Step 2).');
+      setState(() => _statusMsg = 'Please take or upload a photo first (Step 2).');
       return;
     }
 
@@ -141,10 +153,9 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
       _statusMsg = 'Verifying…';
     });
 
-    // Since the user just captured GPS AT the property, distance = 0 → GPS score = 40.
     final result = await _service.verifyNearOwner(
-      propertyLatitude:  _capturedLat!,
-      propertyLongitude: _capturedLng!,
+      propertyLatitude:  widget.propertyLat!,
+      propertyLongitude: widget.propertyLng!,
       listingPhotos:     widget.listingPhotos,
       livePhoto:         _livePhoto!,
     );
@@ -162,116 +173,177 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasCoords = widget.propertyLat != null && widget.propertyLng != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Info
-        _infoCard(),
+        // Info / coordinates card
+        _infoCard(hasCoords),
         const SizedBox(height: 16),
 
-        // ── Step 1: GPS ───────────────────────────────────────────────────
-        _StepHeader(
-          step:   '1',
-          title:  'Set Property Location',
-          done:   _capturedLat != null,
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _locating ? null : _captureLocation,
-          icon: _locating
-              ? const SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(_capturedLat != null
-                  ? Icons.location_on
-                  : Icons.my_location_outlined),
-          label: Text(_locating
-              ? 'Getting location…'
-              : _capturedLat != null
-                  ? 'Location set (${_capturedLat!.toStringAsFixed(4)}, ${_capturedLng!.toStringAsFixed(4)})'
-                  : 'Use My Current Location'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            foregroundColor: _capturedLat != null ? Colors.green : null,
-            side: BorderSide(
-              color: _capturedLat != null ? Colors.green : Colors.grey.shade400,
+        if (!hasCoords) ...[
+          // No coordinates yet — block further steps
+        ] else ...[
+          // ── Step 1: Check Distance ─────────────────────────────────────
+          _StepHeader(
+            step:  '1',
+            title: 'Check Distance to Property',
+            done:  _distanceChecked,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _checking ? null : _checkDistance,
+            icon: _checking
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(_distanceChecked
+                    ? Icons.location_on
+                    : Icons.my_location_outlined),
+            label: Text(_checking
+                ? 'Getting location…'
+                : _distanceChecked && _detectedDistanceM != null
+                    ? _distanceChecked
+                        ? (_detectedDistanceM! > 2000
+                            ? 'Distance: ${(_detectedDistanceM! / 1000).toStringAsFixed(1)} km — too far (re-check)'
+                            : 'Distance: ${_detectedDistanceM!.toStringAsFixed(0)} m — OK')
+                        : 'Check My Distance'
+                    : 'Check My Distance'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: _distanceChecked
+                  ? (_detectedDistanceM != null && _detectedDistanceM! <= 2000
+                      ? Colors.green
+                      : Colors.orange)
+                  : null,
+              side: BorderSide(
+                color: _distanceChecked
+                    ? (_detectedDistanceM != null && _detectedDistanceM! <= 2000
+                        ? Colors.green
+                        : Colors.orange)
+                    : Colors.grey.shade400,
+              ),
             ),
           ),
-        ),
 
-        const SizedBox(height: 16),
-
-        // ── Step 2: Camera ────────────────────────────────────────────────
-        _StepHeader(
-          step:  '2',
-          title: 'Take a Live Photo at the Property',
-          done:  _livePhoto != null,
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _verifying ? null : _takeLivePhoto,
-          icon: Icon(_livePhoto != null
-              ? Icons.camera_alt
-              : Icons.camera_alt_outlined),
-          label: Text(_livePhoto != null ? 'Retake Photo' : 'Open Camera'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            foregroundColor: _livePhoto != null ? Colors.green : null,
-            side: BorderSide(
-              color: _livePhoto != null ? Colors.green : Colors.grey.shade400,
+          if (_distanceChecked && _detectedDistanceM != null && _detectedDistanceM! > 2000) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade300),
+              ),
+              child: Text(
+                'You are ${(_detectedDistanceM! / 1000).toStringAsFixed(1)} km from the property. '
+                'Near-owner verification requires being within 2 km. '
+                'You can still proceed, but verification will be rejected unless you are within 2 km. '
+                'Consider using the "Far Owner" method instead.',
+                style: TextStyle(fontSize: 13, color: Colors.orange.shade800),
+              ),
             ),
-          ),
-        ),
+          ],
 
-        if (_livePhoto != null) ...[
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: kIsWeb
-                ? Image.network(
-                    _livePhoto!.path,
-                    height: 140,
-                    width:  double.infinity,
-                    fit:    BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _photoPlaceholder(),
-                  )
-                : Image.file(
-                    File(_livePhoto!.path),
-                    height: 140,
-                    width:  double.infinity,
-                    fit:    BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _photoPlaceholder(),
-                  ),
-          ),
-        ],
-
-        const SizedBox(height: 16),
-
-        // ── Step 3: Verify ────────────────────────────────────────────────
-        ElevatedButton.icon(
-          onPressed: (_verifying || _capturedLat == null || _livePhoto == null)
-              ? null
-              : _verify,
-          icon: _verifying
-              ? const SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Icon(Icons.verified_outlined),
-          label: Text(_verifying ? 'Verifying…' : 'Verify Ownership'),
-          style: ElevatedButton.styleFrom(
-            padding:         const EdgeInsets.symmetric(vertical: 14),
-            backgroundColor: theme.colorScheme.primary,
-            foregroundColor: Colors.white,
-          ),
-        ),
-
-        if (_statusMsg != null) ...[
-          const SizedBox(height: 10),
-          Text(_statusMsg!, style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
-        ],
-
-        if (_result != null) ...[
           const SizedBox(height: 16),
-          _NearResultCard(result: _result!),
+
+          // ── Step 2: Photo ──────────────────────────────────────────────
+          _StepHeader(
+            step:  '2',
+            title: kIsWeb
+                ? 'Upload a Photo Taken at the Property'
+                : 'Take a Live Photo at the Property',
+            done:  _livePhoto != null,
+          ),
+          const SizedBox(height: 8),
+          if (kIsWeb) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              margin: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Text(
+                'On web/PC, please upload a photo taken at the property.',
+                style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
+              ),
+            ),
+          ],
+          OutlinedButton.icon(
+            onPressed: _verifying ? null : _takePhoto,
+            icon: Icon(_livePhoto != null
+                ? (kIsWeb ? Icons.upload_file : Icons.camera_alt)
+                : (kIsWeb ? Icons.upload_file_outlined : Icons.camera_alt_outlined)),
+            label: Text(_livePhoto != null
+                ? (kIsWeb ? 'Upload Different Photo' : 'Retake Photo')
+                : (kIsWeb ? 'Upload Photo' : 'Open Camera')),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: _livePhoto != null ? Colors.green : null,
+              side: BorderSide(
+                color: _livePhoto != null ? Colors.green : Colors.grey.shade400,
+              ),
+            ),
+          ),
+
+          if (_livePhoto != null) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: kIsWeb
+                  ? Image.network(
+                      _livePhoto!.path,
+                      height: 140,
+                      width:  double.infinity,
+                      fit:    BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _photoPlaceholder(),
+                    )
+                  : Image.file(
+                      File(_livePhoto!.path),
+                      height: 140,
+                      width:  double.infinity,
+                      fit:    BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _photoPlaceholder(),
+                    ),
+            ),
+          ],
+
+          const SizedBox(height: 16),
+
+          // ── Step 3: Verify ─────────────────────────────────────────────
+          _StepHeader(
+            step:  '3',
+            title: 'Verify Ownership',
+            done:  _result?.isVerified == true,
+          ),
+          const SizedBox(height: 8),
+          ElevatedButton.icon(
+            onPressed: (_verifying || _livePhoto == null)
+                ? null
+                : _verify,
+            icon: _verifying
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.verified_outlined),
+            label: Text(_verifying ? 'Verifying…' : 'Verify Ownership'),
+            style: ElevatedButton.styleFrom(
+              padding:         const EdgeInsets.symmetric(vertical: 14),
+              backgroundColor: theme.colorScheme.primary,
+              foregroundColor: Colors.white,
+            ),
+          ),
+
+          if (_statusMsg != null) ...[
+            const SizedBox(height: 10),
+            Text(_statusMsg!, style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          ],
+
+          if (_result != null) ...[
+            const SizedBox(height: 16),
+            _NearResultCard(result: _result!),
+          ],
         ],
       ],
     );
@@ -283,34 +355,63 @@ class _NearOwnerWidgetState extends State<NearOwnerWidget> {
     child: const Center(child: Icon(Icons.image, size: 48, color: Colors.grey)),
   );
 
-  Widget _infoCard() => Container(
-    padding:    const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color:        Colors.blue.shade50,
-      borderRadius: BorderRadius.circular(10),
-      border:       Border.all(color: Colors.blue.shade200),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('📍 How it works', style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        Text('1. Stand at the property and tap "Use My Current Location".',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-        Text('2. Take a live photo of the property from where you are standing.',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-        Text('3. Your live photo is compared to your listing photos on-device.',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-        Text('4. Photo match ≥ 20/60 + GPS 40 = Total ≥ 60 → Verified ✅',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
-        if (widget.listingPhotos.isEmpty) ...[
-          const SizedBox(height: 8),
-          Text('⚠️ Add listing photos above before verifying.',
-              style: TextStyle(fontSize: 13, color: Colors.orange.shade700, fontWeight: FontWeight.bold)),
+  Widget _infoCard(bool hasCoords) {
+    if (!hasCoords) {
+      return Container(
+        padding:    const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color:        Colors.amber.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border:       Border.all(color: Colors.amber.shade300),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Location not set',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(
+              'Please enter and select your property address from the suggestions above '
+              'before using near-owner verification.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding:    const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color:        Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border:       Border.all(color: Colors.blue.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('How it works', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text('1. Tap "Check My Distance" — we get your live GPS and measure distance to the property.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+          Text('2. Take or upload a photo of the property from where you are standing.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+          Text('3. Photo match 0–60 pts + GPS 0–40 pts. Total ≥ 60 → Verified.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+          const SizedBox(height: 6),
+          Text(
+            'Property coordinates: ${widget.propertyLat!.toStringAsFixed(4)}, ${widget.propertyLng!.toStringAsFixed(4)}',
+            style: TextStyle(fontSize: 12, color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+          ),
+          if (widget.listingPhotos.isEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Add listing photos above before verifying.',
+                style: TextStyle(fontSize: 13, color: Colors.orange.shade700, fontWeight: FontWeight.bold)),
+          ],
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
 // ── Subwidgets ─────────────────────────────────────────────────────────────
@@ -333,7 +434,9 @@ class _StepHeader extends StatelessWidget {
                 fontWeight: FontWeight.bold)),
       ),
       const SizedBox(width: 8),
-      Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      Expanded(
+        child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ),
     ],
   );
 }
@@ -360,7 +463,7 @@ class _NearResultCard extends StatelessWidget {
           Row(children: [
             Icon(v ? Icons.verified : Icons.cancel_outlined, color: color, size: 22),
             const SizedBox(width: 8),
-            Text(v ? 'Ownership Verified ✅' : 'Verification Rejected ❌',
+            Text(v ? 'Ownership Verified' : 'Verification Rejected',
                 style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 15)),
           ]),
           const SizedBox(height: 10),

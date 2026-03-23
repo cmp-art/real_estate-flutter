@@ -1598,6 +1598,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               onSelected: (_, displayName) {
                 _locationController.text = displayName;
               },
+              onCoordinatesSelected: (lat, lng) => setState(() {
+                _propertyLat = lat;
+                _propertyLng = lng;
+              }),
             ),
             _FieldTip(s.locationTip),
             SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
@@ -1693,10 +1697,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               VerificationSectionWidget(
                 listingPhotos: _selectedImages,
                 onVerified:    (result) => setState(() => _verificationResult = result),
-                onLocationCaptured: (lat, lng) => setState(() {
-                  _propertyLat = lat;
-                  _propertyLng = lng;
-                }),
+                propertyLat:   _propertyLat,
+                propertyLng:   _propertyLng,
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
               // Warn if not yet verified
