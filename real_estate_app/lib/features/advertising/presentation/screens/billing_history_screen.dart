@@ -451,7 +451,7 @@ class _BillingHistoryScreenState extends ConsumerState<BillingHistoryScreen>
                 ),
                 if (refund.processedAt != null) ...[
                   const SizedBox(width: 12),
-                  Icon(Icons.done_all_rounded,
+                  const Icon(Icons.done_all_rounded,
                       size: 13, color: ThemeConfig.successColor),
                   const SizedBox(width: 5),
                   Text(

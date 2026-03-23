@@ -37,7 +37,7 @@ Future<String?> webResizeToBase64(Uint8List bytes) async {
     final h = img.naturalHeight ?? 0;
     if (w == 0 || h == 0) return base64Encode(bytes);
 
-    const int maxDim = 1024;
+    const int maxDim = 900;
     int tw = w, th = h;
     if (w > maxDim || h > maxDim) {
       if (w >= h) {

@@ -79,6 +79,13 @@ dependencies:
   # Network
   http: ^1.1.0
 
+  # On-device AI — MobileNet V3 TFLite image validation
+  tflite_flutter: ^0.10.4
+  image: ^4.1.7
+
+  # On-device OCR — ownership verification (ID card + Hati name extraction)
+  google_mlkit_text_recognition: ^0.13.0
+
   # Icons
   cupertino_icons: ^1.0.6
 
@@ -126,3 +133,4 @@ flutter:
     - assets/icons/
     - assets/.env
     - assets/docs/
+    - assets/ml/

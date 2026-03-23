@@ -5,41 +5,42 @@
 //
 // 3-LAYER VALIDATION:
 //   LAYER 1 — Pre-flight (Dart, no network): size & screenshot detection
-//   LAYER 2 — Claude Haiku AI (text + vision): strict real-estate gating
-//   LAYER 3 — Rule-based fallback (text-only submissions only): keyword scoring
+//   LAYER 2 — MobileNet V3 TFLite (on-device, no API cost): image classification
+//   LAYER 3 — Rule-based (text-only submissions): keyword scoring
 //   LAYER 4 — Manual queue (last resort when rules crash, text-only only)
 //
 // KEY PRODUCTION FEATURES:
-//   - API key cached for 1 hour, auto-refreshes on rotation
-//   - Empty API key never cached — always retried on next call
+//   - On-device image classification — no API key, no cost per image
 //   - Per-user rate limiting: max 5 attempts per 60 seconds
-//   - Health monitor with 30-second auto-reset
+//   - Circuit-breaker health monitor (TFLite model state)
 //   - ALL photos checked by pre-flight (not just first 3)
-//   - Up to 4 photos sent to Claude (evenly spread across uploaded set)
+//   - Up to 4 photos classified by MobileNet V3
 //   - Lost-log counter exposed for admin monitoring
-//   - HEIC, WebP, phone and tablet screenshot detection in pre-flight
+//   - HEIC, WebP, screenshot detection in pre-flight
 //   - Images path never falls back to text-only rules
 //   - _log() wrapper: silent in release builds, visible in debug
 //
 // DEPENDENCIES (pubspec.yaml):
 //   flutter_image_compress: ^2.1.0
-//   http: ^1.0.0
+//   tflite_flutter: ^0.10.4
+//   image: ^4.1.7
 //   supabase_flutter: ^2.0.0
+//
+// MODEL ASSETS (place in assets/ml/):
+//   mobilenet_v3.tflite       — from TF Hub (MobileNet V3 Small/Large int8)
+//   imagenet_labels.txt       — from storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt
 
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../constants/app_constants.dart';
-// http package removed — all AI calls go through the Supabase Edge Function.
-// Direct Anthropic calls from client are permanently disabled (security).
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
-// Web image resize (canvas-based) vs native stub.
-import '../utils/web_compress.dart'
-    if (dart.library.io) '../utils/web_compress_stub.dart';
+// On-device image classifier (MobileNet V3 TFLite).
+import 'tflite_classifier.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOGGING — silent in release builds
@@ -103,7 +104,7 @@ class ValidationResult {
 //
 // States:
 //   CLOSED   → normal operation; failures counted.
-//   OPEN     → breaker tripped; all calls bypass Claude until cooldown elapses.
+//   OPEN     → breaker tripped; all image calls skip TFLite until cooldown elapses.
 //   HALF-OPEN→ cooldown elapsed; one probe call is allowed.
 //              If it succeeds → CLOSED; if it fails → OPEN (with doubled cooldown).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +163,7 @@ class _AiHealthMonitor {
     _openedAt   = null;
     _cooldown   = const Duration(seconds: 30);
     _windowStart = null;
-    _log('Circuit breaker manually reset — Claude will be retried');
+    _log('Circuit breaker manually reset — TFLite classifier will be retried');
   }
 
   bool get isHealthy {
@@ -175,7 +176,7 @@ class _AiHealthMonitor {
         if (_openedAt != null &&
             DateTime.now().difference(_openedAt!) >= _cooldown) {
           _state = _BreakerState.halfOpen;
-          _log('Circuit breaker half-open — sending one probe to Claude');
+          _log('Circuit breaker half-open — sending one probe via TFLite');
           return true; // allow the probe call through
         }
         return false;  // still cooling down
@@ -218,7 +219,7 @@ class _AiHealthMonitor {
     _total    = 0;
     _cooldown = const Duration(seconds: 30); // reset backoff on clean recovery
     _openedAt = null;
-    _log('Circuit breaker CLOSED — Claude is healthy again');
+    _log('Circuit breaker CLOSED — TFLite classifier is healthy again');
   }
 
   void _resetWindowIfExpired() {
@@ -270,19 +271,21 @@ class AiValidationService {
   final _health      = _AiHealthMonitor();
   final _rateLimiter = _RateLimiter();
 
-  // Model is enforced server-side in the Edge Function.
-  static const String   _claudeModel  = 'claude-haiku-4-5-20251001'; // informational
-  // Edge Function name — no hardcoded URL or project ref needed.
-  // _supabase.functions.invoke() resolves the correct URL automatically.
-  static const String   _edgeFn       = 'validate_content';
-  static const Duration _timeout      = Duration(seconds: 60);
-  static const int      _maxImages    = 4; // up to 4 images spread across the set
+  // On-device MobileNet V3 TFLite classifier (replaces Claude Haiku for images).
+  final _classifier = TFLiteClassifier();
+
+  static const Duration _timeout   = Duration(seconds: 60);
+  static const int      _maxImages = 4; // up to 4 images classified per submission
 
   // Lost-log counter — admin can read this to detect Supabase logging issues.
   int _lostLogCount = 0;
   int get lostLogCount => _lostLogCount;
 
   AiValidationService(this._supabase);
+
+  /// Initialize the TFLite classifier. Call once at app startup (e.g. in main.dart
+  /// after WidgetsFlutterBinding.ensureInitialized()). Safe to call multiple times.
+  Future<void> initialize() => _classifier.initialize();
 
   // ─────────────────────────────────────────────────────────────────────────
   // KEYWORDS
@@ -320,58 +323,19 @@ class AiValidationService {
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
-  // EDGE FUNCTION AVAILABILITY CHECK
-  //
-  // SECURITY FIX: The Anthropic API key NEVER leaves the server.
-  //   - It is stored as a Supabase Edge Function secret (ANTHROPIC_API_KEY).
-  //   - The Flutter app only calls _supabase.functions.invoke('validate_content').
-  //   - The Edge Function reads the key server-side and calls Anthropic.
-  //   - No API key is ever fetched to the device or sent in any HTTP header.
-  //
-  // This method returns a non-empty sentinel so the existing flow treats
-  // Claude as "available". If the Edge Function itself is missing or broken,
-  // the call throws and the circuit breaker / rule-based fallback handles it.
+  // CLASSIFIER READINESS
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Set to true after the first successful edge function call so we don't
-  // ping the health endpoint on every request.
-  bool _edgeFunctionVerified = false;
-
-  Future<String> _getApiKey() async {
-    // Return a non-empty sentinel — the real key lives in the Edge Function secret.
-    // The client NEVER reads or stores the actual Anthropic API key.
-    if (!_edgeFunctionVerified) {
-      // On the first call, ping /health so we log exactly what is wrong
-      // (wrong model, missing key, network error, etc.) without blocking.
-      _pingHealthOnce();
-    }
-    return 'edge-function-active';
-  }
-
-  /// Fire-and-forget health check on the first AI call of the session.
-  /// Logs the result so you can see it in debug console / Supabase Function Logs.
-  void _pingHealthOnce() {
-    _edgeFunctionVerified = true; // prevent repeat pings
-    Future.microtask(() async {
-      try {
-        final response = await _supabase.functions
-            .invoke('$_edgeFn/health', body: {})
-            .timeout(const Duration(seconds: 30));
-        final data = response.data;
-        if (data is Map && data['ok'] == true) {
-          _log('✅ Edge Function health OK — model: ${data['model']}, '
-               'reply: "${data['reply']}"');
-        } else {
-          _log('⚠️  Edge Function health FAILED — stage: ${data?['stage']}, '
-               'detail: ${data?['detail']}');
-        }
-      } catch (e) {
-        _log('❌ Edge Function health ping threw: $e\n'
-             'Check: (1) validate_content is deployed in Supabase, '
-             '(2) ANTHROPIC_API_KEY secret is set, '
-             '(3) model name is correct.');
+  /// Lazily initializes the TFLite classifier if not already done.
+  Future<void> _ensureClassifierReady() async {
+    if (!_classifier.isInitialized) {
+      await _classifier.initialize();
+      if (_classifier.isInitialized) {
+        _log('✅ TFLite classifier ready (MobileNet V3)');
+      } else {
+        _log('⚠️  TFLite classifier not ready: ${_classifier.initError}');
       }
-    });
+    }
   }
 
   // Expose health stats for the admin monitoring widget.
@@ -380,36 +344,41 @@ class AiValidationService {
   // ─────────────────────────────────────────────────────────────────────────
   // HEALTH CHECK
   //
-  // Calls POST /validate_content/health on the Edge Function.
   // Returns a map with:
-  //   ok      → bool   — true if key exists and Claude responds
-  //   stage   → String — 'all_good' | 'key_missing' | 'anthropic_error' | 'network_error'
+  //   ok      → bool   — true if TFLite model is loaded and ready
+  //   stage   → String — 'all_good' | 'model_error' | 'web_unsupported'
+  //   model   → String — model identifier
   //   detail  → String — human-readable message
-  //   reply   → String — Claude's reply (when ok=true)
   // ─────────────────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> checkAiHealth() async {
-    try {
-      final response = await _supabase.functions.invoke(
-        '$_edgeFn/health',
-        body: {},
-      ).timeout(_timeout);
+    await _ensureClassifierReady();
 
-      final data = response.data;
-      if (data is Map<String, dynamic>) return data;
-      // Edge Function returned unexpected shape
+    if (kIsWeb) {
       return {
         'ok':     false,
-        'stage':  'unexpected_response',
-        'detail': 'Edge Function returned an unexpected response format.',
-      };
-    } catch (e) {
-      return {
-        'ok':     false,
-        'stage':  'invoke_error',
-        'detail': 'Could not reach the Edge Function: $e\n'
-                  'Make sure validate_content is deployed in Supabase.',
+        'stage':  'web_unsupported',
+        'model':  'mobilenet_v3_tflite',
+        'detail': 'TFLite is not supported on web. Rule-based validation is active.',
       };
     }
+
+    if (_classifier.isInitialized) {
+      return {
+        'ok':     true,
+        'stage':  'all_good',
+        'model':  'mobilenet_v3_tflite',
+        'detail': 'MobileNet V3 TFLite model is loaded and ready for on-device classification.',
+      };
+    }
+
+    return {
+      'ok':     false,
+      'stage':  'model_error',
+      'model':  'mobilenet_v3_tflite',
+      'detail': _classifier.initError ??
+                'TFLite model not initialized. '
+                'Ensure mobilenet_v3.tflite is in assets/ml/ and listed in pubspec.yaml.',
+    };
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -427,7 +396,7 @@ class AiValidationService {
     required int        bathrooms,
     required double     area,
     List<XFile>?        images,
-    List<XFile>?        videos,   // optional video files — thumbnails extracted & sent to Claude
+    List<XFile>?        videos,   // optional video files — thumbnails extracted for TFLite classification
     String?             submittedBy,
   }) async {
     // Rate limit.
@@ -446,10 +415,10 @@ class AiValidationService {
       'bedrooms': bedrooms, 'bathrooms': bathrooms, 'area': area,
     };
 
-    final apiKey    = await _getApiKey();
+    await _ensureClassifierReady();
 
     // ── Extract thumbnails from any submitted videos and merge into images ─
-    // Claude cannot decode raw video bytes — we extract a JPEG frame from
+    // TFLite cannot decode raw video bytes — we extract a JPEG frame from
     // each video and treat it exactly like a photo for validation purposes.
     List<XFile> allMedia = [...(images ?? [])];
     final tempThumbs = <XFile>[]; // temp thumbnail files to clean up after validation
@@ -458,7 +427,7 @@ class AiValidationService {
         final thumb = await _extractVideoThumbnail(videos[i]);
         if (thumb != null) {
           allMedia.add(thumb);
-          tempThumbs.add(thumb); // mark for cleanup after Claude responds
+          tempThumbs.add(thumb); // mark for cleanup after classification
           _log('Property video ${i + 1}: thumbnail extracted → added to media set');
         } else if (kIsWeb) {
           // video_thumbnail not available on web — skip the frame, still validate images
@@ -480,22 +449,22 @@ class AiValidationService {
 
     final hasImages = allMedia.isNotEmpty;
 
-    _log('validateProperty — key=${apiKey.isEmpty ? "MISSING" : "ok"}, '
+    _log('validateProperty — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
          'photos=${images?.length ?? 0}, videos=${videos?.length ?? 0}, '
          'total_media=${allMedia.length}, healthy=${_health.isHealthy}');
 
     // ── IMAGE/VIDEO PATH ────────────────────────────────────────────────────
     if (hasImages) {
-      // AI unavailable → rule-based fallback on text fields (never hard-block)
-      if (apiKey.isEmpty || !_health.isHealthy) {
-        _log('AI unavailable for property photos — using rule-based fallback on text fields');
+      // TFLite unavailable → rule-based fallback on text fields (never hard-block)
+      if (!_classifier.isInitialized || !_health.isHealthy) {
+        _log('TFLite unavailable for property photos — using rule-based fallback on text fields');
         await _deleteTempThumbnails(tempThumbs);
         final fallback = _ruleBasedPropertyCheck(data);
         await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
         return fallback;
       }
 
-      // Pre-flight ALL media (photos + video thumbnails) before calling Claude.
+      // Pre-flight ALL media (photos + video thumbnails) before TFLite classification.
       for (int i = 0; i < allMedia.length; i++) {
         final reason = await _preflightImageCheck(allMedia[i], index: i + 1);
         if (reason != null) {
@@ -515,10 +484,10 @@ class AiValidationService {
         }
       }
 
-      // All media passed pre-flight — send to Claude.
+      // All media passed pre-flight — classify with TFLite.
       try {
         final result = await _validateWithImages(
-          data: data, images: allMedia, apiKey: apiKey,
+          data: data, images: allMedia,
         ).timeout(_timeout);
         _health.recordSuccess();
         await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
@@ -536,7 +505,7 @@ class AiValidationService {
           );
         }
         _health.recordFailure();
-        _log('Property AI image validation failed: $e');
+        _log('Property TFLite image validation failed: $e');
         // IMPORTANT: DO NOT fall back to rule-based text check when images were
         // provided.  The rule-based check only looks at keywords in the title/
         // description — it would approve a car photo captioned "house for rent".
@@ -544,7 +513,7 @@ class AiValidationService {
         // can manually approve (persistent error).
         return _hardReject(
           type: 'property', submittedBy: submittedBy,
-          reason: 'Image validation is temporarily unavailable. Please try again in a moment.',
+          reason: 'Image validation encountered an error. Please try again.',
           suggestions: [
             'Wait a few seconds and tap Submit again.',
             'Make sure each photo is under ${AppConstants.maxImageSize ~/ (1024 * 1024)} MB.',
@@ -556,9 +525,7 @@ class AiValidationService {
 
     // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
     return _validateTextOnly(
-      type: 'property', data: data,
-      apiKey: apiKey, submittedBy: submittedBy,
-      prompt: _buildPropertyPrompt(data),
+      type: 'property', data: data, submittedBy: submittedBy,
     );
   }
 
@@ -593,10 +560,10 @@ class AiValidationService {
       'campaign_objective': campaignObjective, 'landing_url': landingUrl,
     };
 
-    final apiKey   = await _getApiKey();
+    await _ensureClassifierReady();
 
     // Build the full media set: image + video thumbnail (if both provided).
-    // Claude analyses every frame we send — more context = better decision.
+    // TFLite classifies every frame we send — more context = better decision.
     List<XFile> allAdMedia = [];
     final adThumbsToClean = <XFile>[];
 
@@ -606,7 +573,7 @@ class AiValidationService {
     // Extract a thumbnail frame from video and add it alongside the image.
     if (video != null) {
       if (_isVideoFile(video)) {
-        _log('Ad video provided — extracting thumbnail frame for Claude');
+        _log('Ad video provided — extracting thumbnail frame for TFLite');
         final thumb = await _extractVideoThumbnail(video);
         if (thumb == null && kIsWeb) {
           _log('Ad video: web platform — skipping video thumbnail');
@@ -633,22 +600,22 @@ class AiValidationService {
 
     final hasMedia = allAdMedia.isNotEmpty;
 
-    _log('validateAd — key=${apiKey.isEmpty ? "MISSING" : "ok"}, '
+    _log('validateAd — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
          'image=${image != null}, video=${video != null}, '
          'total_media=${allAdMedia.length}, healthy=${_health.isHealthy}');
 
     // ── MEDIA PATH ──────────────────────────────────────────────────────────
     if (hasMedia) {
-      // AI unavailable (no key or unhealthy) → rule-based fallback on text fields
-      if (apiKey.isEmpty || !_health.isHealthy) {
-        _log('AI unavailable for media ad — using rule-based fallback on text fields');
+      // TFLite unavailable → rule-based fallback on text fields
+      if (!_classifier.isInitialized || !_health.isHealthy) {
+        _log('TFLite unavailable for media ad — using rule-based fallback on text fields');
         await _deleteTempThumbnails(adThumbsToClean);
         final fallback = _ruleBasedAdCheck(data);
         await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
         return fallback;
       }
 
-      // Pre-flight every media file before calling Claude.
+      // Pre-flight every media file before TFLite classification.
       for (int i = 0; i < allAdMedia.length; i++) {
         final preflightReason = await _preflightImageCheck(allAdMedia[i], index: i + 1);
         if (preflightReason != null) {
@@ -668,13 +635,12 @@ class AiValidationService {
         }
       }
 
-      // All media passed pre-flight — send everything to Claude at once.
+      // All media passed pre-flight — classify with TFLite.
       try {
         final result = await _validateWithImages(
           data: data,
           images: allAdMedia,       // image + video thumbnail together
-          apiKey: apiKey,
-          promptBuilder: (d, count) => _buildAdPromptWithImage(d),
+          isAd: true,
         ).timeout(_timeout);
         _health.recordSuccess();
         await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
@@ -691,7 +657,7 @@ class AiValidationService {
           );
         }
         _health.recordFailure();
-        _log('Ad AI media validation failed: $e — falling back to rule-based on text fields');
+        _log('Ad TFLite media validation failed: $e — falling back to rule-based on text fields');
         // FALLBACK: rule-based check on text fields so the user is not hard-blocked
         try {
           final fallback = _ruleBasedAdCheck(data);
@@ -715,9 +681,7 @@ class AiValidationService {
 
     // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
     return _validateTextOnly(
-      type: 'ad', data: data,
-      apiKey: apiKey, submittedBy: submittedBy,
-      prompt: _buildAdPrompt(data),
+      type: 'ad', data: data, submittedBy: submittedBy,
     );
   }
 
@@ -725,80 +689,96 @@ class AiValidationService {
   // CORE ENGINES
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Classify [images] with MobileNet V3 TFLite and return a [ValidationResult].
+  ///
+  /// [isAd] = true uses the looser ad-moderation rules (only block clearly prohibited
+  /// content); false uses the stricter property rules.
   Future<ValidationResult> _validateWithImages({
     required Map<String, dynamic> data,
     required List<XFile>          images,
-    required String               apiKey,
-    String Function(Map<String, dynamic> d, int count)? promptBuilder,
+    bool                          isAd = false,
   }) async {
-    final picked      = _pickRepresentative(images, _maxImages);
-    final imageBlocks = <Map<String, dynamic>>[];
+    final picked = _pickRepresentative(images, _maxImages);
+    _log('Classifying ${picked.length} image(s) with MobileNet V3 TFLite');
 
-    for (final file in picked) {
-      final b64 = await _compressAndEncode(file);
-      if (b64 != null) {
-        imageBlocks.add({
-          'type':   'image',
-          'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': b64},
-        });
+    int    rejected         = 0;
+    int    realEstate       = 0;
+    int    neutral          = 0;
+    String rejectReason     = '';
+    int    rejectConfidence = 0;
+
+    for (int i = 0; i < picked.length; i++) {
+      final cr = await _classifier.classify(picked[i]);
+      if (cr == null) {
+        _log('Image ${i + 1}: classifier returned null — skipping');
+        continue;
+      }
+      _log('Image ${i + 1}: ${cr.category.name} (${cr.confidence}%) — ${cr.reason}');
+
+      if (cr.isRejected) {
+        // Ads have a higher rejection threshold — only block explicit prohibited content.
+        final threshold = isAd ? 0.55 : 0.30;
+        final topScore  = cr.topPredictions.isNotEmpty
+            ? cr.topPredictions.first.score
+            : 0.0;
+        if (topScore > threshold) {
+          rejected++;
+          if (cr.confidence > rejectConfidence) {
+            rejectConfidence = cr.confidence;
+            rejectReason     = cr.reason;
+          }
+        } else {
+          neutral++;
+        }
+      } else if (cr.isRealEstate) {
+        realEstate++;
+      } else {
+        neutral++;
       }
     }
 
-    _log('Encoded ${imageBlocks.length}/${picked.length} images for Claude');
-    if (imageBlocks.isEmpty) throw Exception('No images could be encoded');
+    _log('Classification summary: rejected=$rejected realEstate=$realEstate neutral=$neutral');
 
-    final builder = promptBuilder ??
-        (d, count) => _buildPropertyPromptWithImages(d, imageCount: count);
-
-    final messages = [
-      {
-        'role':    'user',
-        'content': [...imageBlocks, {'type': 'text', 'text': builder(data, imageBlocks.length)}],
-      }
-    ];
-
-    // All AI calls go through the Edge Function — API key stays server-side.
-    try {
-      final response = await _supabase.functions.invoke(
-        _edgeFn,
-        body: {'max_tokens': 900, 'messages': messages},
+    if (rejected > 0) {
+      return ValidationResult(
+        status:      ValidationStatus.rejected,
+        method:      ValidationMethod.ai,
+        approved:    false,
+        confidence:  rejectConfidence,
+        reason:      rejectReason.isNotEmpty
+            ? rejectReason
+            : isAd
+                ? 'Ad image contains prohibited content.'
+                : 'One or more photos do not appear to show a real estate property.',
+        suggestions: isAd
+            ? ['Use a professional business image — product, logo, property, or service photo.']
+            : [
+                'Upload photos of the property: bedroom, living room, exterior, or land.',
+                'Do not upload vehicles, food, animals, or unrelated items.',
+              ],
       );
-      if (response.status == 429) {
-        final data = response.data as Map<String, dynamic>?;
-        final secs = (data?['retry_after'] as num?)?.toInt() ?? 60;
-        throw Exception('rate_limited:$secs');
-      }
-      if (response.status != 200) {
-        throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
-      }
-      return _parseResponseMap(response.data as Map<String, dynamic>);
-    } on FunctionException catch (e) {
-      _log('Edge Function exception (${e.status}): ${e.reasonPhrase}');
-      throw Exception('Edge Function failed: ${e.status} ${e.reasonPhrase}');
     }
+
+    final confidence = realEstate > 0 ? 85 : 70;
+    return ValidationResult(
+      status:     ValidationStatus.approved,
+      method:     ValidationMethod.ai,
+      approved:   true,
+      confidence: confidence,
+      reason:     isAd
+          ? 'Ad media passed content review.'
+          : 'Photos appear to show a real estate property.',
+    );
   }
 
+  /// Text-only validation using rule-based checks (Layer 1) and manual queue (Layer 2).
+  /// Claude is no longer used for text — on-device TFLite handles images.
   Future<ValidationResult> _validateTextOnly({
     required String               type,
     required Map<String, dynamic> data,
-    required String               prompt,
-    required String               apiKey,
     String?                       submittedBy,
   }) async {
-    // Layer 1: Claude text.
-    if (_health.isHealthy && apiKey.isNotEmpty) {
-      try {
-        final result = await _callClaudeText(prompt, apiKey: apiKey).timeout(_timeout);
-        _health.recordSuccess();
-        await _logValidation(type: type, result: result, submittedBy: submittedBy);
-        return result;
-      } catch (e) {
-        _health.recordFailure();
-        _log('Claude text validation failed: $e — falling to rules');
-      }
-    }
-
-    // Layer 2: Rule-based.
+    // Layer 1: Rule-based keyword scoring.
     try {
       final result = type == 'property'
           ? _ruleBasedPropertyCheck(data)
@@ -809,7 +789,7 @@ class AiValidationService {
       _log('Rule-based check crashed: $e — sending to manual queue');
     }
 
-    // Layer 3: Manual queue.
+    // Layer 2: Manual queue.
     await _addToManualQueue(type: type, data: data, submittedBy: submittedBy);
     const result = ValidationResult(
       status: ValidationStatus.pending, method: ValidationMethod.manual,
@@ -818,131 +798,6 @@ class AiValidationService {
     );
     await _logValidation(type: type, result: result, submittedBy: submittedBy);
     return result;
-  }
-
-  Future<ValidationResult> _callClaudeText(
-      String prompt, {required String apiKey}) async {
-    final messages = [{'role': 'user', 'content': prompt}];
-
-    try {
-      final response = await _supabase.functions.invoke(
-        _edgeFn,
-        body: {'max_tokens': 600, 'messages': messages},
-      );
-      if (response.status == 429) {
-        final data = response.data as Map<String, dynamic>?;
-        final secs = (data?['retry_after'] as num?)?.toInt() ?? 60;
-        throw Exception('rate_limited:$secs');
-      }
-      if (response.status != 200) {
-        throw Exception('Edge Function ${response.status}: ${jsonEncode(response.data)}');
-      }
-      return _parseResponseMap(response.data as Map<String, dynamic>);
-    } on FunctionException catch (e) {
-      _log('Edge Function exception (${e.status}): ${e.reasonPhrase}');
-      throw Exception('Edge Function failed: ${e.status} ${e.reasonPhrase}');
-    }
-  }
-
-  /// Direct Anthropic call — PERMANENTLY DISABLED for security.
-  ///
-  /// The Anthropic API key must NEVER be sent from a client device.
-  /// All AI calls go through the Supabase Edge Function (validate_content)
-  /// which holds the key as a server-side secret.
-  ///
-  /// If this throws, the caller falls back to rule-based validation.
-  /// Deploy the Edge Function so this path is never reached:
-  ///   supabase functions deploy validate_content
-  Future<ValidationResult> _callAnthropicDirect({
-    required List<Map<String, dynamic>> messages,
-    required int                        maxTokens,
-    required String                     apiKey,
-  }) async {
-    _log('Direct API call blocked — deploy validate_content Edge Function');
-    throw Exception(
-      'Edge Function not deployed. '
-      'Run: supabase functions deploy validate_content\n'
-      'Then set: supabase secrets set ANTHROPIC_API_KEY=sk-ant-api03-YOUR-KEY',
-    );
-  }
-
-  /// Parse a response that already came back as a decoded Map
-
-  /// (from _supabase.functions.invoke which auto-decodes JSON).
-  ValidationResult _parseResponseMap(Map<String, dynamic> body) {
-    final content = (body['content'] as List).first as Map<String, dynamic>;
-    final text    = content['text'] as String;
-    final clean   = text.replaceAll(RegExp(r'```json|```'), '').trim();
-
-    Map<String, dynamic> json;
-    try {
-      json = jsonDecode(clean) as Map<String, dynamic>;
-    } on FormatException catch (e) {
-      _log('JSON parse error: $e | raw: $clean');
-      throw Exception('Claude returned invalid JSON');
-    }
-
-    final approved    = json['approved']    as bool?   ?? false;
-    final confidence  = (json['confidence'] as num?)?.toInt() ?? 0;
-    final reason      = json['reason']      as String? ?? '';
-    final category    = json['detected_category'] as String?;
-    final suggestions = (json['suggestions'] as List<dynamic>?)
-            ?.map((e) => e.toString()).toList() ?? [];
-
-    final finalApproved = approved && confidence >= 40;
-
-    return ValidationResult(
-      status:           finalApproved ? ValidationStatus.approved : ValidationStatus.rejected,
-      method:           ValidationMethod.ai,
-      approved:         finalApproved,
-      confidence:       confidence,
-      reason:           finalApproved
-                            ? reason
-                            : reason.isNotEmpty
-                                ? reason
-                                : 'Content does not meet real estate requirements.',
-      suggestions:      suggestions,
-      detectedCategory: category,
-    );
-  }
-
-  ValidationResult _parseResponse(String responseBody) {
-    final body    = jsonDecode(responseBody) as Map<String, dynamic>;
-    final content = (body['content'] as List).first as Map<String, dynamic>;
-    final text    = content['text'] as String;
-    final clean   = text.replaceAll(RegExp(r'```json|```'), '').trim();
-
-    Map<String, dynamic> json;
-    try {
-      json = jsonDecode(clean) as Map<String, dynamic>;
-    } on FormatException catch (e) {
-      _log('JSON parse error: $e | raw: $clean');
-      throw Exception('Claude returned invalid JSON');
-    }
-
-    final approved    = json['approved']    as bool?   ?? false;
-    final confidence  = (json['confidence'] as num?)?.toInt() ?? 0;
-    final reason      = json['reason']      as String? ?? '';
-    final category    = json['detected_category'] as String?;
-    final suggestions = (json['suggestions'] as List<dynamic>?)
-            ?.map((e) => e.toString()).toList() ?? [];
-
-    // Safety gate: approved=true with confidence < 40 is treated as rejected.
-    final finalApproved = approved && confidence >= 40;
-
-    return ValidationResult(
-      status:           finalApproved ? ValidationStatus.approved : ValidationStatus.rejected,
-      method:           ValidationMethod.ai,
-      approved:         finalApproved,
-      confidence:       confidence,
-      reason:           finalApproved
-                            ? reason
-                            : reason.isNotEmpty
-                                ? reason
-                                : 'Content does not meet real estate requirements.',
-      suggestions:      suggestions,
-      detectedCategory: category,
-    );
   }
 
   Future<ValidationResult> _hardReject({
@@ -1036,13 +891,13 @@ class AiValidationService {
     return result;
   }
 
-  // Pre-flight: catches bad images before paying for Claude.
+  // Pre-flight: catches bad images before TFLite classification.
   // Checks file size, and screenshot dimensions for:
   //   - PNG/JPEG portrait phone screenshots
   //   - PNG/JPEG portrait tablet screenshots
   //   - PNG/JPEG landscape screenshots
-  //   - HEIC/HEIF: passed through to Claude (no dimension data available in header)
-  //   - WebP: passed through to Claude
+  //   - HEIC/HEIF: passed through to TFLite classifier (no dimension data available in header)
+  //   - WebP: passed through to TFLite classifier
   // Returns rejection reason string, or null if the image looks OK.
   Future<String?> _preflightImageCheck(XFile file, {int index = 1}) async {
     try {
@@ -1082,15 +937,15 @@ class AiValidationService {
           bytes[2] == 0x46 && bytes[3] == 0x46 &&
           bytes[8] == 0x57 && bytes[9] == 0x45 &&
           bytes[10] == 0x42 && bytes[11] == 0x50) {
-        // WebP — no dimension check, pass to Claude.
-        _log('Photo $index is WebP — sending to Claude');
+        // WebP — no dimension check, pass to TFLite classifier.
+        _log('Photo $index is WebP — sending to TFLite classifier');
         return null;
 
       } else if (bytes.length > 8 &&
           bytes[4] == 0x66 && bytes[5] == 0x74 &&
           bytes[6] == 0x79 && bytes[7] == 0x70) {
-        // HEIC/HEIF (ftyp box) — no dimension check, pass to Claude.
-        _log('Photo $index is HEIC/HEIF — sending to Claude');
+        // HEIC/HEIF (ftyp box) — no dimension check, pass to TFLite classifier.
+        _log('Photo $index is HEIC/HEIF — sending to TFLite classifier');
         return null;
       }
 
@@ -1100,15 +955,15 @@ class AiValidationService {
       // Gallery photos and camera photos on modern phones are often
       // processed to standard dimensions (1080px, 1284px etc.) that
       // are indistinguishable from screenshots by size alone.
-      // Claude handles visual content moderation — it can reliably
+      // TFLite classifier handles visual content moderation — it can reliably
       // tell a property photo from a screenshot by looking at it.
       if (imgWidth > 0 && imgHeight > 0) {
-        _log('Photo $index: ${imgWidth}x${imgHeight}px — passing to Claude');
+        _log('Photo $index: ${imgWidth}x${imgHeight}px — passing to TFLite classifier');
       }
 
       return null; // Passed all checks.
     } catch (e) {
-      _log('Pre-flight error on photo $index: $e — letting Claude decide');
+      _log('Pre-flight error on photo $index: $e — letting TFLite classifier decide');
       return null;
     }
   }
@@ -1117,39 +972,6 @@ class AiValidationService {
       (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
 
   int _readInt16(Uint8List b, int o) => (b[o] << 8) | b[o + 1];
-
-  Future<String?> _compressAndEncode(XFile file) async {
-    try {
-      // On web: resize via HTML canvas so images stay under 6 MB edge fn limit.
-      // On native: compress aggressively so each image is ~40-80 KB.
-      if (kIsWeb) {
-        final bytes = await file.readAsBytes();
-        if (bytes.isEmpty) return null;
-        _log('Web: resizing ${(bytes.length / 1024).toStringAsFixed(1)} KB image for Claude');
-        return await webResizeToBase64(bytes);
-      }
-
-      // Native path — compress with FlutterImageCompress.
-      final compressed = await FlutterImageCompress.compressWithFile(
-        file.path,
-        minWidth:  512,
-        minHeight: 512,
-        quality:   55,
-        format:    CompressFormat.jpeg,
-      );
-      if (compressed == null || compressed.isEmpty) return null;
-      _log('Compressed image: ${(compressed.length / 1024).toStringAsFixed(1)} KB '
-           '→ base64: ${(compressed.length * 4 ~/ 3 / 1024).toStringAsFixed(1)} KB');
-      return base64Encode(compressed);
-    } catch (e) {
-      _log('Compression failed for ${file.name}: $e — trying raw encode');
-      try {
-        return base64Encode(await file.readAsBytes());
-      } catch (_) {
-        return null;
-      }
-    }
-  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // RULE-BASED CHECKS
@@ -1185,7 +1007,7 @@ class AiValidationService {
     // Without this gate, any listing with a price and a long description
     // would pass — making the fallback completely ineffective.
     if (hits.isEmpty) {
-      return ValidationResult(
+      return const ValidationResult(
         status: ValidationStatus.rejected, method: ValidationMethod.rules,
         approved: false, confidence: 80,
         reason: 'Listing does not appear to be about real estate. '
@@ -1277,143 +1099,6 @@ class AiValidationService {
       suggestions: [],
     );
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // PROMPTS
-  // ══════════════════════════════════════════════════════════════════════════
-
-  String _buildPropertyPrompt(Map<String, dynamic> d) => '''
-You are a STRICT content moderator for a real estate listing platform in Tanzania.
-This platform is ONLY for real property (houses, apartments, land, commercial spaces) FOR SALE or FOR RENT.
-
-APPROVE only if the listing is clearly about a physical property for sale or rent.
-
-Valid property types (APPROVE):
-- Residential: house, villa, apartment, flat, studio, bedsitter, room, chumba, nyumba, gesti, hostel
-- Commercial: office, shop, warehouse, clinic, school, church, hotel, lodge, go-down
-- Land: plot, farm, ardhi, shamba, construction site
-- Any physical space a person lives in, works in, or uses as real estate
-
-REJECT if:
-- The listing is selling a vehicle (car, motorcycle, bus, truck, gari) — not a property
-- The listing is selling food, clothing, electronics, or consumer goods — not a property
-- The listing is for a service (cleaning, transport, delivery) — not a property
-- The title and description have NO property-related words at all
-- The listing is clearly a different type of business (restaurant, shop selling goods)
-- Description is gibberish, spam, or repeated random characters
-- Price is clearly implausible (e.g. 1 TZS or 99999999999999)
-
-Listing:
-Title: "${d['title']}"
-Description: "${d['description']}"
-Category: ${d['category']} | Type: ${d['type']}
-Location: "${d['location']}"
-Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
-
-Reply ONLY in this exact JSON format (no markdown, no text outside JSON):
-{"approved":false,"confidence":0,"detected_category":"house|apartment|room|hotel|land|commercial|industrial|vehicle|goods|unrelated","reason":"explain why rejected, or empty string if approved","suggestions":[]}
-
-Replace the values above with your actual assessment. Do NOT return the template unchanged.''';
-
-  String _buildPropertyPromptWithImages(
-      Map<String, dynamic> d, {required int imageCount}) => '''
-You are a STRICT content moderator for a real estate listing platform in Tanzania.
-This platform is ONLY for real property: houses, apartments, land, and commercial spaces FOR SALE or FOR RENT.
-
-You have $imageCount photo(s) and listing text to review.
-
-APPROVE the listing ONLY if BOTH of these are true:
-1. The photo(s) clearly show a real property — a room interior, building exterior, land/plot, construction site, office, shop, warehouse, or any physical space associated with real estate.
-2. The text describes a real property for sale or rent.
-
-REJECT immediately if ANY photo shows:
-- A vehicle (car, motorcycle, truck, bus) as the main subject with NO property visible
-- Food, meals, a restaurant, or a food stall
-- Clothing, fashion items, or a fashion model
-- Electronic devices (phones, laptops, TVs) as the main subject
-- A live animal or livestock as the main subject
-- A selfie or a person posing (no property visible)
-- A screenshot of an app, WhatsApp chat, SMS, social media post, document, or receipt
-- A landscape photo (nature, sky, field) with NO buildings or constructed structures
-- Any product advertisement not related to property
-
-REJECT if the text is clearly selling something other than real property (cars, goods, services, food, etc.).
-
-APPROVE photos that show:
-- Room interiors: bedroom, living room, kitchen, bathroom, hallway, staircase, balcony
-- Building exteriors: facade, gate, fence, compound, garden, rooftop, parking
-- Land: empty plot, farm, construction site, foundation, fenced land
-- Commercial space: office, shop, clinic, warehouse, school, church, hotel, lodge
-- Furniture or fixtures INSIDE a room (proves it is a room photo)
-
-People in the BACKGROUND of a property photo = APPROVE (the property is the subject).
-Dark or blurry property photos = APPROVE.
-Construction sites = APPROVE.
-
-Be strict. If a photo does NOT clearly show property, REJECT.
-
-Listing:
-Title: "${d['title']}"
-Description: "${d['description']}"
-Category: ${d['category']} | Type: ${d['type']}
-Location: "${d['location']}"
-Price: ${d['price']} TZS | Bedrooms: ${d['bedrooms']} | Bathrooms: ${d['bathrooms']} | Area: ${d['area']} sqm
-
-Reply ONLY in this exact JSON format (no markdown, no text outside JSON):
-{"approved":false,"confidence":0,"detected_category":"house|apartment|land|commercial|screenshot|vehicle|food|unrelated","images_ok":false,"text_ok":false,"reason":"explain why rejected, or empty string if approved","suggestions":[]}
-
-Replace the values above with your actual assessment. Do NOT return the template unchanged.''';
-
-  String _buildAdPrompt(Map<String, dynamic> d) => '''
-You are an ad moderator for a real estate platform in Tanzania.
-Advertising is the platform's primary revenue source. DEFAULT is APPROVE.
-
-APPROVE any legitimate business ad including: real estate, property services, home goods,
-retail, food, restaurants, technology, finance, healthcare, education, automotive,
-travel, fashion, entertainment, professional services, and general commerce.
-
-REJECT ONLY these specific categories — nothing else:
-1. Adult content: pornography, escort services, sexual services, explicit material
-2. Fear-based marketing: ads using threats, panic, emergency manipulation to coerce
-3. Political ads: election campaigns, political parties, candidate promotion, referendums
-4. Illegal content: drugs, weapons, scams, piracy, counterfeit goods
-5. Gambling: casinos, betting platforms, lottery schemes
-
-Headline: "${d['headline']}"
-Description: "${d['description']}"
-Call to Action: "${d['call_to_action']}"
-Campaign Objective: ${d['campaign_objective']}
-Landing URL: "${d['landing_url']}"
-
-Reply ONLY in JSON (no markdown):
-{"approved":true,"confidence":85,"detected_category":"real_estate/retail/food/tech/finance/healthcare/other","reason":"","suggestions":[]}''';
-
-  String _buildAdPromptWithImage(Map<String, dynamic> d) => '''
-You are an ad moderator for a real estate platform in Tanzania.
-Advertising is the platform's primary revenue source. DEFAULT is APPROVE.
-
-IMAGE — APPROVE if it shows any legitimate business imagery:
-- Products, food, services, people, logos, offices, retail environments
-- Properties, buildings, interiors, construction
-- Graphics, illustrations, branding, promotional material
-REJECT image ONLY if it is clearly: pornographic/explicit sexual content, a screenshot
-of UI/WhatsApp chat (not a real ad), or violent/threatening imagery.
-
-TEXT — APPROVE for any legitimate business including: food, retail, technology,
-automotive, healthcare, education, finance, fashion, real estate, and general commerce.
-REJECT ONLY if text promotes: adult/sexual services, political campaigns,
-fear-based manipulation ("Act NOW or lose everything!"), illegal activity, or gambling.
-
-If the image shows a property and the text relates to real estate, APPROVE.
-
-Ad Details:
-Headline: "${d['headline']}"
-Description: "${d['description']}"
-Call to Action: ${d['call_to_action']}
-Landing URL: ${d['landing_url']}
-
-Reply ONLY in this exact JSON (no markdown):
-{"approved":true,"confidence":85,"detected_category":"real_estate/home_services/unrelated/screenshot","images_ok":true,"text_ok":true,"reason":"","suggestions":[]}''';
 
   // ══════════════════════════════════════════════════════════════════════════
   // SUPABASE HELPERS
@@ -1621,10 +1306,6 @@ Reply ONLY in this exact JSON (no markdown):
         if (m == 'failed')                   failed++;
       }
 
-      // Fetch the key now so the health dashboard shows accurate status
-      // even if no validation has run yet this session.
-      final liveKey = await _getApiKey();
-
       return {
         'ai_approved':    aiApproved,
         'ai_rejected':    aiRejected,
@@ -1636,8 +1317,8 @@ Reply ONLY in this exact JSON (no markdown):
         'last_hour':      lastHourCount,
         'lost_logs':      _lostLogCount,
         'health':         _health.stats,
-        'api_key_cached': liveKey.isNotEmpty,
-        'key_age_minutes': null, // key is server-side only — no age tracked on client
+        'model_ready':    _classifier.isInitialized,
+        'model':          'mobilenet_v3_tflite',
       };
     } catch (e) {
       _log('getFullStats error: $e');

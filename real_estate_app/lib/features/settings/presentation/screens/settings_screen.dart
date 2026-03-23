@@ -409,8 +409,8 @@ _SettingsTile(
     }
 
     // Block non-TZ users — Selcom (ad funding) is Tanzania-only
-    const _kSelcomCountries = {'TZ'};
-    const _kCountryNames = {
+    const kSelcomCountries = {'TZ'};
+    const kCountryNames = {
       'KE': 'Kenya', 'UG': 'Uganda', 'RW': 'Rwanda',
       'ET': 'Ethiopia', 'BI': 'Burundi', 'MZ': 'Mozambique',
       'ZM': 'Zambia', 'ZW': 'Zimbabwe',
@@ -418,8 +418,8 @@ _SettingsTile(
     final userCountry = user.country;
     if (userCountry != null &&
         userCountry.isNotEmpty &&
-        !_kSelcomCountries.contains(userCountry)) {
-      final countryName = _kCountryNames[userCountry] ?? userCountry;
+        !kSelcomCountries.contains(userCountry)) {
+      final countryName = kCountryNames[userCountry] ?? userCountry;
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(

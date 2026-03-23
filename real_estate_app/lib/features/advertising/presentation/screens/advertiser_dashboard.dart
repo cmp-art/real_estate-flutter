@@ -133,7 +133,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                   Expanded(
                     child: Text(
                       _t('delete_campaign_history'),
-                      style: TextStyle(fontSize: 12),
+                      style: const TextStyle(fontSize: 12),
                     ),
                   ),
                 ],
@@ -452,7 +452,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
                         const SizedBox(width: 4),
                         Text(
                           _t('low_balance'),
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -466,7 +466,7 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
             const SizedBox(height: 16),
             Text(
               _t('account_balance'),
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 14,
                 fontWeight: FontWeight.w500,

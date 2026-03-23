@@ -533,9 +533,9 @@ CREATE TRIGGER app_config_updated_at
 
 -- Seed default rows (safe to re-run — ON CONFLICT DO NOTHING)
 INSERT INTO app_config (key, value, description) VALUES
-    ('claude_api_key', '', 'Claude Haiku API key from console.anthropic.com — set this to enable AI validation'),
-    ('ai_validation_enabled', 'true', 'Master switch: set to false to disable AI and use rules-only fallback'),
-    ('manual_review_notify_email', '', 'Admin email to notify when items enter the manual review queue')
+    ('tflite_model',             'mobilenet_v3_small_100_224', 'On-device image classification model bundled with the app. No API key required.'),
+    ('ai_validation_enabled',    'true',                       'Master switch: set to false to disable on-device TFLite validation and use rule-based fallback only'),
+    ('manual_review_notify_email', '',                         'Admin email to notify when items enter the manual review queue')
 ON CONFLICT (key) DO NOTHING;
 
 -- RLS: authenticated users (app clients) can READ config values
@@ -557,9 +557,9 @@ CREATE POLICY "Service role manages app config"
 GRANT SELECT ON app_config TO authenticated;
 GRANT ALL    ON app_config TO service_role;
 
-COMMENT ON TABLE  app_config             IS 'Runtime admin configuration. Set claude_api_key here to enable AI validation.';
-COMMENT ON COLUMN app_config.key         IS 'Unique config key (e.g. claude_api_key)';
-COMMENT ON COLUMN app_config.value       IS 'Config value. For claude_api_key: paste your sk-ant-api03-... key here.';
+COMMENT ON TABLE  app_config             IS 'Runtime admin configuration. AI image validation runs on-device via MobileNet V3 TFLite — no API key required.';
+COMMENT ON COLUMN app_config.key         IS 'Unique config key (e.g. tflite_model, ai_validation_enabled)';
+COMMENT ON COLUMN app_config.value       IS 'Config value. For tflite_model: name of the bundled TFLite model file (without .tflite extension).';
 COMMENT ON COLUMN app_config.description IS 'Human-readable description of what this setting does';
 
 
@@ -687,7 +687,7 @@ BEGIN
 
     RAISE NOTICE '=== FILE 1: CORE DATABASE SETUP COMPLETE ===';
     RAISE NOTICE '  Conversations: %  Messages: %  RLS policies: %', v_conv, v_msg, v_pol;
-    RAISE NOTICE '  app_config rows: %  (set claude_api_key value to enable AI)', v_cfg;
+    RAISE NOTICE '  app_config rows: %  (AI validation uses on-device MobileNet V3 TFLite — no API key needed)', v_cfg;
     RAISE NOTICE '  Storage buckets (property_images + property_videos): %/2', v_buckets;
     RAISE NOTICE '  Read-receipt RLS policy     : %',
         CASE WHEN v_read_policy_exists

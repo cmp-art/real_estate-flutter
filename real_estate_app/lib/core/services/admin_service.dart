@@ -1177,4 +1177,113 @@ class AdminService {
       return [];
     }
   }
+
+  // ── OWNERSHIP VERIFICATION ───────────────────────────────────────────────────
+  //
+  // Egress strategy:
+  //   • select() always names exact columns — never SELECT *
+  //   • Stats use COUNT(*) HEAD requests — zero row data returned
+  //   • History is lazy-loaded only when the admin expands the section
+  //   • Hard limits cap every list query
+
+  /// Verification attempts for one property — only the columns the UI renders.
+  /// Loaded lazily (admin must tap to expand), max 10 rows.
+  Future<List<Map<String, dynamic>>> getPropertyVerifications(
+      String propertyId) async {
+    try {
+      return await _supabase
+          .from('property_verifications')
+          .select(
+            'method,'
+            'status,'
+            'gps_score,'
+            'photo_score,'
+            'total_score,'
+            'distance_meters,'
+            'id_document_type,'
+            'id_name_extracted,'
+            'hati_name_extracted,'
+            'name_match_pct,'
+            'rejection_reason,'
+            'created_at',
+          )
+          .eq('property_id', propertyId)
+          .order('created_at', ascending: false)
+          .limit(10);                          // cap: last 10 attempts only
+    } catch (e) {
+      debugPrint('Error fetching property verifications: $e');
+      return [];
+    }
+  }
+
+  /// Platform-wide verification statistics.
+  /// All four queries run in parallel; each returns only a count — minimal egress.
+  Future<Map<String, int>> getVerificationStats() async {
+    try {
+      final todayStart = DateTime.now()
+          .toUtc()
+          .copyWith(hour: 0, minute: 0, second: 0, millisecond: 0)
+          .toIso8601String();
+      final weekAgo = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(days: 7))
+          .toIso8601String();
+
+      // Run all four COUNT queries in parallel — single round-trip each, no row data
+      final results = await Future.wait([
+        _supabase
+            .from('properties')
+            .select('id')
+            .eq('is_owner_verified', true)
+            .count(),
+        _supabase
+            .from('property_verifications')
+            .select('id')
+            .gte('created_at', todayStart)
+            .count(),
+        _supabase
+            .from('property_verifications')
+            .select('id')
+            .eq('status', 'rejected')
+            .gte('created_at', todayStart)
+            .count(),
+        _supabase
+            .from('verification_fraud_signals')
+            .select('id')
+            .gte('created_at', weekAgo)
+            .count(),
+      ]);
+
+      return {
+        'verified_properties': results[0].count,
+        'today_attempts':      results[1].count,
+        'today_rejected':      results[2].count,
+        'fraud_signals_7d':    results[3].count,
+      };
+    } catch (e) {
+      debugPrint('Error fetching verification stats: $e');
+      return {
+        'verified_properties': 0,
+        'today_attempts':      0,
+        'today_rejected':      0,
+        'fraud_signals_7d':    0,
+      };
+    }
+  }
+
+  /// Fraud signals for a specific user — only display columns, max 5 rows.
+  Future<List<Map<String, dynamic>>> getUserFraudSignals(
+      String userId) async {
+    try {
+      return await _supabase
+          .from('verification_fraud_signals')
+          .select('signal_type, description, created_at')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false)
+          .limit(5);                           // cap: last 5 signals only
+    } catch (e) {
+      debugPrint('Error fetching fraud signals: $e');
+      return [];
+    }
+  }
 }

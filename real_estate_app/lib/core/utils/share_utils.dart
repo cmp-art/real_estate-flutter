@@ -30,7 +30,7 @@ class ShareUtils {
     final message = '🏠 *$title*\n\n'
         '💰 $price$rentSuffix\n'
         '📍 $location\n'
-        '🛏 $bedrooms beds  🚿 $bathrooms baths  📐 ${area} sqft\n\n'
+        '🛏 $bedrooms beds  🚿 $bathrooms baths  📐 $area sqft\n\n'
         'Check it out on Patamjengo 👇\nhttps://patamjengo.netlify.app';
 
     await _share(context, message: message, subject: title);
@@ -81,7 +81,7 @@ class ShareUtils {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            Icon(Icons.share_outlined,
+            const Icon(Icons.share_outlined,
                 color: ThemeConfig.primaryColor, size: 22),
             const SizedBox(width: 8),
             Text(

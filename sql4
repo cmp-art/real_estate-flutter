@@ -236,7 +236,12 @@ ALTER TABLE properties
     ADD COLUMN IF NOT EXISTS deleted_by_admin UUID,
     ADD COLUMN IF NOT EXISTS deletion_reason  TEXT,
     ADD COLUMN IF NOT EXISTS moderated_by     UUID,
-    ADD COLUMN IF NOT EXISTS moderated_at     TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS moderated_at     TIMESTAMPTZ,
+    -- Ownership verification columns (also added in sql3; IF NOT EXISTS prevents conflicts)
+    ADD COLUMN IF NOT EXISTS is_owner_verified   BOOLEAN     DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS verification_method TEXT
+        CHECK (verification_method IN ('near_owner','far_owner')),
+    ADD COLUMN IF NOT EXISTS verified_at         TIMESTAMPTZ;
 
 -- Widen properties status constraint to include 'deleted'
 ALTER TABLE properties DROP CONSTRAINT IF EXISTS properties_status_check;
@@ -544,6 +549,10 @@ AS
 SELECT p.id, p.owner_id, up.full_name AS owner_name, au.email AS owner_email, up.phone AS owner_phone,
     p.title, p.description, p.property_type, p.price, p.location, p.status,
     p.is_featured, p.is_verified, p.views_count,
+    -- Ownership verification (added in sql3 / Extension D)
+    COALESCE(p.is_owner_verified, FALSE) AS is_owner_verified,
+    p.verification_method,
+    p.verified_at,
     COALESCE(p.images,'{}') AS images, COALESCE(p.videos,'{}') AS videos, COALESCE(p.media_urls,'{}') AS media_urls,
     p.created_at, p.updated_at, p.deleted_at, p.deleted_by_user, p.deleted_by_admin, p.deletion_reason,
     CASE WHEN p.deleted_at IS NOT NULL THEN TRUE ELSE FALSE END AS is_deleted
@@ -556,6 +565,10 @@ AS
 SELECT p.id, p.owner_id, up.full_name AS owner_name, au.email AS owner_email,
     p.title, p.description, p.property_type, p.price, p.location, p.status,
     p.is_featured, p.is_verified, p.views_count,
+    -- Ownership verification (added in sql3 / Extension D)
+    COALESCE(p.is_owner_verified, FALSE) AS is_owner_verified,
+    p.verification_method,
+    p.verified_at,
     COALESCE(p.images,'{}') AS images, COALESCE(p.videos,'{}') AS videos, COALESCE(p.media_urls,'{}') AS media_urls,
     p.created_at, p.updated_at
 FROM properties p

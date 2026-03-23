@@ -210,7 +210,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
           Switch(
             value: _yearlyBilling,
             onChanged: (v) => setState(() => _yearlyBilling = v),
-            activeColor: Colors.green,
+            activeThumbColor: Colors.green,
           ),
           const SizedBox(width: 12),
           Column(

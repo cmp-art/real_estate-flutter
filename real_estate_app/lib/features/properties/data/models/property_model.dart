@@ -24,6 +24,7 @@ class PropertyModel extends PropertyEntity {
     required super.ownerName,
     super.ownerAvatar,
     super.ownerTier = 'free',
+    super.isOwnerVerified = false,
     required super.status,
     super.rentDuration,
     required super.createdAt,
@@ -51,7 +52,8 @@ class PropertyModel extends PropertyEntity {
       ownerAvatar: json['owner_avatar'] as String?,
       // Read the tier rank returned by get_property_tier_rank() and convert
       // back to a human-readable tier name for badge display on cards.
-      ownerTier: _tierRankToName(json['owner_tier_rank'] as int?),
+      ownerTier:       _tierRankToName(json['owner_tier_rank'] as int?),
+      isOwnerVerified: json['is_owner_verified'] as bool? ?? false,
       status: _propertyStatusFromString(json['status'] as String),
       rentDuration: json['rent_duration'] != null
           ? _rentDurationFromString(json['rent_duration'] as String)
@@ -110,7 +112,8 @@ class PropertyModel extends PropertyEntity {
       ownerId: entity.ownerId,
       ownerName: entity.ownerName,
       ownerAvatar: entity.ownerAvatar,
-      ownerTier: entity.ownerTier,
+      ownerTier:       entity.ownerTier,
+      isOwnerVerified: entity.isOwnerVerified,
       status: entity.status,
       rentDuration: entity.rentDuration,
       createdAt: entity.createdAt,

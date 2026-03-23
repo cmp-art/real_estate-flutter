@@ -26,6 +26,9 @@ class PropertyEntity extends Equatable {
   /// Populated from get_property_tier_rank() SQL function via the datasource.
   /// Used to display tier badges on property cards.
   final String ownerTier;
+  /// True when the owner completed ownership verification (near or far method).
+  /// Populated from properties.is_owner_verified via the datasource.
+  final bool isOwnerVerified;
   final PropertyStatus status;
   final RentDuration? rentDuration;
   final DateTime createdAt;
@@ -50,6 +53,7 @@ class PropertyEntity extends Equatable {
     required this.ownerName,
     this.ownerAvatar,
     this.ownerTier = 'free',
+    this.isOwnerVerified = false,
     required this.status,
     this.rentDuration,
     required this.createdAt,
@@ -118,6 +122,7 @@ class PropertyEntity extends Equatable {
         ownerName,
         ownerAvatar,
         ownerTier,
+        isOwnerVerified,
         status,
         rentDuration,
         createdAt,
@@ -143,6 +148,7 @@ class PropertyEntity extends Equatable {
     String? ownerName,
     String? ownerAvatar,
     String? ownerTier,
+    bool? isOwnerVerified,
     PropertyStatus? status,
     RentDuration? rentDuration,
     DateTime? createdAt,
@@ -166,7 +172,8 @@ class PropertyEntity extends Equatable {
       ownerId: ownerId ?? this.ownerId,
       ownerName: ownerName ?? this.ownerName,
       ownerAvatar: ownerAvatar ?? this.ownerAvatar,
-      ownerTier: ownerTier ?? this.ownerTier,
+      ownerTier:       ownerTier       ?? this.ownerTier,
+      isOwnerVerified: isOwnerVerified ?? this.isOwnerVerified,
       status: status ?? this.status,
       rentDuration: rentDuration ?? this.rentDuration,
       createdAt: createdAt ?? this.createdAt,
@@ -194,7 +201,8 @@ class PropertyEntity extends Equatable {
       'owner_id': ownerId,
       'owner_name': ownerName,
       'owner_avatar': ownerAvatar,
-      'owner_tier': ownerTier,
+      'owner_tier':        ownerTier,
+      'is_owner_verified': isOwnerVerified,
       'status': status.name,
       'rent_duration': rentDuration?.name,
       'created_at': createdAt.toIso8601String(),
@@ -228,7 +236,8 @@ class PropertyEntity extends Equatable {
       ownerId: json['owner_id'] as String? ?? '',
       ownerName: json['owner_name'] as String? ?? '',
       ownerAvatar: json['owner_avatar'] as String?,
-      ownerTier: json['owner_tier'] as String? ?? 'free',
+      ownerTier:       json['owner_tier']        as String? ?? 'free',
+      isOwnerVerified: json['is_owner_verified'] as bool?   ?? false,
       status: _parsePropertyStatus(json['status']),
       rentDuration: _parseRentDuration(json['rent_duration']),
       createdAt: _parseDateTime(json['created_at']) ?? DateTime.now(),

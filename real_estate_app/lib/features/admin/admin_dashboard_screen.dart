@@ -878,6 +878,8 @@ class _PropertiesTabState extends ConsumerState<_PropertiesTab> {
                 final deletedByUser = p['deleted_by_user'] as bool? ?? false;
                 final isFeatured = p['is_featured'] as bool? ?? false;
                 final isVerified = p['is_verified'] as bool? ?? false;
+                final isOwnerVerified = p['is_owner_verified'] as bool? ?? false;
+                final verificationMethod = p['verification_method'] as String?;
                 final images = (p['images'] as List?)?.cast<String>() ?? [];
                 final videos = (p['videos'] as List?)?.cast<String>() ?? [];
                 final mediaCount = images.length + videos.length;
@@ -1034,6 +1036,13 @@ class _PropertiesTabState extends ConsumerState<_PropertiesTab> {
                           const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
                         if (isVerified)
                           const Icon(Icons.verified_rounded, color: Colors.blue, size: 16),
+                        if (isOwnerVerified)
+                          Tooltip(
+                            message: 'Owner Verified'
+                                '${verificationMethod != null ? " (${verificationMethod == "near_owner" ? "Near" : "Far"})" : ""}',
+                            child: const Icon(Icons.verified_user_rounded,
+                                color: Colors.green, size: 16),
+                          ),
                         if (isDeleted && deletedByUser)
                           const Tooltip(
                             message: 'Deleted by owner',
@@ -1059,6 +1068,13 @@ class _PropertiesTabState extends ConsumerState<_PropertiesTab> {
                           Text('📷 ${images.length} photos  🎬 ${videos.length} videos',
                               style: TextStyle(fontSize: 11,
                                   color: ThemeConfig.getPrimaryColor(context))),
+                        if (isOwnerVerified)
+                          Text(
+                            '🔐 Owner verified'
+                            '${verificationMethod == "near_owner" ? " · GPS+Photo" : verificationMethod == "far_owner" ? " · ID+Hati" : ""}',
+                            style: const TextStyle(fontSize: 11, color: Colors.green,
+                                fontWeight: FontWeight.w500),
+                          ),
                       ]),
                       trailing: PopupMenuButton<String>(
                         icon: Icon(Icons.more_vert,

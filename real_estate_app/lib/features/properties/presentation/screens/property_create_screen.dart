@@ -30,6 +30,11 @@ import '../../../settings/presentation/providers/app_providers.dart' hide access
 import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../subscriptions/presentation/screens/subscription_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/models/verification_result.dart';
+import '../../../../core/services/ocr_service.dart';
+import '../../../../core/services/photo_similarity_service.dart';
+import '../../../../core/services/verification_service.dart';
+import '../widgets/verification_section_widget.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bilingual strings helper
@@ -333,6 +338,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   final Map<String, Uint8List> _webImageBytes = {};
   bool _isLoading    = false;
   bool _isValidating = false;
+
+  // ── Ownership verification ───────────────────────────────────────────────
+  VerificationResult? _verificationResult;
+  double? _propertyLat;
+  double? _propertyLng;
 
   // bilingual helper — reads current language from provider
   _S get _s {
@@ -655,7 +665,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         AppConstants.maxImagesPerProperty - _selectedImages.length;
     if (remainingSlots <= 0) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text(
               'Maximum ${AppConstants.maxImagesPerProperty} photos allowed'),
           backgroundColor: ThemeConfig.errorColor,
@@ -740,11 +750,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       // Can't read duration — continue
     }
 
-    // ── Size check ────────────────────────────────────────────────────
-    // Web: no compression available, so limit is 50 MB to avoid egress costs.
-    // Native: allow up to 500 MB (compressed to ~10 MB afterwards).
+    // ── Pre-compression size check ────────────────────────────────────
+    // Web: no compression available → hard 50 MB cap.
+    // Native: allow up to 200 MB raw (video_compress will reduce this to ~20–40 MB).
     final fileSize = await picked.length();
-    final maxBytes = kIsWeb ? 50 * 1024 * 1024 : 500 * 1024 * 1024;
+    const maxBytes = kIsWeb ? 50 * 1024 * 1024 : 200 * 1024 * 1024;
     if (fileSize > maxBytes) {
       if (mounted) {
         if (kIsWeb) {
@@ -767,8 +777,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Video is too large (max 500 MB). Please choose a shorter clip.'),
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+              'Video is too large (${(fileSize / 1024 / 1024).toStringAsFixed(0)} MB). '
+              'Please trim it to under 90 seconds.',
+            ),
             backgroundColor: Colors.red,
             behavior: SnackBarBehavior.floating,
           ));
@@ -809,6 +822,33 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         debugPrint('Video compression failed, using original: $e');
       }
       if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    }
+
+    // ── Post-compression size guard ───────────────────────────────────
+    // Prevents uploading a file that is still too large after compression
+    // (e.g. compression failed and fell back to the original raw file).
+    // 80 MB cap keeps egress costs predictable — a 90-sec 720p clip should
+    // normally compress to 20–40 MB; anything above 80 MB is a problem file.
+    if (!kIsWeb) {
+      final compressedSize = await finalVideo.length();
+      const maxUploadBytes = 80 * 1024 * 1024; // 80 MB
+      if (compressedSize > maxUploadBytes) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+              'Video is still ${(compressedSize / 1024 / 1024).toStringAsFixed(0)} MB after compression — '
+              'too large to upload. Please trim it shorter or record at a lower resolution.',
+            ),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+          ));
+        }
+        return;
+      }
+      debugPrint(
+        'Video ready to upload: ${(compressedSize / 1024 / 1024).toStringAsFixed(1)} MB',
+      );
     }
 
     // ── Thumbnail ────────────────────────────────────────────────────
@@ -957,6 +997,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       createdAt: widget.property?.createdAt ?? DateTime.now(),
       updatedAt: DateTime.now(),
       ownerName: '',
+      latitude:  _propertyLat ?? widget.property?.latitude,
+      longitude: _propertyLng ?? widget.property?.longitude,
     );
 
     final result = widget.property == null
@@ -976,6 +1018,20 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         );
       },
       (createdProperty) async {
+        // Attach verification log to the newly created property (non-fatal).
+        if (_verificationResult != null && widget.property == null) {
+          try {
+            final verificationService = VerificationService(
+              photoSimilarityService: PhotoSimilarityService(),
+              ocrService: OcrService(),
+            );
+            await verificationService.attachVerificationToProperty(
+              propertyId: createdProperty.id,
+              result:     _verificationResult!,
+            );
+          } catch (_) {}
+        }
+
         if (_selectedImages.isNotEmpty) {
           final uploadResult = await repository.uploadImages(
             createdProperty.id,
@@ -1018,14 +1074,20 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               await Supabase.instance.client.storage
                   .from('property_videos')
                   .uploadBinary(path, videoBytes,
-                      fileOptions: const FileOptions(cacheControl: '31536000', upsert: false));
-            } else {
-              await Supabase.instance.client.storage
-                  .from('property_videos')
-                  .upload(path, File(video.path),
                       fileOptions: const FileOptions(
                         cacheControl: '31536000',
                         upsert: false,
+                        contentType: 'video/mp4',
+                      ));
+            } else {
+              final mime = ext == 'mov' ? 'video/quicktime' : 'video/mp4';
+              await Supabase.instance.client.storage
+                  .from('property_videos')
+                  .upload(path, File(video.path),
+                      fileOptions: FileOptions(
+                        cacheControl: '31536000',
+                        upsert: false,
+                        contentType: mime,
                       ));
             }
             final videoUrl = Supabase.instance.client.storage
@@ -1181,7 +1243,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             _FieldTip(s.mediaTip),
             if (kIsWeb) ...[
               const SizedBox(height: 4),
-              _FieldTip('On desktop you can also drag & drop photos directly onto this form'),
+              const _FieldTip('On desktop you can also drag & drop photos directly onto this form'),
             ],
             const SizedBox(height: 10),
 
@@ -1622,11 +1684,73 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             _FieldTip(s.statusTip),
             SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),
 
+            // ── Ownership Verification ────────────────────────────────
+            // Only shown when creating a new property (not editing).
+            if (widget.property == null) ...[
+              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
+              const Divider(thickness: 1),
+              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
+              VerificationSectionWidget(
+                listingPhotos: _selectedImages,
+                onVerified:    (result) => setState(() => _verificationResult = result),
+                onLocationCaptured: (lat, lng) => setState(() {
+                  _propertyLat = lat;
+                  _propertyLng = lng;
+                }),
+              ),
+              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
+              // Warn if not yet verified
+              if (_verificationResult == null)
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color:        Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border:       Border.all(color: Colors.amber.shade300),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.amber, size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Complete ownership verification before submitting.',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_verificationResult != null && _verificationResult!.isRejected)
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color:        Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border:       Border.all(color: Colors.red.shade300),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.cancel_outlined, color: Colors.red, size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Verification failed. Please try again before submitting.',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
+            ],
+
             // Submit Button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: (_isLoading || _isValidating)
+                onPressed: (_isLoading || _isValidating ||
+                    (widget.property == null && (_verificationResult == null || _verificationResult!.isRejected)))
                     ? null
                     : () { _handleSubmit(); },
                 style: ElevatedButton.styleFrom(

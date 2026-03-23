@@ -163,6 +163,13 @@ class _AdminPropertyDetailScreenState
           _InfoSection(prop: _prop),
           const SizedBox(height: 20),
 
+          // ── Ownership verification ──
+          _OwnerVerificationSection(
+            prop:      _prop,
+            propertyId: _prop['id'] as String? ?? '',
+          ),
+          const SizedBox(height: 20),
+
           // ── Media gallery ──
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text('Media (${media.length} items)',
@@ -629,6 +636,254 @@ class _InfoSection extends StatelessWidget {
     } catch (_) {
       return s;
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// OWNERSHIP VERIFICATION SECTION
+// ─────────────────────────────────────────────────────────────────────────
+
+class _OwnerVerificationSection extends ConsumerStatefulWidget {
+  final Map<String, dynamic> prop;
+  final String propertyId;
+  const _OwnerVerificationSection({required this.prop, required this.propertyId});
+
+  @override
+  ConsumerState<_OwnerVerificationSection> createState() =>
+      _OwnerVerificationSectionState();
+}
+
+class _OwnerVerificationSectionState
+    extends ConsumerState<_OwnerVerificationSection> {
+  List<Map<String, dynamic>>? _history;
+  bool _loading = false;
+  bool _expanded = false;
+
+  bool   get _isOwnerVerified => widget.prop['is_owner_verified'] as bool? ?? false;
+  String get _method          => widget.prop['verification_method'] as String? ?? '—';
+  String get _verifiedAt      => widget.prop['verified_at']         as String? ?? '';
+
+  Future<void> _loadHistory() async {
+    if (_loading || widget.propertyId.isEmpty) return;
+    setState(() => _loading = true);
+    final svc = ref.read(_adminSvc);
+    final rows = await svc.getPropertyVerifications(widget.propertyId);
+    if (mounted) setState(() { _history = rows; _loading = false; });
+  }
+
+  String _fmtDate(String? s) {
+    if (s == null || s.isEmpty) return '—';
+    try { return DateFormat('MMM d, yyyy  HH:mm').format(DateTime.parse(s)); }
+    catch (_) { return s; }
+  }
+
+  String _methodLabel(String m) {
+    if (m == 'near_owner') return 'Near Owner (GPS + Photo)';
+    if (m == 'far_owner')  return 'Far Owner (ID + Hati OCR)';
+    return m;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final verified = _isOwnerVerified;
+    final badgeColor   = verified ? Colors.green : Colors.grey;
+    final badgeIcon    = verified ? Icons.verified_user_rounded : Icons.gpp_maybe_outlined;
+    final badgeLabel   = verified ? 'Owner Verified' : 'Not Verified';
+
+    return Container(
+      decoration: BoxDecoration(
+        color:        ThemeConfig.getCardColor(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: verified
+              ? Colors.green.withValues(alpha: 0.4)
+              : ThemeConfig.getColor(context,
+                  lightColor: ThemeConfig.lightBorder,
+                  darkColor:  ThemeConfig.darkBorder),
+          width: verified ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header ───────────────────────────────────────────────────────
+          InkWell(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            onTap: () {
+              setState(() => _expanded = !_expanded);
+              if (_expanded && _history == null) _loadHistory();
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(children: [
+                Icon(Icons.security_rounded, size: 18,
+                    color: ThemeConfig.getTextSecondaryColor(context)),
+                const SizedBox(width: 8),
+                Text('Ownership Verification',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: ThemeConfig.getTextPrimaryColor(context))),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color:        badgeColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border:       Border.all(color: badgeColor.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(badgeIcon, size: 13, color: badgeColor),
+                    const SizedBox(width: 4),
+                    Text(badgeLabel, style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.bold,
+                        color: badgeColor)),
+                  ]),
+                ),
+                const SizedBox(width: 6),
+                Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                    color: ThemeConfig.getTextSecondaryColor(context)),
+              ]),
+            ),
+          ),
+
+          if (_expanded) ...[
+            Divider(height: 1,
+                color: ThemeConfig.getColor(context,
+                    lightColor: ThemeConfig.lightBorder,
+                    darkColor:  ThemeConfig.darkBorder)),
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Summary row ─────────────────────────────────────────
+                  if (verified) ...[
+                    _kvRow(context, 'Method',      _methodLabel(_method)),
+                    _kvRow(context, 'Verified at', _fmtDate(_verifiedAt)),
+                    const SizedBox(height: 12),
+                  ] else
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'This property has not been owner-verified yet.',
+                        style: TextStyle(fontSize: 13,
+                            color: ThemeConfig.getTextSecondaryColor(context)),
+                      ),
+                    ),
+
+                  // ── Attempt history ──────────────────────────────────────
+                  Text('Verification Attempts',
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13,
+                          color: ThemeConfig.getTextPrimaryColor(context))),
+                  const SizedBox(height: 8),
+
+                  if (_loading)
+                    const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                  else if (_history == null || _history!.isEmpty)
+                    Text('No attempts recorded.',
+                        style: TextStyle(fontSize: 13,
+                            color: ThemeConfig.getTextSecondaryColor(context)))
+                  else
+                    ..._history!.map((row) => _AttemptTile(row: row, fmtDate: _fmtDate)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _kvRow(BuildContext context, String label, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(children: [
+      SizedBox(width: 90,
+          child: Text(label, style: TextStyle(fontSize: 12,
+              color: ThemeConfig.getTextSecondaryColor(context)))),
+      Expanded(child: Text(value, style: TextStyle(fontSize: 13,
+          fontWeight: FontWeight.w500,
+          color: ThemeConfig.getTextPrimaryColor(context)))),
+    ]),
+  );
+}
+
+class _AttemptTile extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final String Function(String?) fmtDate;
+  const _AttemptTile({required this.row, required this.fmtDate});
+
+  @override
+  Widget build(BuildContext context) {
+    final status   = row['status']  as String? ?? '—';
+    final method   = row['method']  as String? ?? '—';
+    final verified = status == 'verified';
+    final color    = verified ? Colors.green : Colors.red;
+
+    String detail = '';
+    if (method == 'near_owner') {
+      final gps   = row['gps_score']   as int?;
+      final photo = row['photo_score'] as int?;
+      final total = row['total_score'] as int?;
+      final dist  = (row['distance_meters'] as num?)?.toStringAsFixed(0);
+      detail = 'Score: ${total ?? "??"}/100'
+               '${dist != null ? "  •  ${dist}m away" : ""}'
+               '${gps   != null ? "  •  GPS ${gps}/40" : ""}'
+               '${photo != null ? "  •  Photo ${photo}/60" : ""}';
+    } else if (method == 'far_owner') {
+      final pct = (row['name_match_pct'] as num?)?.toStringAsFixed(1);
+      final idN = row['id_name_extracted']   as String?;
+      final htN = row['hati_name_extracted'] as String?;
+      detail = 'Name match: ${pct ?? "?"}%'
+               '${idN  != null && idN.isNotEmpty  ? "\n  ID: $idN"   : ""}'
+               '${htN  != null && htN.isNotEmpty  ? "\n  Hati: $htN" : ""}';
+    }
+
+    final reason = row['rejection_reason'] as String?;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color:        color.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(8),
+        border:       Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(verified ? Icons.verified_user_rounded : Icons.cancel_outlined,
+              size: 15, color: color),
+          const SizedBox(width: 6),
+          Text(verified ? 'Verified ✅' : 'Rejected ❌',
+              style: TextStyle(fontWeight: FontWeight.bold,
+                  fontSize: 13, color: color)),
+          const Spacer(),
+          Text(_methodLabel(method),
+              style: TextStyle(fontSize: 11,
+                  color: ThemeConfig.getTextSecondaryColor(context))),
+          const SizedBox(width: 8),
+          Text(fmtDate(row['created_at'] as String?),
+              style: TextStyle(fontSize: 11,
+                  color: ThemeConfig.getTextSecondaryColor(context))),
+        ]),
+        if (detail.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(detail, style: TextStyle(fontSize: 12,
+              color: ThemeConfig.getTextSecondaryColor(context))),
+        ],
+        if (reason != null && reason.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text('Reason: $reason', style: const TextStyle(
+              fontSize: 12, color: Colors.red)),
+        ],
+      ]),
+    );
+  }
+
+  String _methodLabel(String m) {
+    if (m == 'near_owner') return 'Near Owner';
+    if (m == 'far_owner')  return 'Far Owner';
+    return m;
   }
 }
 

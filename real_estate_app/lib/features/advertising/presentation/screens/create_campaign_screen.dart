@@ -1261,8 +1261,8 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
             }).toList(),
           ),
           if (_selectedTargetCountries.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
               child: Text(
                 '⚠ Please select at least one country.',
                 style: TextStyle(

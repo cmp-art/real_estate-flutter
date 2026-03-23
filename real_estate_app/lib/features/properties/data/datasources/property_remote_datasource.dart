@@ -2,7 +2,6 @@
 // OPTIMIZED FOR EGRESS - Uses property_list_view for list queries
 // FIXED: Added null/empty response handling
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/app_constants.dart';

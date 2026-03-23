@@ -16,7 +16,6 @@ import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../providers/property_providers.dart';
 import '../screens/property_edit_screen.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../../core/widgets/report_bottom_sheet.dart';
 import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/utils/share_utils.dart';
@@ -387,6 +386,31 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                         )
                       : Center(child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor)),
                 ),
+
+                // Verified owner badge — top right
+                if (widget.property.isOwnerVerified == true)
+                  Positioned(
+                    top: 8, right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade700,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.verified, color: Colors.white, size: 11),
+                          SizedBox(width: 3),
+                          Text('VERIFIED',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
 
                 // Status badge — top left
                 Positioned(

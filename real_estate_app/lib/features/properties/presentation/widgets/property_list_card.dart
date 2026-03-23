@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
@@ -274,6 +273,31 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                               size: ResponsiveHelper.getResponsiveIconSize(context),
                               color: iconColor)),
                 ),
+                // Verified badge — top right (only when owner is verified)
+                if (widget.property.isOwnerVerified == true)
+                  Positioned(
+                    top: 8, right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade700,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.verified, color: Colors.white, size: 11),
+                          SizedBox(width: 3),
+                          Text('VERIFIED',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              )),
+                        ],
+                      ),
+                    ),
+                  ),
                 // Status badge — top left
                 Positioned(
                   top: 8, left: 8,

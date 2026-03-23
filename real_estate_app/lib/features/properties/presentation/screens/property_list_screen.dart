@@ -18,7 +18,6 @@ import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/error_widget.dart';
 import '../../../../shared/widgets/empty_state.dart';
-import '../../domain/entities/property_filter_entity.dart';
 import '../providers/property_providers.dart';
 
 import '../widgets/property_ad_card.dart';
@@ -30,7 +29,6 @@ import 'property_filter_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 import '../../../../core/services/cdn_service.dart';
-import '../../../../core/services/admin_service.dart';
 import '../../../admin/admin_dashboard_screen.dart' show adminServiceProvider;
 
 class PropertyListScreen extends ConsumerStatefulWidget {
