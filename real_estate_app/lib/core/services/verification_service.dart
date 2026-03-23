@@ -6,14 +6,17 @@
 // │  METHOD 1 — Near Owner (owner is at / near the property)│
 // │                                                         │
 // │  1. GPS check: distance from device to property.        │
-// │     0–300 m   → +70 pts  (auto-pass; ≥60 on its own)   │
-// │     300–1000 m → +35 pts                                │
-// │     1–2 km    → +15 pts                                 │
-// │     > 2 km    → 0 pts (fail immediately)                │
+// │     0–300 m    → +50 pts                                │
+// │     300–1000 m → +30 pts                                │
+// │     1–2 km     → +15 pts                                │
+// │     > 2 km     → 0 pts (fail immediately)               │
 // │                                                         │
 // │  2. Photo: live camera shot vs listing photos.          │
-// │     Native: 15 base + cosine bonus → 0–30 pts.          │
-// │     Web:    20 pts if photo decodes, else 0.            │
+// │     Native: 25 base + cosine bonus → 0–50 pts.          │
+// │     Web:    25 pts if photo decodes, else 0.            │
+// │                                                         │
+// │  BOTH GPS and Photo must contribute — neither alone     │
+// │  reaches the 60-point threshold (max each = 50).        │
 // │                                                         │
 // │  Total ≥ 60 / 100 → Verified ✅                         │
 // │  Total < 60 / 100 → Rejected ❌                         │
@@ -53,11 +56,12 @@ const int    _kNearOwnerPassThreshold = 60;    // out of 100
 const double _kFarOwnerPassThreshold  = 70.0;  // percent
 const double _kMaxDistanceMeters      = 2000.0; // 2 km GPS tolerance
 
-// GPS score bands (out of 70):
-//   ≤ 300 m   → 70 pts  (auto-passes 60-point threshold on its own)
-//   300–1000 m → 35 pts
-//   1–2 km    → 15 pts
-//   > 2 km    → 0 pts / immediate fail
+// GPS score bands (out of 50):
+//   ≤ 300 m    → 50 pts
+//   300–1000 m → 30 pts
+//   1–2 km     → 15 pts
+//   > 2 km     → 0 pts / immediate fail
+// Photo score (out of 50): neither alone meets the 60-pt threshold.
 
 class VerificationService {
   final PhotoSimilarityService _photoSim;
@@ -98,7 +102,7 @@ class VerificationService {
     final distanceM     = gpsResult.$2;
     final gpsFailReason = gpsResult.$3;
 
-    _vlog('GPS: ${distanceM.toStringAsFixed(0)} m → score $gpsScore/70');
+    _vlog('GPS: ${distanceM.toStringAsFixed(0)} m → score $gpsScore/50');
 
     if (gpsFailReason != null) {
       // > 2 km → immediate fail
@@ -118,7 +122,7 @@ class VerificationService {
       livePhoto:    livePhoto,
       listingPhotos: listingPhotos,
     );
-    _vlog('Photo score: $photoScore/30');
+    _vlog('Photo score: $photoScore/50');
 
     final totalScore = gpsScore + photoScore;
     final passed     = totalScore >= _kNearOwnerPassThreshold;
@@ -133,8 +137,8 @@ class VerificationService {
       rejectionReason: passed
           ? null
           : 'Score $totalScore/100 is below the required 60. '
-            'GPS: $gpsScore/70, Photo: $photoScore/30. '
-            'Tip: being within 300 m of the property (GPS ≥ 70) alone is enough to pass.',
+            'GPS: $gpsScore/50, Photo: $photoScore/50. '
+            'Both location and a valid photo of the property are required.',
     );
 
     await _log(result, propertyId: null);
@@ -309,9 +313,9 @@ class VerificationService {
         );
       }
 
-      final score = dist <= 300  ? 70   // ≤300 m → auto-pass (70 ≥ 60 threshold)
-                  : dist <= 1000 ? 35   // 300–1000 m → 35 pts
-                  :                15;  // 1–2 km → 15 pts
+      final score = dist <= 300  ? 50   // ≤300 m  → 50 pts (needs photo to reach 60)
+                  : dist <= 1000 ? 30   // 300–1000 m → 30 pts
+                  :                15;  // 1–2 km  → 15 pts
 
       return (score, dist, null);
     } catch (e) {

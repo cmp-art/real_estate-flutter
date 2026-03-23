@@ -5,15 +5,15 @@
 // MobileNet V3 TFLite.  NOT compiled on web.
 // Imported only via the conditional export in photo_similarity_service.dart.
 //
-// Score (0–30):
-//   15 pts base  — photo was uploaded and the model processed it successfully.
-//   +15 pts bonus — cosine similarity of feature vectors > 0.1 (best match).
+// Score (0–50):
+//   25 pts base  — photo was uploaded and the model processed it successfully.
+//   +25 pts bonus — cosine similarity of feature vectors (best match).
 //
 // NOTE: MobileNet V3 softmax vectors are sparse (one class dominates), so
 // cosine similarity is often near-zero even for visually similar scenes.
-// The 15-pt base score ensures that users who upload a real photo at the
-// property are not penalised by this limitation.  GPS scoring (0–70) is the
-// primary signal; photo is a secondary bonus.
+// The 25-pt base score ensures that users who upload a real photo are not
+// penalised by this limitation.  GPS (0–50) + Photo (0–50), threshold 60/100,
+// so BOTH signals are required — neither alone reaches the threshold.
 
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -72,8 +72,8 @@ class PhotoSimilarityService {
       return 0;
     }
 
-    // Base 15 pts: photo was uploaded and the model extracted a vector.
-    const int baseScore = 15;
+    // Base 25 pts: photo was uploaded and the model extracted a vector.
+    const int baseScore = 25;
 
     double bestSimilarity = 0.0;
     for (final listingPhoto in listingPhotos) {
@@ -84,12 +84,12 @@ class PhotoSimilarityService {
       if (sim > bestSimilarity) bestSimilarity = sim;
     }
 
-    // Bonus 0–15 pts based on cosine similarity.
+    // Bonus 0–25 pts based on cosine similarity.
     // MobileNet softmax vectors are sparse so similarity is often near-zero;
-    // any score > 0.1 is considered a meaningful match.
-    final bonusScore = (bestSimilarity * 15).clamp(0, 15).round();
+    // even a small bonus rewards visually similar content.
+    final bonusScore = (bestSimilarity * 25).clamp(0, 25).round();
     final score      = baseScore + bonusScore;
-    _plog('Best similarity: ${(bestSimilarity * 100).toStringAsFixed(1)}% → bonus=$bonusScore → photo score = $score/30');
+    _plog('Best similarity: ${(bestSimilarity * 100).toStringAsFixed(1)}% → bonus=$bonusScore → photo score = $score/50');
     return score;
   }
 
