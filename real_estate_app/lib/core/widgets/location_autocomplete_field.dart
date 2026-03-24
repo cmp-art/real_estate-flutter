@@ -19,9 +19,17 @@ class LocationAutocompleteField extends StatefulWidget {
   final String? Function(String?)? validator;
   final void Function(String name, String displayName) onSelected;
 
-  /// Called with the lat/lng of the selected place (from Photon geometry or GPS).
-  /// Only fired when coordinates are available.
+  /// Called with the lat/lng of the selected place (from Photon dropdown only).
+  /// Never fired when the GPS auto-detect button is used — GPS fills the text
+  /// field and triggers a Photon search; the user must select a suggestion to
+  /// confirm coordinates.  This prevents the property coordinates from being
+  /// set to the user's current device position, which would make GPS
+  /// verification trivially pass (distance ≈ 0 m).
   final void Function(double lat, double lng)? onCoordinatesSelected;
+
+  /// Called whenever the user manually edits the text field, signalling that
+  /// any previously confirmed coordinates are now stale and should be cleared.
+  final VoidCallback? onCoordinatesCleared;
 
   /// true  → tag input: clears the field after the user selects a suggestion
   /// false → regular input: fills the field with the selected displayName
@@ -35,6 +43,7 @@ class LocationAutocompleteField extends StatefulWidget {
     this.validator,
     required this.onSelected,
     this.onCoordinatesSelected,
+    this.onCoordinatesCleared,
     this.clearOnSelect = false,
   });
 
@@ -73,6 +82,8 @@ class _LocationAutocompleteFieldState
 
   void _onChanged(String value) {
     _debounce?.cancel();
+    // Any manual keystroke invalidates previously confirmed coordinates.
+    widget.onCoordinatesCleared?.call();
     if (value.trim().length < 3) {
       if (_suggestions.isNotEmpty || _isSearching) {
         setState(() { _suggestions = []; _isSearching = false; });
@@ -111,16 +122,30 @@ class _LocationAutocompleteFieldState
     final result = await detectCurrentLocationFull();
     if (!mounted) return;
     setState(() => _isDetectingGps = false);
+
     if (result.name != null) {
       if (!widget.clearOnSelect) {
         _ctrl.text = result.name!;
         _ctrl.selection =
             TextSelection.collapsed(offset: _ctrl.text.length);
       }
+      // Notify the parent of the text selection but NOT the coordinates.
+      // Coordinates must come from a Photon dropdown selection so they
+      // represent the actual property location, not the user's device position.
+      // Passing device GPS coords here would let any user pass near-owner
+      // verification at 0 m distance (same device measures both sides).
+      widget.onCoordinatesCleared?.call();
       widget.onSelected(result.name!, result.name!);
-    }
-    if (result.latitude != null && result.longitude != null) {
-      widget.onCoordinatesSelected?.call(result.latitude!, result.longitude!);
+
+      // Trigger a Photon search for the detected address name so the dropdown
+      // appears and the user can select a result to confirm coordinates.
+      if (result.name!.trim().length >= 3) {
+        setState(() => _isSearching = true);
+        final suggestions = await photonSearch(result.name!.trim());
+        if (mounted) {
+          setState(() { _suggestions = suggestions; _isSearching = false; });
+        }
+      }
     }
   }
 
