@@ -1,312 +1,118 @@
+// features/properties/presentation/screens/property_create_screen.dart
+// Simplified property creation/editing form.
+// Photos only (no video), no NIDA verification, no AI validation.
+// Works on Android, iOS, Web, and PWA.
+
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:image_picker/image_picker.dart';
-import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:video_compress/video_compress.dart';
-import '../../../../core/utils/video_web_utils.dart'
-    if (dart.library.io) '../../../../core/utils/video_web_utils_stub.dart';
-import '../../../../core/utils/web_drop_zone.dart'
-    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:patamjengo_app/presentation/providers/auth_provider.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
-import '../../../../core/utils/image_helper.dart';
-import '../../../../core/utils/currency_helper.dart';
-import '../../../../core/widgets/location_autocomplete_field.dart';
-
-import '../../../settings/presentation/screens/app_translations.dart';
-import '../providers/ai_providers.dart';
-import '../providers/property_providers.dart';
-import '../../domain/entities/property_entity.dart';
-import '../../../settings/presentation/providers/app_providers.dart' hide accessControlProvider;
-
 import '../../../../core/middleware/feature_gate_middleware.dart';
-import '../../../subscriptions/presentation/screens/subscription_screen.dart';
+import '../../../../core/utils/currency_helper.dart';
+import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/responsive_helper.dart';
-import '../../../../core/models/verification_result.dart';
-import '../../../../core/services/verification_service.dart';
-import '../widgets/verification_section_widget.dart';
+import '../../../../core/utils/web_drop_zone.dart'
+    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
+import '../../../../core/widgets/location_autocomplete_field.dart';
+import '../../../../presentation/providers/auth_provider.dart';
+import '../../../settings/presentation/providers/app_providers.dart'
+    hide accessControlProvider;
+import '../../../subscriptions/presentation/screens/subscription_screen.dart';
+import '../../domain/entities/property_entity.dart';
+import '../providers/property_providers.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bilingual strings helper
+// Bilingual strings
 // ─────────────────────────────────────────────────────────────────────────────
 class _S {
   final bool sw;
   const _S(this.sw);
   String pick(String en, String sw_) => sw ? sw_ : en;
 
-  String get ok       => pick('OK', 'Sawa');
-  String get tryAgain => pick('Edit & Retry', 'Hariri na Jaribu Tena');
-  String get saving   => pick('Saving...', 'Inahifadhi...');
-  String get checking => pick('Checking content...', 'Inakagua maudhui...');
-  String get fixErrors => pick(
-    'Please fix the highlighted errors before submitting.',
-    'Tafadhali rekebisha makosa yaliyoonyeshwa kabla ya kutuma.',
+  String get addProperty     => pick('Add Property', 'Ongeza Mali');
+  String get editProperty    => pick('Edit Property', 'Hariri Mali');
+  String get photos          => pick('Photos', 'Picha');
+  String get addPhotos       => pick('Add Photos', 'Ongeza Picha');
+  String get addMore         => pick('Add more', 'Ongeza zaidi');
+  String get photosTip       => pick(
+    'Add at least 1 photo. Up to ${AppConstants.maxImagesPerProperty} photos allowed.',
+    'Ongeza picha angalau 1. Picha hadi ${AppConstants.maxImagesPerProperty} zinaruhusiwa.',
+  );
+  String get webDragDrop     => pick(
+    'You can also drag & drop photos on desktop.',
+    'Unaweza pia kuburuta picha kwenye kompyuta.',
   );
 
-  // Instructions
-  String get instructTitle => pick('📋 How to Create a Great Listing', '📋 Jinsi ya Kutengeneza Tangazo Nzuri');
-  List<String> get instructions => sw ? [
-    '📸 Piga picha angalau 3 zenye mwanga mzuri na wazi',
-    '🏠 Jina liwe wazi: aina ya mali + vyumba + eneo (mf. Nyumba Vyumba 3 – Masaki)',
-    '📝 Eleza hali ya nyumba, vifaa maalum, usalama na jirani',
-    '💰 Weka bei ya soko — bei ya juu sana inapunguza maswali',
-    '📍 Taja mtaa, wilaya na mji kwa usahihi (mf. Mikocheni B, Kinondoni)',
-    '🏡 Nyumba na ardhi TU — bidhaa zingine zitakataliwa kiotomatiki',
-  ] : [
-    '📸 Add at least 3 clear, well-lit photos',
-    '🏠 Write a specific title: type + rooms + area (e.g. 3BR House – Masaki)',
-    '📝 Describe condition, special features, security and neighbourhood',
-    '💰 Set a realistic market price — overpricing drastically reduces inquiries',
-    '📍 Be precise with location — include neighbourhood, district & city',
-    '🏡 Real estate ONLY — other products are automatically rejected',
-  ];
+  String get saleLabel       => pick('For Sale', 'Inauzwa');
+  String get rentLabel       => pick('For Rent', 'Inapangishwa');
+  String get monthly         => pick('Monthly', 'Kwa Mwezi');
+  String get yearly          => pick('Yearly', 'Kwa Mwaka');
 
-  // Field tips
-  String get titleTip => pick(
-    'Be specific: type + bedrooms + location. Example: "2-Bed Apartment – Kariakoo, Dar"',
-    'Kuwa wazi: aina + vyumba + eneo. Mfano: "Nyumba Vyumba 2 – Kariakoo, Dar"',
-  );
-  String get descTip => pick(
-    'Include: floor level, parking, security, water/power reliability, nearby schools, road distance',
-    'Eleza: ghorofa, maegesho, usalama, maji/umeme, shule za karibu, umbali wa barabara',
-  );
-  String get priceTip => pick(
-    'Check similar listings nearby — fair pricing gets 3× more inquiries',
-    'Angalia bei za nyumba zinazofanana — bei ya haki inapata maswali mara 3 zaidi',
-  );
-  String get locationTip => pick(
-    'More detail = more visibility. Example: "Sinza Mori, Kinondoni, Dar es Salaam"',
-    'Maelezo zaidi = uonekano zaidi. Mfano: "Sinza Mori, Kinondoni, Dar es Salaam"',
-  );
-  String get roomsTip => pick(
-    'Enter the exact number. Use 0 for studio or open-plan spaces',
-    'Ingiza idadi halisi. Tumia 0 kwa studio au nafasi wazi',
-  );
-  String get areaTip => pick(
-    'Total floor or plot area in square metres (m²). 1 acre ≈ 4,047 m²',
-    'Ukubwa wa sakafu au kiwanja kwa mita za mraba (m²). Ekari 1 ≈ 4,047 m²',
-  );
-  String get statusTip => pick(
-    'Set to "Available" so buyers can find your listing immediately',
-    'Weka "Inapatikana" ili wanunuzi wapate tangazo lako mara moja',
-  );
-  String get noRoomsTip => pick(
-    'Bedroom and bathroom counts are not needed for land or commercial properties',
-    'Idadi ya vyumba haihitajiki kwa ardhi au mali ya biashara',
-  );
-  String get imagesTip => pick(
-    'Listings with 5+ photos get 70% more views. Add photos and/or a video. Min 1 required.',
-    'Matangazo yenye picha 5+ yanapata maoni 70% zaidi. Ongeza picha na/au video. Angalau 1 inahitajika.',
-  );
-  String get addMediaBtn   => pick('Add Photo / Video', 'Ongeza Picha / Video');
-  String get addMoreMedia  => pick('Add more', 'Ongeza zaidi');
-  String get mediaSectionTitle => pick('Photos & Video', 'Picha & Video');
-  String get mediaTip      => pick(
-    'At least 1 photo required. Video optional — photos must come first.',
-    'Picha angalau 1 inahitajika. Video ni ya hiari — picha lazima ziwe za kwanza.',
-  );
-  String get videoLabel    => pick('VIDEO', 'VIDEO');
-  String get mediaRequired => pick(
-    'At least one photo is required — you cannot post a video-only listing',
-    'Picha angalau moja inahitajika — huwezi kutuma tangazo lenye video peke yake',
-  );
-  String get videoTooBig   => pick('Video must be under 50 MB', 'Video lazima iwe chini ya MB 50');
-  String get videoFail     => pick(
-    'Property saved! Video could not be uploaded — you can add it later.',
-    'Mali imehifadhiwa! Video haikupakiwa — unaweza kuiongeza baadaye.',
-  );
-  String get photoOption   => pick('Photo', 'Picha');
-  String get videoOption   => pick('Video', 'Video');
+  String get titleLabel      => pick('Title', 'Jina la Mali');
+  String get titleHint       => pick('e.g. 3-Bed House – Masaki, Dar', 'mf. Nyumba Vyumba 3 – Masaki, Dar');
+  String get titleRequired   => pick('Title is required', 'Jina linahitajika');
+  String get titleTooShort   => pick('Title too short (min 5 characters)', 'Jina ni fupi (angalau herufi 5)');
 
-  // Field errors
-  String get titleRequired   => pick('Title is required', 'Jina la nyumba linahitajika');
-  String get titleTooShort   => pick('Title too short — add more detail (min 5 characters)', 'Jina ni fupi — ongeza maelezo (angalau herufi 5)');
-  String get descRequired    => pick('Description is required', 'Maelezo yanahitajika');
-  String get descTooShort    => pick('Too short — use at least 10 words to describe the property', 'Mfupi mno — tumia angalau maneno 10 kuelezea mali');
+  String get categoryLabel   => pick('Category', 'Aina ya Mali');
+  String get priceLabel      => pick('Price', 'Bei');
+  String get priceHint       => pick('e.g. 500000', 'mf. 500000');
   String get priceRequired   => pick('Price is required', 'Bei inahitajika');
-  String get priceInvalid    => pick('Enter a valid number (digits only, e.g. 500000)', 'Ingiza nambari sahihi (nambari tu, mf. 500000)');
-  String get locationReq     => pick('Location is required — include neighbourhood, district and city', 'Eneo linahitajika — weka mtaa, wilaya na mji');
-  String get bedroomsReq     => pick('Number of bedrooms is required', 'Idadi ya vyumba vya kulala inahitajika');
-  String get bedroomsInvalid => pick('Enter a whole number (e.g. 2)', 'Ingiza nambari nzima (mf. 2)');
-  String get bathroomsReq    => pick('Number of bathrooms is required', 'Idadi ya vyumba vya kuogea inahitajika');
-  String get bathroomsInvalid=> pick('Enter a whole number (e.g. 1)', 'Ingiza nambari nzima (mf. 1)');
-  String get areaRequired    => pick('Area size is required', 'Ukubwa wa eneo unahitajika');
-  String get areaInvalid     => pick('Enter a valid area in m² (e.g. 120)', 'Ingiza ukubwa sahihi kwa m² (mf. 120)');
-  // imageRequired kept as alias for backward compat
-  String get imageRequired => mediaRequired;
+  String get priceInvalid    => pick('Enter a valid number', 'Ingiza nambari sahihi');
+  String get rentDurationLabel => pick('Rent period', 'Kipindi cha pango');
 
-  // AI messages
-  String get aiRejectedTitle  => pick('⛔ Listing Not Allowed', '⛔ Tangazo Halijakubaliwa');
-  String get aiRejectedIntro  => pick('Your listing was rejected because:', 'Tangazo lako lilikataliwa kwa sababu:');
-  String get aiSuggestions    => pick('💡 How to fix it:', '💡 Jinsi ya kurekebisha:');
-  String get aiRejectedFooter => pick(
-    'This platform is for real estate ONLY — houses, apartments, land and offices. Other goods or services are always rejected.',
-    'Jukwaa hili ni kwa mali isiyohamishika TU — nyumba, vyumba, ardhi na ofisi. Bidhaa au huduma zingine zitakataliwa daima.',
-  );
-  String get aiPendingTitle   => pick('🕐 Sent for Review', '🕐 Imetumwa kwa Ukaguzi');
-  String get aiPendingMsg     => pick(
-    'Your listing could not be auto-approved and has been sent to our moderation team. You will be notified within 24 hours.',
-    'Tangazo lako halikuweza kukubaliwa kiotomatiki na limetumwa kwa timu yetu ya ukaguzi. Utaarifiwa ndani ya masaa 24.',
+  String get locationLabel   => pick('Location', 'Eneo');
+  String get locationHint    => pick('Neighbourhood, district, city', 'Mtaa, wilaya, mji');
+  String get locationRequired => pick('Location is required', 'Eneo linahitajika');
+
+  String get bedroomsLabel   => pick('Bedrooms', 'Vyumba vya Kulala');
+  String get bathroomsLabel  => pick('Bathrooms', 'Vyumba vya Kuoga');
+  String get roomsRequired   => pick('Required', 'Inahitajika');
+  String get roomsInvalid    => pick('Whole number', 'Nambari nzima');
+  String get noRoomsInfo     => pick(
+    'Bedroom and bathroom counts are not needed for land or commercial properties.',
+    'Idadi ya vyumba haihitajiki kwa ardhi au mali ya biashara.',
   );
 
-  // Success
-  String get createdOk => pick('Listing submitted successfully! 🎉', 'Tangazo limetumwa! 🎉');
-  String get updatedOk => pick('Listing updated successfully!', 'Tangazo limesasishwa!');
-  String get imageFail => pick('Photos could not be uploaded — please try again', 'Picha hazikupakiwa — tafadhali jaribu tena');
+  String get areaLabel       => pick('Area (m²)', 'Ukubwa (m²)');
+  String get areaHint        => pick('e.g. 120', 'mf. 120');
+  String get areaRequired    => pick('Area is required', 'Ukubwa unahitajika');
+  String get areaInvalid     => pick('Enter a valid area in m²', 'Ingiza ukubwa sahihi kwa m²');
+  String get areaTip         => pick('1 acre ≈ 4,047 m²', 'Ekari 1 ≈ 4,047 m²');
+
+  String get descLabel       => pick('Description', 'Maelezo');
+  String get descHint        => pick(
+    'Describe condition, floor, parking, security, water/power, nearby amenities…',
+    'Eleza hali, ghorofa, maegesho, usalama, maji/umeme, huduma za karibu…',
+  );
+  String get descRequired    => pick('Description is required', 'Maelezo yanahitajika');
+  String get descTooShort    => pick('Too short — use at least 10 words', 'Fupi mno — tumia angalau maneno 10');
+
+  String get photoRequired   => pick('At least one photo is required', 'Picha angalau moja inahitajika');
+  String get fixErrors       => pick('Please fix the highlighted errors', 'Tafadhali rekebisha makosa yaliyoonyeshwa');
+  String get saving          => pick('Saving…', 'Inahifadhi…');
+  String get submit          => pick('Post Property', 'Tuma Mali');
+  String get update          => pick('Update Property', 'Sasisha Mali');
+  String get createdOk       => pick('Listing posted successfully!', 'Tangazo limetumwa!');
+  String get updatedOk       => pick('Listing updated successfully!', 'Tangazo limesasishwa!');
+  String get photoFail       => pick('Photos could not be uploaded — please try again', 'Picha hazikupakiwa — jaribu tena');
+  String get upgradeRequired => pick('Upgrade Required', 'Unahitajika Kupandisha Kiwango');
+  String get cancel          => pick('Cancel', 'Ghairi');
+  String get upgradePro      => pick('Upgrade to Pro', 'Panda kwa Pro');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reusable UI helpers
+// Screen
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Collapsible banner shown at top of the form with step-by-step instructions
-class _InstructionsBanner extends StatefulWidget {
-  final String title;
-  final List<String> items;
-  const _InstructionsBanner({required this.title, required this.items});
-
-  @override
-  State<_InstructionsBanner> createState() => _InstructionsBannerState();
-}
-
-class _InstructionsBannerState extends State<_InstructionsBanner> {
-  bool _expanded = true;
-
-  @override
-  Widget build(BuildContext context) {
-    final primary = ThemeConfig.getPrimaryColor(context);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      decoration: BoxDecoration(
-        color: primary.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: primary.withOpacity(0.2)),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-              child: Row(
-                children: [
-                  Icon(Icons.lightbulb_outline_rounded, color: primary, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                  SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-                  Expanded(
-                    child: Text(widget.title,
-                        style: TextStyle(
-                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
-                            fontWeight: FontWeight.w700,
-                            color: primary)),
-                  ),
-                  Icon(_expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                      color: primary, size: 20),
-                ],
-              ),
-            ),
-          ),
-          if (_expanded) ...[
-            const Divider(height: 1, indent: 14, endIndent: 14),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-              child: Column(
-                children: widget.items.map((item) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(item,
-                            style: TextStyle(
-                                fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
-                                height: 1.45,
-                                color: ThemeConfig.getTextPrimaryColor(context))),
-                      ),
-                    ],
-                  ),
-                )).toList(),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Small tip row shown below a field
-class _FieldTip extends StatelessWidget {
-  final String text;
-  const _FieldTip(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 5, left: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.info_outline_rounded,
-              size: 12, color: ThemeConfig.getTextSecondaryColor(context)),
-          const SizedBox(width: 5),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11),
-                    height: 1.4,
-                    color: ThemeConfig.getTextSecondaryColor(context))),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Highlighted info box (blue)
-class _InfoBox extends StatelessWidget {
-  final String text;
-  const _InfoBox(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: ThemeConfig.infoColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
-        border: Border.all(color: ThemeConfig.infoColor.withOpacity(0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.info_outline_rounded,
-              color: ThemeConfig.infoColor, size: 16),
-          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
-                    height: 1.4,
-                    color: ThemeConfig.getTextSecondaryColor(context))),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class PropertyCreateScreen extends ConsumerStatefulWidget {
   final PropertyEntity? property;
-
   const PropertyCreateScreen({super.key, this.property});
 
   @override
@@ -315,1471 +121,881 @@ class PropertyCreateScreen extends ConsumerStatefulWidget {
 }
 
 class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _titleController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _priceController = TextEditingController();
-  final _locationController = TextEditingController();
-  final _bedroomsController = TextEditingController();
-  final _bathroomsController = TextEditingController();
-  final _areaController = TextEditingController();
+  final _formKey        = GlobalKey<FormState>();
+  final _titleCtrl      = TextEditingController();
+  final _priceCtrl      = TextEditingController();
+  final _locationCtrl   = TextEditingController();
+  final _bedroomsCtrl   = TextEditingController();
+  final _bathroomsCtrl  = TextEditingController();
+  final _areaCtrl       = TextEditingController();
+  final _descCtrl       = TextEditingController();
 
-  PropertyType _selectedType = PropertyType.sale;
-  PropertyCategory _selectedCategory = PropertyCategory.house;
-  PropertyStatus _selectedStatus = PropertyStatus.available;
-  RentDuration _selectedRentDuration = RentDuration.monthly;
-  List<XFile> _selectedImages = [];
-  final List<XFile> _selectedVideos  = [];
-  final Map<String, dynamic> _videoThumbnails = {};
-  // Web-only: cache decoded bytes so Image.memory() works in CanvasKit renderer.
-  // (Image.network with blob:// URLs fails silently in CanvasKit/Impeller.)
-  final Map<String, Uint8List> _webImageBytes = {};
-  bool _isLoading    = false;
-  bool _isValidating = false;
+  PropertyType     _type     = PropertyType.sale;
+  PropertyCategory _category = PropertyCategory.house;
+  RentDuration     _rentDur  = RentDuration.monthly;
 
-  // ── Ownership verification ───────────────────────────────────────────────
-  VerificationResult? _verificationResult;
-  double? _propertyLat;
-  double? _propertyLng;
+  List<XFile>           _images        = [];
+  final Map<String, Uint8List> _webBytes = {};  // web CanvasKit cache
 
-  // bilingual helper — reads current language from provider
-  _S get _s {
-    try {
-      final lang = ref.read(languageProvider).languageCode;
-      return _S(lang == 'sw');
-    } catch (_) { return const _S(false); }
-  }
+  double? _lat;
+  double? _lng;
+
+  bool _isLoading = false;
 
   final ImageHelper _imageHelper = ImageHelper();
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  _S get _s {
+    try {
+      return _S(ref.read(languageProvider).languageCode == 'sw');
+    } catch (_) {
+      return const _S(false);
+    }
+  }
+
+  bool get _needsRooms =>
+      _category != PropertyCategory.land &&
+      _category != PropertyCategory.commercial;
+
+  bool get _isEditing => widget.property != null;
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _checkCreateQuota();
-    if (widget.property != null) {
-      _loadPropertyData();
+    if (_isEditing) _prefill(widget.property!);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkQuota());
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    _priceCtrl.dispose();
+    _locationCtrl.dispose();
+    _bedroomsCtrl.dispose();
+    _bathroomsCtrl.dispose();
+    _areaCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
+  void _prefill(PropertyEntity p) {
+    _titleCtrl.text     = p.title;
+    _priceCtrl.text     = p.price.toStringAsFixed(0);
+    _locationCtrl.text  = p.location;
+    _bedroomsCtrl.text  = p.bedrooms.toString();
+    _bathroomsCtrl.text = p.bathrooms.toString();
+    _areaCtrl.text      = p.area.toStringAsFixed(0);
+    _descCtrl.text      = p.description;
+    _type               = p.type;
+    _category           = p.category;
+    _lat                = p.latitude;
+    _lng                = p.longitude;
+    if (p.type == PropertyType.rent) {
+      _rentDur = p.rentDuration ?? RentDuration.monthly;
     }
   }
 
-  Future<void> _checkCreateQuota() async {
-    // Wait for frame to complete
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final user = ref.read(authNotifierProvider).value;
-      if (user == null) return;
-
-      // Only check on new property creation (not editing)
-      if (widget.property != null) return;
-
-      final middleware = ref.read(featureGateMiddlewareProvider);
-      final canCreate = await middleware.checkFeatureAccess(
-        context: context,
-        userId: user.id,
-        featureName: 'create_listing',
-        showUpgradePrompt: true,
-      );
-
-      if (!canCreate && mounted) {
-        Navigator.of(context).pop();
-      }
-    });
+  // ── Subscription quota check ───────────────────────────────────────────────
+  Future<void> _checkQuota() async {
+    if (_isEditing || !mounted) return;
+    final user = ref.read(authNotifierProvider).value;
+    if (user == null) return;
+    final ok = await ref.read(featureGateMiddlewareProvider).checkFeatureAccess(
+      context: context,
+      userId: user.id,
+      featureName: 'create_listing',
+      showUpgradePrompt: true,
+    );
+    if (!ok && mounted) Navigator.of(context).pop();
   }
 
-  /// Check subscription limits for property creation including video/image rules.
-  /// Returns true if allowed, false if blocked (snackbar shown automatically).
-  Future<bool> _checkPropertyCreationLimits({required bool hasVideo}) async {
+  // ── Check creation limits (subscription tier) ─────────────────────────────
+  Future<bool> _checkCreationLimits() async {
     final user = ref.read(authNotifierProvider).value;
     if (user == null) return false;
-
     try {
-      final supabase = ref.read(supabaseProvider);
-      final result = await supabase.rpc(
+      final result = await Supabase.instance.client.rpc(
         'check_property_creation_allowed',
-        params: {
-          'p_user_id': user.id,
-          'p_has_video': hasVideo,
-        },
+        params: {'p_user_id': user.id, 'p_has_video': false},
       );
-
       final map = result as Map<String, dynamic>;
       if (map['allowed'] == true) return true;
-
-      // Show upgrade dialog
-      if (mounted) {
-        final reason = map['reason'] as String? ?? 'Subscription limit reached';
-        final upgradeRequired = map['upgrade_required'] as bool? ?? false;
-
-        if (upgradeRequired) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: Row(
-                children: [
-                  const Icon(Icons.lock, color: Colors.orange),
-                  SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-                  const Text('Upgrade Required'),
-                ],
-              ),
-              content: Text(reason),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(ctx).pop();
-                    Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const SubscriptionScreen(),
-                    ));
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                  child: const Text('Upgrade to Pro'),
-                ),
-              ],
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(reason), backgroundColor: Colors.red),
-          );
-        }
+      if (!mounted) return false;
+      final reason          = map['reason'] as String? ?? 'Subscription limit reached';
+      final upgradeRequired = map['upgrade_required'] as bool? ?? false;
+      if (upgradeRequired) {
+        _showUpgradeDialog(reason);
+      } else {
+        _snack(reason, isError: true);
       }
       return false;
-    } catch (e) {
-      // Fail open — let the backend enforce if RPC unavailable
-      return true;
+    } catch (_) {
+      return true; // fail open — backend enforces anyway
     }
   }
 
-  void _loadPropertyData() {
-    final property = widget.property!;
-    _titleController.text = property.title;
-    _descriptionController.text = property.description;
-    _priceController.text = property.price.toString();
-    _locationController.text = property.location;
-    _bedroomsController.text = property.bedrooms.toString();
-    _bathroomsController.text = property.bathrooms.toString();
-    _areaController.text = property.area.toString();
-    _selectedType = property.type;
-    _selectedCategory = property.category;
-    _selectedStatus = property.status;
-
-    if (property.type == PropertyType.rent) {
-      _selectedRentDuration = property.rentDuration ?? RentDuration.monthly;
-    }
+  void _showUpgradeDialog(String reason) {
+    final s = _s;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.lock_outline_rounded, color: Colors.orange),
+          const SizedBox(width: 10),
+          Text(s.upgradeRequired),
+        ]),
+        content: Text(reason),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(s.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const SubscriptionScreen()));
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text(s.upgradePro),
+          ),
+        ],
+      ),
+    );
   }
 
-  // ── Web image bytes cache ─────────────────────────────────────────────────
-  // Reads and caches bytes for each XFile so Image.memory() can display them
-  // in CanvasKit renderer (Image.network fails with blob:// URLs in CanvasKit).
-  Future<void> _cacheWebBytes(List<XFile> images) async {
+  // ── Web image bytes cache (CanvasKit compatibility) ────────────────────────
+  Future<void> _cacheWebBytes(List<XFile> files) async {
     if (!kIsWeb) return;
-    for (final img in images) {
-      if (_webImageBytes.containsKey(img.path)) continue;
+    for (final f in files) {
+      if (_webBytes.containsKey(f.path)) continue;
       try {
-        final bytes = await img.readAsBytes();
-        if (bytes.isNotEmpty) _webImageBytes[img.path] = bytes;
+        final b = await f.readAsBytes();
+        if (b.isNotEmpty) _webBytes[f.path] = b;
       } catch (_) {}
     }
   }
 
-  /// Returns a widget that displays [file] correctly on both web and native.
-  /// Web uses Image.memory (blob-URL compatible in CanvasKit/Impeller).
-  /// Native uses Image.file.
-  Widget _imageWidget(XFile file, {double size = 200}) {
+  // Returns the correct image widget for web (Image.memory) and native (Image.file)
+  Widget _thumb(XFile file, {double size = 90}) {
     if (!kIsWeb) {
-      return Image.file(File(file.path), width: size, height: size, fit: BoxFit.cover);
+      return Image.file(File(file.path),
+          width: size, height: size, fit: BoxFit.cover);
     }
-    final cached = _webImageBytes[file.path];
+    final cached = _webBytes[file.path];
     if (cached != null) {
       return Image.memory(cached, width: size, height: size, fit: BoxFit.cover);
     }
     return FutureBuilder<Uint8List>(
       future: file.readAsBytes().then((b) {
-        if (b.isNotEmpty) _webImageBytes[file.path] = b;
+        if (b.isNotEmpty) _webBytes[file.path] = b;
         return b;
       }),
-      builder: (ctx, snap) {
+      builder: (_, snap) {
         if (snap.hasData && snap.data!.isNotEmpty) {
-          return Image.memory(snap.data!, width: size, height: size, fit: BoxFit.cover);
+          return Image.memory(snap.data!,
+              width: size, height: size, fit: BoxFit.cover);
         }
-        return Container(
-          width: size, height: size,
-          color: Colors.grey.shade200,
+        return SizedBox(
+          width: size,
+          height: size,
           child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
         );
       },
     );
   }
 
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _descriptionController.dispose();
-    _priceController.dispose();
-    _locationController.dispose();
-    _bedroomsController.dispose();
-    _bathroomsController.dispose();
-    _areaController.dispose();
-    super.dispose();
-  }
-
-  void _showRejectionDialog({required String reason, required List<String> suggestions}) {
-    final s = _s;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context))),
-        titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-        title: Row(children: [
-          Container(
-            padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context)),
-            decoration: BoxDecoration(color: ThemeConfig.errorColor.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.block_rounded, color: ThemeConfig.errorColor, size: ResponsiveHelper.getResponsiveIconSize(context)),
-          ),
-          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-          Expanded(child: Text(s.aiRejectedTitle,
-              style: TextStyle(color: ThemeConfig.errorColor, fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w700))),
-        ]),
-        content: SingleChildScrollView(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            const SizedBox(height: 10),
-            Text(s.aiRejectedIntro,
-                style: TextStyle(color: ThemeConfig.getTextSecondaryColor(ctx), fontSize: 13)),
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-            Container(
-              padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-              decoration: BoxDecoration(
-                color: ThemeConfig.errorColor.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: ThemeConfig.errorColor.withOpacity(0.25)),
-              ),
-              child: Text(reason,
-                  style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14), height: 1.5, color: ThemeConfig.getTextPrimaryColor(ctx))),
-            ),
-            if (suggestions.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              Text(s.aiSuggestions,
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-              ...suggestions.map((tip) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('• ', style: TextStyle(fontWeight: FontWeight.bold)),
-                  Expanded(child: Text(tip, style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13), height: 1.4))),
-                ]),
-              )),
-            ],
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: ThemeConfig.infoColor.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
-              ),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Icon(Icons.info_outline_rounded, size: ResponsiveHelper.getResponsiveIconSize(context), color: ThemeConfig.infoColor),
-                const SizedBox(width: 6),
-                Expanded(child: Text(s.aiRejectedFooter,
-                    style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11), height: 1.4,
-                        color: ThemeConfig.getTextSecondaryColor(ctx)))),
-              ]),
-            ),
-          ]),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: TextButton.styleFrom(foregroundColor: ThemeConfig.errorColor),
-            child: Text(s.tryAgain, style: const TextStyle(fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPendingDialog() {
-    final s = _s;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context))),
-        title: Row(children: [
-          Container(
-            padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context)),
-            decoration: BoxDecoration(color: ThemeConfig.warningColor.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.hourglass_top_rounded, color: ThemeConfig.warningColor, size: ResponsiveHelper.getResponsiveIconSize(context)),
-          ),
-          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-          Expanded(child: Text(s.aiPendingTitle,
-              style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w700))),
-        ]),
-        content: Text(s.aiPendingMsg, style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14), height: 1.5)),
-        actions: [
-          ElevatedButton(
-            onPressed: () { Navigator.pop(ctx); Navigator.pop(context, true); },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: ThemeConfig.warningColor, foregroundColor: Colors.white),
-            child: Text(s.ok),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _showAddMediaSheet() async {
-    final s = _s;
-    await showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-            leading: const Icon(Icons.photo_library_rounded),
-            title: Text(s.photoOption),
-            onTap: () async {
-              Navigator.pop(ctx);
-              await _pickImages();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.videocam_rounded),
-            title: Text(s.videoOption),
-            subtitle: const Text('Max 90 seconds',
-                style: TextStyle(fontSize: 12, color: Colors.grey)),
-            onTap: () async {
-              Navigator.pop(ctx);
-              await _pickVideo();
-            },
-          ),
-        ]),
-      ),
-    );
-  }
-
+  // ── Photo picker ───────────────────────────────────────────────────────────
   Future<void> _pickImages() async {
-    final remainingSlots =
-        AppConstants.maxImagesPerProperty - _selectedImages.length;
-    if (remainingSlots <= 0) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Maximum ${AppConstants.maxImagesPerProperty} photos allowed'),
-          backgroundColor: ThemeConfig.errorColor,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
+    final remaining = AppConstants.maxImagesPerProperty - _images.length;
+    if (remaining <= 0) {
+      _snack('Maximum ${AppConstants.maxImagesPerProperty} photos allowed',
+          isError: true);
+      return;
+    }
+    final picked = await _imageHelper.pickMultipleImages(
+      maxImages: remaining,
+      onOversized: (skipped, maxMB) => _snack(
+        '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+        'each must be under ${maxMB.toStringAsFixed(0)} MB',
+        isError: false,
+      ),
+    );
+    if (picked.isNotEmpty && mounted) {
+      await _cacheWebBytes(picked);
+      setState(() => _images = [..._images, ...picked]);
+    }
+  }
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  Future<void> _submit() async {
+    final s = _s;
+    final user = ref.read(authNotifierProvider).value;
+    if (user == null) return;
+
+    if (!_formKey.currentState!.validate()) {
+      _snack(s.fixErrors, isError: true);
+      return;
+    }
+    if (_images.isEmpty && !_isEditing) {
+      _snack(s.photoRequired, isError: true);
       return;
     }
 
-    final images = await _imageHelper.pickMultipleImages(
-      maxImages: remainingSlots,
-      onOversized: (skipped, maxMB) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
-                'each must be under ${maxMB.toStringAsFixed(0)} MB'),
-            backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-          ));
-        }
-      },
-    );
-
-    if (images.isNotEmpty && mounted) {
-      // Pre-cache bytes on web before setState so the preview renders immediately.
-      await _cacheWebBytes(images);
-      setState(() {
-        // APPEND to existing list — never replace
-        _selectedImages = [..._selectedImages, ...images];
-      });
-    }
-  }
-
-  Future<void> _pickVideo() async {
-    // Free-tier users cannot add video — check before opening picker
-    final user = ref.read(authNotifierProvider).value;
-    if (user != null) {
-      final blocked = await _checkPropertyCreationLimits(hasVideo: true);
-      if (!blocked) return;
-    }
-
-    final picker = ImagePicker();
-    final XFile? picked = await picker.pickVideo(
-      source: ImageSource.gallery,
-      maxDuration: const Duration(seconds: 90),
-    );
-    if (picked == null) return;
-
-    // ── Duration check (90-second max) ───────────────────────────────
-    // Web: use networkUrl with blob URL. Native: use file().
-    try {
-      final probe = kIsWeb
-          ? VideoPlayerController.networkUrl(Uri.parse(picked.path))
-          : VideoPlayerController.file(File(picked.path));
-      await probe.initialize();
-      final dur = probe.value.duration;
-      await probe.dispose();
-      if (dur > const Duration(seconds: 90)) {
-        if (mounted) {
-          await showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Video Too Long'),
-              content: Text(
-                'Your video is ${dur.inSeconds} seconds long.\n\n'
-                'Maximum allowed is 90 seconds. '
-                'Please trim it and try again.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
-    } catch (_) {
-      // Can't read duration — continue
-    }
-
-    // ── Pre-compression size check ────────────────────────────────────
-    // Web: no compression available → hard 50 MB cap.
-    // Native: allow up to 200 MB raw (video_compress will reduce this to ~20–40 MB).
-    final fileSize = await picked.length();
-    const maxBytes = kIsWeb ? 50 * 1024 * 1024 : 200 * 1024 * 1024;
-    if (fileSize > maxBytes) {
-      if (mounted) {
-        if (kIsWeb) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Video Too Large'),
-              content: const Text(
-                'Web uploads are limited to 50 MB to keep the app fast for everyone.\n\n'
-                'For best results:\n'
-                '• Compress your video using a free tool before uploading, or\n'
-                '• Download the Patamjengo app from the Play Store — it compresses videos automatically.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-              'Video is too large (${(fileSize / 1024 / 1024).toStringAsFixed(0)} MB). '
-              'Please trim it to under 90 seconds.',
-            ),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ));
-        }
-      }
-      return;
-    }
-
-    // ── Compression (native only) ─────────────────────────────────────
-    XFile finalVideo = picked;
-    if (!kIsWeb) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Row(
-            children: [
-              const SizedBox(width: 20, height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-              SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-              const Text('Compressing video to 720p...'),
-            ],
-          ),
-          duration: const Duration(seconds: 30),
-          backgroundColor: Colors.black87,
-        ));
-      }
-      try {
-        final MediaInfo? info = await VideoCompress.compressVideo(
-          picked.path,
-          quality: VideoQuality.Res1280x720Quality,
-          deleteOrigin: false,
-          includeAudio: true,
-        );
-        if (info?.file != null) {
-          finalVideo = XFile(info!.file!.path);
-          debugPrint('Video compressed: ${fileSize}B → ${await finalVideo.length()}B');
-        }
-      } catch (e) {
-        debugPrint('Video compression failed, using original: $e');
-      }
-      if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    }
-
-    // ── Post-compression size guard ───────────────────────────────────
-    // Prevents uploading a file that is still too large after compression
-    // (e.g. compression failed and fell back to the original raw file).
-    // 80 MB cap keeps egress costs predictable — a 90-sec 720p clip should
-    // normally compress to 20–40 MB; anything above 80 MB is a problem file.
-    if (!kIsWeb) {
-      final compressedSize = await finalVideo.length();
-      const maxUploadBytes = 80 * 1024 * 1024; // 80 MB
-      if (compressedSize > maxUploadBytes) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-              'Video is still ${(compressedSize / 1024 / 1024).toStringAsFixed(0)} MB after compression — '
-              'too large to upload. Please trim it shorter or record at a lower resolution.',
-            ),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 6),
-          ));
-        }
-        return;
-      }
-      debugPrint(
-        'Video ready to upload: ${(compressedSize / 1024 / 1024).toStringAsFixed(1)} MB',
-      );
-    }
-
-    // ── Thumbnail ────────────────────────────────────────────────────
-    // Web: capture frame via canvas (dart:html). Native: video_thumbnail package.
-    final Uint8List? thumb = kIsWeb
-        ? await captureVideoThumbnailWeb(picked.path)
-        : await _generateVideoThumbnail(finalVideo.path);
-
-    if (mounted) {
-      setState(() {
-        _selectedVideos.add(finalVideo);
-        _videoThumbnails[finalVideo.path] = thumb;
-      });
-    }
-  }
-
-  Future<Uint8List?> _generateVideoThumbnail(String videoPath) async {
-    try {
-      return await VideoThumbnail.thumbnailData(
-        video: videoPath,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 400,
-        quality: 75,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // Helper to check if current category requires beds/baths
-  bool get _requiresBedroomsBathrooms {
-    return _selectedCategory != PropertyCategory.land &&
-        _selectedCategory != PropertyCategory.commercial;
-  }
-
-  Future<void> _handleSubmit() async {
-    final user = ref.read(authNotifierProvider).value;
-
-    // Only enforce limits on new property creation, not editing
-    if (user != null && widget.property == null) {
-      final hasVideo = _selectedVideos.isNotEmpty;
-      final allowed = await _checkPropertyCreationLimits(hasVideo: hasVideo);
+    if (!_isEditing) {
+      final allowed = await _checkCreationLimits();
       if (!allowed) return;
     }
 
-    final currentLanguage = ref.read(languageProvider).languageCode;
-    String t(String key) => AppTranslations.translate(key, currentLanguage);
-    final s = _s;
-
-    if (!_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(s.fixErrors),
-        backgroundColor: ThemeConfig.errorColor,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-      return;
-    }
-
-    if (_selectedImages.isEmpty && widget.property == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(s.mediaRequired),
-        backgroundColor: ThemeConfig.errorColor,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-      return;
-    }
-
     setState(() => _isLoading = true);
 
-    // ── GUARD: user must be logged in ─────────────────────────────────────
-    if (user == null) {
-      setState(() => _isLoading = false);
-      return;
-    }
-
-    // ── AI VALIDATION — runs BEFORE saving to the database ────────────────
-    // This blocks non-real-estate content from ever being created.
-    setState(() { _isLoading = false; _isValidating = true; });
-
-    final bedrooms =
-        _requiresBedroomsBathrooms && _bedroomsController.text.isNotEmpty
-            ? int.parse(_bedroomsController.text)
-            : 0;
-    final bathrooms =
-        _requiresBedroomsBathrooms && _bathroomsController.text.isNotEmpty
-            ? int.parse(_bathroomsController.text)
-            : 0;
-
-    final aiService = ref.read(aiValidationServiceProvider);
-    final validation = await aiService.validateProperty(
-      title:       _titleController.text.trim(),
-      description: _descriptionController.text.trim(),
-      location:    _locationController.text.trim(),
-      price:       double.tryParse(_priceController.text) ?? 0,
-      category:    _selectedCategory.name,
-      type:        _selectedType.name,
-      bedrooms:    bedrooms,
-      bathrooms:   bathrooms,
-      area:        double.tryParse(_areaController.text) ?? 0,
-      images:      _selectedImages.isNotEmpty ? _selectedImages : null,
-      videos:      _selectedVideos.isNotEmpty ? _selectedVideos : null,
-      submittedBy: user.id,
-    );
-
-    if (!mounted) return;
-    setState(() => _isValidating = false);
-
-    // ── Rejected: block save, show reason ────────────────────────────────
-    if (validation.isRejected) {
-      _showRejectionDialog(
-        reason: validation.reason,
-        suggestions: validation.suggestions,
-      );
-      return;
-    }
-
-    // ── Pending manual review: block save, inform user ───────────────────
-    if (validation.isPending) {
-      _showPendingDialog();
-      return;
-    }
-
-    // ── Approved: proceed with saving ────────────────────────────────────
-    setState(() => _isLoading = true);
-
-    final repository = ref.read(propertyRepositoryProvider);
+    final bedrooms  = _needsRooms ? (int.tryParse(_bedroomsCtrl.text)  ?? 0) : 0;
+    final bathrooms = _needsRooms ? (int.tryParse(_bathroomsCtrl.text) ?? 0) : 0;
 
     final property = PropertyEntity(
-      id: widget.property?.id ?? '',
-      title: _titleController.text.trim(),
-      description: _descriptionController.text.trim(),
-      price: double.parse(_priceController.text),
-      type: _selectedType,
-      category: _selectedCategory,
-      location: _locationController.text.trim(),
-      bedrooms: bedrooms,
-      bathrooms: bathrooms,
-      area: double.parse(_areaController.text),
-      images: widget.property?.images ?? [],
-      ownerId: user.id,
-      status: _selectedStatus,
-      rentDuration:
-          _selectedType == PropertyType.rent ? _selectedRentDuration : null,
-      createdAt: widget.property?.createdAt ?? DateTime.now(),
-      updatedAt: DateTime.now(),
-      ownerName: '',
-      latitude:  _propertyLat ?? widget.property?.latitude,
-      longitude: _propertyLng ?? widget.property?.longitude,
+      id:           widget.property?.id ?? '',
+      title:        _titleCtrl.text.trim(),
+      description:  _descCtrl.text.trim(),
+      price:        double.parse(_priceCtrl.text),
+      type:         _type,
+      category:     _category,
+      location:     _locationCtrl.text.trim(),
+      latitude:     _lat ?? widget.property?.latitude,
+      longitude:    _lng ?? widget.property?.longitude,
+      bedrooms:     bedrooms,
+      bathrooms:    bathrooms,
+      area:         double.parse(_areaCtrl.text),
+      images:       widget.property?.images ?? [],
+      ownerId:      user.id,
+      ownerName:    '',
+      status:       PropertyStatus.available,
+      rentDuration: _type == PropertyType.rent ? _rentDur : null,
+      createdAt:    widget.property?.createdAt ?? DateTime.now(),
+      updatedAt:    DateTime.now(),
     );
 
-    final result = widget.property == null
-        ? await repository.createProperty(property)
-        : await repository.updateProperty(property);
+    final repo   = ref.read(propertyRepositoryProvider);
+    final result = _isEditing
+        ? await repo.updateProperty(property)
+        : await repo.createProperty(property);
 
     if (!mounted) return;
 
     await result.fold(
       (failure) async {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(failure.message),
-            backgroundColor: ThemeConfig.errorColor,
-          ),
-        );
+        _snack(failure.message, isError: true);
       },
-      (createdProperty) async {
-        // Attach verification log to the newly created property (non-fatal).
-        // Only log when the user has interacted with the verification widget.
-        if (widget.property == null && _verificationResult != null) {
+      (saved) async {
+        // Upload new photos
+        if (_images.isNotEmpty) {
+          final uploadResult = await repo.uploadImages(saved.id, _images);
+          await uploadResult.fold(
+            (_) async => _snack(s.photoFail, isError: false),
+            (urls) async {
+              final updated = saved.copyWith(
+                  images: [...saved.images, ...urls]);
+              await repo.updateProperty(updated);
+            },
+          );
+        }
+
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+
+        // Update in-memory providers
+        if (_isEditing) {
+          ref.read(propertyListProvider.notifier).updatePropertyInList(saved);
+        } else {
+          ref.read(propertyListProvider.notifier).addProperty(saved);
+          // Increment usage counter
           try {
-            await VerificationService().attachVerificationToProperty(
-              propertyId: createdProperty.id,
-              result:     _verificationResult!,
-            );
+            await ref
+                .read(subscriptionServiceProvider)
+                .incrementUsage(userId: user.id, featureName: 'create_listing');
           } catch (_) {}
         }
+        ref.invalidate(myPropertiesProvider);
 
-        if (_selectedImages.isNotEmpty) {
-          final uploadResult = await repository.uploadImages(
-            createdProperty.id,
-            _selectedImages,
-          );
-
-          await uploadResult.fold(
-            (failure) async {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        '${t('property_created')} ${t('image_upload_failed')}: ${failure.message}'),
-                    backgroundColor: ThemeConfig.warningColor,
-                  ),
-                );
-              }
-            },
-            (imageUrls) async {
-              final updatedProperty = createdProperty.copyWith(
-                images: [...createdProperty.images, ...imageUrls],
-              );
-              await repository.updateProperty(updatedProperty);
-            },
-          );
-        }
-
-        // ── Upload video (non-fatal) ─────────────────────────────────
-        // PropertyEntity doesn't have a videos field — we write the URL
-        // directly to the properties.videos column via Supabase.
-        if (_selectedVideos.isNotEmpty) {
-          try {
-            final video  = _selectedVideos.first;
-            final ts     = DateTime.now().millisecondsSinceEpoch;
-            final name   = video.name.isNotEmpty ? video.name : video.path.split('/').last;
-            final ext    = name.split('.').last.toLowerCase();
-            final path   = '${user.id}/${createdProperty.id}_$ts.$ext';
-            if (kIsWeb) {
-              final videoBytes = await video.readAsBytes();
-              await Supabase.instance.client.storage
-                  .from('property_videos')
-                  .uploadBinary(path, videoBytes,
-                      fileOptions: const FileOptions(
-                        cacheControl: '31536000',
-                        upsert: false,
-                        contentType: 'video/mp4',
-                      ));
-            } else {
-              final mime = ext == 'mov' ? 'video/quicktime' : 'video/mp4';
-              await Supabase.instance.client.storage
-                  .from('property_videos')
-                  .upload(path, File(video.path),
-                      fileOptions: FileOptions(
-                        cacheControl: '31536000',
-                        upsert: false,
-                        contentType: mime,
-                      ));
-            }
-            final videoUrl = Supabase.instance.client.storage
-                .from('property_videos')
-                .getPublicUrl(path);
-            // Append URL directly to the videos column
-            await Supabase.instance.client
-                .from('properties')
-                .update({'videos': [videoUrl]})
-                .eq('id', createdProperty.id);
-          } catch (_) {
-            // Non-fatal — property is saved, video just didn't upload
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(_s.videoFail),
-                backgroundColor: ThemeConfig.warningColor,
-              ));
-            }
-          }
-        }
-
-        if (mounted) {
-          setState(() => _isLoading = false);
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(widget.property == null
-                  ? t('property_created_successfully')
-                  : t('property_updated_successfully')),
-              backgroundColor: ThemeConfig.secondaryColor,
-            ),
-          );
-
-          if (widget.property == null) {
-            ref
-                .read(propertyListProvider.notifier)
-                .addProperty(createdProperty);
-          } else {
-            ref
-                .read(propertyListProvider.notifier)
-                .updatePropertyInList(createdProperty);
-          }
-
-          final subscriptionService = ref.read(subscriptionServiceProvider);
-          await subscriptionService.incrementUsage(
-            userId: user.id,
-            featureName: 'create_listing',
-          );
-        
-          ref.invalidate(myPropertiesProvider);
-          Navigator.pop(context, true);
-        }
+        _snack(_isEditing ? s.updatedOk : s.createdOk, isError: false);
+        Navigator.pop(context, true);
       },
     );
   }
 
+  // ── Snackbar helper ────────────────────────────────────────────────────────
+  void _snack(String msg, {required bool isError}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor:
+          isError ? ThemeConfig.errorColor : ThemeConfig.secondaryColor,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final s = _S(ref.watch(languageProvider).languageCode == 'sw');
-    final currentLanguage = ref.watch(languageProvider).languageCode;
-    final currentCurrency = ref.watch(currencyProvider);
-    final currencySymbol = CurrencyHelper.getSymbol(currentCurrency);
-    String t(String key) => AppTranslations.translate(key, currentLanguage);
+    final lang   = ref.watch(languageProvider).languageCode;
+    final s      = _S(lang == 'sw');
+    final currency = ref.watch(currencyProvider);
+    final symbol = CurrencyHelper.getSymbol(currency);
+    final pad    = ResponsiveHelper.getResponsivePadding(context);
+    final radius = ResponsiveHelper.getResponsiveBorderRadius(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-            widget.property == null ? t('add_property') : t('edit_property')),
-        actions: [
-          // ✅ ADD THIS:
-          Consumer(
-            builder: (context, ref, child) {
-              final user = ref.watch(authNotifierProvider).value;
-              if (user == null) return const SizedBox.shrink();
-
-              return const Padding(
-                padding: EdgeInsets.all(8.0),
-                child: QuotaIndicator(featureName: 'create_listing'),
-              );
-            },
-          ),
-        ],
+        title: Text(_isEditing ? s.editProperty : s.addProperty),
+        centerTitle: false,
       ),
       body: WebDropZone(
         maxFiles: AppConstants.maxImagesPerProperty,
         maxBytesPerFile: AppConstants.maxImageSize,
         onFilesDropped: (dropped) async {
-          final remaining =
-              AppConstants.maxImagesPerProperty - _selectedImages.length;
+          final remaining = AppConstants.maxImagesPerProperty - _images.length;
           if (remaining <= 0) return;
           final toAdd = dropped.take(remaining).toList();
-          // Cache bytes before setState so the preview renders immediately.
           await _cacheWebBytes(toAdd);
-          if (mounted) {
-            setState(() => _selectedImages = [
-                  ..._selectedImages,
-                  ...toAdd,
-                ]);
-          }
+          if (mounted) setState(() => _images = [..._images, ...toAdd]);
         },
-        onVideoDropped: (videos) {
-          if (!mounted) return;
-          if (_selectedVideos.isNotEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Only one video allowed per listing'),
-              backgroundColor: Colors.orange,
-              behavior: SnackBarBehavior.floating,
-            ));
-            return;
-          }
-          // Process the first dropped video through the same path as _pickVideo.
-          // Generate thumbnail and add to state.
-          final video = videos.first;
-          captureVideoThumbnailWeb(video.path).then((thumb) {
-            if (mounted) {
-              setState(() {
-                _selectedVideos.add(video);
-                _videoThumbnails[video.path] = thumb;
-              });
-            }
-          });
-        },
-        onOversized: (skipped, maxMB) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(
-                  '$skipped file${skipped > 1 ? 's' : ''} skipped — '
-                  'images must be under ${maxMB.toStringAsFixed(0)} MB, '
-                  'videos under 50 MB'),
-              backgroundColor: Colors.orange,
-              behavior: SnackBarBehavior.floating,
-            ));
-          }
-        },
+        onOversized: (skipped, maxMB) => _snack(
+          '$skipped file${skipped > 1 ? 's' : ''} skipped — '
+          'must be under ${maxMB.toStringAsFixed(0)} MB',
+          isError: false,
+        ),
         child: Form(
           key: _formKey,
           child: ListView(
-            padding: EdgeInsets.all(ResponsiveHelper.getResponsivePadding(context)),
-          children: [
-            // ── Instructions banner ──────────────────────────────────
-            _InstructionsBanner(
-              title: s.instructTitle,
-              items: s.instructions,
-            ),
-            const SizedBox(height: 20),
-
-            // ── Photos & Video Section ────────────────────────────────
-            Text(
-              s.mediaSectionTitle,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 4),
-            _FieldTip(s.mediaTip),
-            if (kIsWeb) ...[
-              const SizedBox(height: 4),
-              const _FieldTip('On desktop you can also drag & drop photos directly onto this form'),
-            ],
-            const SizedBox(height: 10),
-
-            // Empty state — two tap targets side by side (shown until at least one image is added)
-            if (_selectedImages.isEmpty)
-              Row(
-                children: [
-                  // Photos tap
-                  Expanded(
-                    child: InkWell(
-                      onTap: _pickImages,
-                      borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                      child: Container(
-                        height: 130,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300, width: 1.5),
-                          borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.add_photo_alternate, size: ResponsiveHelper.getResponsiveIconSize(context), color: Colors.grey),
-                            const SizedBox(height: 6),
-                            const Text('Add Photos', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  // Video tap
-                  Expanded(
-                    child: InkWell(
-                      onTap: _pickVideo,
-                      borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                      child: Container(
-                        height: 130,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300, width: 1.5),
-                          borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.videocam_rounded, size: ResponsiveHelper.getResponsiveIconSize(context), color: Colors.grey),
-                            const SizedBox(height: 6),
-                            const Text('Add Video', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              )
-
-            // Media grid — photos and video together
-            else
-              Column(
-                children: [
-                  SizedBox(
-                    height: 200,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        // Photos
-                        ..._selectedImages.asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final file  = entry.value;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                                  child: _imageWidget(file, size: 200),
-                                ),
-                                // Remove button
-                                Positioned(
-                                  top: 6, right: 6,
-                                  child: IconButton(
-                                    onPressed: () => setState(() {
-                                      _webImageBytes.remove(_selectedImages[index].path);
-                                      _selectedImages.removeAt(index);
-                                    }),
-                                    icon: Icon(Icons.close, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: Colors.black54,
-                                      foregroundColor: Colors.white,
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(28, 28),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-
-                        // Video tile
-                        ..._selectedVideos.asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final file  = entry.value;
-                          final name  = file.path.split('/').last;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: Stack(
-                              children: [
-                                Container(
-                                  width: 200, height: 200,
-                                  decoration: BoxDecoration(
-                                    color: Colors.black87,
-                                    borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                                  ),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const Icon(Icons.play_circle_fill_rounded,
-                                          color: Colors.white, size: 52),
-                                      SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                                        child: Text(
-                                          name,
-                                          style: const TextStyle(color: Colors.white70, fontSize: 11),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                // VIDEO badge
-                                Positioned(
-                                  top: 8, left: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.shade700,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(s.videoLabel,
-                                        style: TextStyle(
-                                            color: Colors.white, fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-                                            fontWeight: FontWeight.bold)),
-                                  ),
-                                ),
-                                // Remove button
-                                Positioned(
-                                  top: 6, right: 6,
-                                  child: IconButton(
-                                    onPressed: () => setState(() => _selectedVideos.removeAt(index)),
-                                    icon: Icon(Icons.close, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: Colors.black54,
-                                      foregroundColor: Colors.white,
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(28, 28),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-                  // Action row — add more photos / add video
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      TextButton.icon(
-                        onPressed: _pickImages,
-                        icon: Icon(Icons.add_photo_alternate, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                        label: const Text('Photos'),
-                      ),
-                      if (_selectedVideos.isEmpty) ...[
-                        SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-                        TextButton.icon(
-                          onPressed: _pickVideo,
-                          icon: Icon(Icons.videocam_rounded, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                          label: const Text('Video'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
-
-            // Title Field
-            TextFormField(
-              controller: _titleController,
-              decoration: InputDecoration(
-                labelText: t('property_title'),
-                hintText: t('property_title_hint'),
-              ),
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return s.titleRequired;
-                if (v.trim().length < 5) return s.titleTooShort;
-                return null;
-              },
-              textCapitalization: TextCapitalization.words,
-            ),
-            _FieldTip(s.titleTip),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-
-            // Description Field
-            TextFormField(
-              controller: _descriptionController,
-              decoration: InputDecoration(
-                labelText: t('description'),
-                hintText: t('describe_property'),
-              ),
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return s.descRequired;
-                if (v.trim().split(RegExp(r'\s+')).length < 10) return s.descTooShort;
-                return null;
-              },
-              maxLines: 4,
-            ),
-            _FieldTip(s.descTip),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-
-            // Category Dropdown - Place before price to control validation
-            DropdownButtonFormField<PropertyCategory>(
-              initialValue: _selectedCategory,
-              decoration: InputDecoration(labelText: t('category')),
-              items: PropertyCategory.values
-                  .map((category) => DropdownMenuItem(
-                        value: category,
-                        child: Text(category.displayName),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    _selectedCategory = value;
-                    // Clear bedroom/bathroom fields if switching to land/commercial
-                    if (!_requiresBedroomsBathrooms) {
-                      _bedroomsController.clear();
-                      _bathroomsController.clear();
-                    }
-                  });
-                }
-              },
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-
-            // Price Field with Rent Duration
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextFormField(
-                  controller: _priceController,
-                  decoration: InputDecoration(
-                    labelText: t('price'),
-                    hintText: '0',
-                    prefixText: '$currencySymbol ',
-                    suffixText: _selectedType == PropertyType.rent
-                        ? t('per_month')
-                        : null,
-                  ),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return s.priceRequired;
-                    if (double.tryParse(v) == null) return s.priceInvalid;
-                    return null;
-                  },
+            padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 32),
+            children: [
+              // ── Photos ────────────────────────────────────────────────
+              _SectionLabel(s.photos),
+              const SizedBox(height: 6),
+              Text(
+                s.photosTip +
+                    (kIsWeb ? '\n${s.webDragDrop}' : ''),
+                style: TextStyle(
+                  fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
+                  color: ThemeConfig.getTextSecondaryColor(context),
+                  height: 1.4,
                 ),
-                _FieldTip(s.priceTip),
-                if (_selectedType == PropertyType.rent) ...[
-                  SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-                  Text(
-                    t('rent_duration'),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                  ),
-                  SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ChoiceChip(
-                          label: Text(t('monthly')),
-                          selected:
-                              _selectedRentDuration == RentDuration.monthly,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedRentDuration = RentDuration.monthly;
-                              });
-                            }
-                          },
-                        ),
-                      ),
-                      SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-                      Expanded(
-                        child: ChoiceChip(
-                          label: Text(t('yearly')),
-                          selected:
-                              _selectedRentDuration == RentDuration.yearly,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedRentDuration = RentDuration.yearly;
-                              });
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              ),
+              const SizedBox(height: 10),
+              _buildPhotoSection(radius, s),
+              const SizedBox(height: 24),
+
+              // ── Property Type ─────────────────────────────────────────
+              _SectionLabel(_isEditing ? t('property_type') : 'Type'),
+              const SizedBox(height: 8),
+              _buildTypeChips(s),
+              if (_type == PropertyType.rent) ...[
+                const SizedBox(height: 10),
+                _buildRentDurationChips(s),
               ],
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
+              const SizedBox(height: 20),
 
-            // Type Dropdown
-            DropdownButtonFormField<PropertyType>(
-              initialValue: _selectedType,
-              decoration: InputDecoration(labelText: t('type')),
-              items: PropertyType.values
-                  .map((type) => DropdownMenuItem(
-                        value: type,
-                        child: Text(type.displayName),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    _selectedType = value;
-                    if (value == PropertyType.rent) {
-                      _selectedRentDuration = RentDuration.monthly;
-                    }
-                  });
-                }
-              },
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
+              // ── Category ──────────────────────────────────────────────
+              _SectionLabel(s.categoryLabel),
+              const SizedBox(height: 8),
+              _buildCategoryDropdown(context, radius),
+              const SizedBox(height: 20),
 
-            // Location Field
-            LocationAutocompleteField(
-              controller: _locationController,
-              labelText: t('location'),
-              hintText: t('enter_location'),
-              clearOnSelect: false,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? s.locationReq : null,
-              onSelected: (_, displayName) {
-                _locationController.text = displayName;
-              },
-              onCoordinatesSelected: (lat, lng) => setState(() {
-                _propertyLat = lat;
-                _propertyLng = lng;
-              }),
-              // Clear stored coordinates whenever the user edits the text
-              // field manually so stale coords from a previous selection can
-              // never be used for GPS verification.
-              onCoordinatesCleared: () => setState(() {
-                _propertyLat = null;
-                _propertyLng = null;
-              }),
-            ),
-            _FieldTip(s.locationTip),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
+              // ── Title ─────────────────────────────────────────────────
+              _buildField(
+                controller: _titleCtrl,
+                label: s.titleLabel,
+                hint: s.titleHint,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return s.titleRequired;
+                  if (v.trim().length < 5) return s.titleTooShort;
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
 
-            // Bedrooms and Bathrooms Row - Only show for non-land/commercial
-            if (_requiresBedroomsBathrooms) ...[
-              _FieldTip(s.roomsTip),
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bedroomsController,
-                      decoration: InputDecoration(
-                        labelText: t('bedrooms'),
-                        hintText: '0',
+              // ── Price ─────────────────────────────────────────────────
+              _buildField(
+                controller: _priceCtrl,
+                label: s.priceLabel,
+                hint: s.priceHint,
+                prefixText: '$symbol ',
+                suffixText: _type == PropertyType.rent
+                    ? (_rentDur == RentDuration.monthly ? '/mo' : '/yr')
+                    : null,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: false),
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return s.priceRequired;
+                  if (double.tryParse(v) == null) return s.priceInvalid;
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+
+              // ── Location ──────────────────────────────────────────────
+              _SectionLabel(s.locationLabel),
+              const SizedBox(height: 8),
+              LocationAutocompleteField(
+                controller: _locationCtrl,
+                hintText: s.locationHint,
+                onSelected: (_, displayName) =>
+                    _locationCtrl.text = displayName,
+                onCoordinatesSelected: (lat, lng) {
+                  _lat = lat;
+                  _lng = lng;
+                },
+                onCoordinatesCleared: () {
+                  _lat = null;
+                  _lng = null;
+                },
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? s.locationRequired
+                    : null,
+              ),
+              const SizedBox(height: 20),
+
+              // ── Bedrooms & Bathrooms (conditional) ────────────────────
+              if (_needsRooms) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildField(
+                        controller: _bedroomsCtrl,
+                        label: s.bedroomsLabel,
+                        hint: '0',
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly
+                        ],
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return s.roomsRequired;
+                          if (int.tryParse(v) == null) return s.roomsInvalid;
+                          return null;
+                        },
                       ),
-                      keyboardType: TextInputType.number,
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) return s.bedroomsReq;
-                        if (int.tryParse(v) == null) return s.bedroomsInvalid;
-                        return null;
-                      },
                     ),
-                  ),
-                  SizedBox(width: ResponsiveHelper.getResponsivePadding(context)),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bathroomsController,
-                      decoration: InputDecoration(
-                        labelText: t('bathrooms'),
-                        hintText: '0',
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildField(
+                        controller: _bathroomsCtrl,
+                        label: s.bathroomsLabel,
+                        hint: '0',
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly
+                        ],
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return s.roomsRequired;
+                          if (int.tryParse(v) == null) return s.roomsInvalid;
+                          return null;
+                        },
                       ),
-                      keyboardType: TextInputType.number,
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) return s.bathroomsReq;
-                        if (int.tryParse(v) == null) return s.bathroomsInvalid;
-                        return null;
-                      },
                     ),
-                  ),
-                ],
-              ),
-              SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-            ] else ...[
-              _InfoBox(s.noRoomsTip),
-              SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-            ],
-
-            // Area Field
-            TextFormField(
-              controller: _areaController,
-              decoration: InputDecoration(
-                labelText: t('area_sqft'),
-                hintText: '0',
-                suffixText: 'm²',
-              ),
-              keyboardType: TextInputType.number,
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return s.areaRequired;
-                if (double.tryParse(v) == null) return s.areaInvalid;
-                return null;
-              },
-            ),
-            _FieldTip(s.areaTip),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-
-            // Status Dropdown
-            DropdownButtonFormField<PropertyStatus>(
-              initialValue: _selectedStatus,
-              decoration: InputDecoration(labelText: t('status')),
-              items: PropertyStatus.values
-                  .map((status) => DropdownMenuItem(
-                        value: status,
-                        child: Text(status.displayName),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() => _selectedStatus = value);
-                }
-              },
-            ),
-            _FieldTip(s.statusTip),
-            SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 4)),
-
-            // ── Ownership Verification ────────────────────────────────
-            // Only shown when creating a new property (not editing).
-            if (widget.property == null) ...[
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
-              const Divider(thickness: 1),
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
-              VerificationSectionWidget(
-                listingPhotos: _selectedImages,
-                onVerified:    (result) => setState(() => _verificationResult = result),
-                propertyLat:   _propertyLat,
-                propertyLng:   _propertyLng,
-              ),
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
-              // Gentle tip when no verification has been entered yet
-              if (_verificationResult == null)
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ] else ...[
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color:        Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border:       Border.all(color: Colors.blue.shade200),
+                    color: ThemeConfig.infoColor.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(radius / 2),
+                    border: Border.all(
+                        color: ThemeConfig.infoColor.withOpacity(0.3)),
                   ),
-                  child: const Row(
+                  child: Row(
                     children: [
-                      Icon(Icons.info_outline, color: Colors.blue, size: 18),
-                      SizedBox(width: 8),
+                      const Icon(Icons.info_outline_rounded,
+                          color: ThemeConfig.infoColor, size: 16),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Verification is optional — enter your NIDA to '
-                          'earn a Verified badge and increase buyer trust.',
-                          style: TextStyle(fontSize: 13),
+                          s.noRoomsInfo,
+                          style: TextStyle(
+                            fontSize: ResponsiveHelper.getResponsiveFontSize(
+                                context, mobile: 12),
+                            color: ThemeConfig.getTextSecondaryColor(context),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-              SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
-            ],
+                const SizedBox(height: 16),
+              ],
 
-            // Submit Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: (_isLoading || _isValidating)
-                    ? null
-                    : () { _handleSubmit(); },
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context)),
-                  ),
-                ),
-                child: (_isLoading || _isValidating)
-                    ? Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          ),
-                          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-                          Text(
-                            _isValidating ? s.checking : s.saving,
-                            style: TextStyle(
-                              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Text(
-                        widget.property == null
-                            ? t('create_property')
-                            : t('update_property'),
-                        style: TextStyle(
-                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+              // ── Area ──────────────────────────────────────────────────
+              _buildField(
+                controller: _areaCtrl,
+                label: s.areaLabel,
+                hint: s.areaHint,
+                suffixText: 'm²',
+                helperText: s.areaTip,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))
+                ],
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return s.areaRequired;
+                  if (double.tryParse(v) == null) return s.areaInvalid;
+                  return null;
+                },
               ),
-            ),
-            SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
-          ],
+              const SizedBox(height: 16),
+
+              // ── Description ───────────────────────────────────────────
+              _buildField(
+                controller: _descCtrl,
+                label: s.descLabel,
+                hint: s.descHint,
+                maxLines: 5,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return s.descRequired;
+                  if (v.trim().split(RegExp(r'\s+')).length < 10) {
+                    return s.descTooShort;
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 32),
+
+              // ── Submit button ─────────────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: ThemeConfig.getPrimaryColor(context),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(radius)),
+                    disabledBackgroundColor:
+                        ThemeConfig.getPrimaryColor(context).withOpacity(0.5),
+                  ),
+                  child: _isLoading
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(s.saving,
+                                style: const TextStyle(fontSize: 16)),
+                          ],
+                        )
+                      : Text(
+                          _isEditing ? s.update : s.submit,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-      ), // WebDropZone
+    );
+  }
+
+  // ── Photos section ─────────────────────────────────────────────────────────
+  Widget _buildPhotoSection(double radius, _S s) {
+    if (_images.isEmpty) {
+      return GestureDetector(
+        onTap: _pickImages,
+        child: Container(
+          height: 120,
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300, width: 1.5),
+            borderRadius: BorderRadius.circular(radius),
+            color: ThemeConfig.getCardColor(context),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_photo_alternate_rounded,
+                  size: 40, color: Colors.grey.shade400),
+              const SizedBox(height: 8),
+              Text(s.addPhotos,
+                  style: TextStyle(
+                      color: Colors.grey.shade500,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 110,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              // Existing image thumbnails
+              ..._images.asMap().entries.map((e) {
+                final idx  = e.key;
+                final file = e.value;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: _thumb(file),
+                      ),
+                      // Remove button
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: GestureDetector(
+                          onTap: () => setState(() {
+                            _webBytes.remove(_images[idx].path);
+                            _images.removeAt(idx);
+                          }),
+                          child: Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 14),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+
+              // Add more button
+              if (_images.length < AppConstants.maxImagesPerProperty)
+                GestureDetector(
+                  onTap: _pickImages,
+                  child: Container(
+                    width: 90,
+                    height: 90,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300, width: 1.5),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.add_rounded,
+                            size: 28, color: Colors.grey.shade400),
+                        const SizedBox(height: 4),
+                        Text(s.addMore,
+                            style: TextStyle(
+                                color: Colors.grey.shade500, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${_images.length} / ${AppConstants.maxImagesPerProperty}',
+          style: TextStyle(
+            fontSize: 11,
+            color: ThemeConfig.getTextSecondaryColor(context),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Property type chips ────────────────────────────────────────────────────
+  Widget _buildTypeChips(_S s) {
+    return Row(
+      children: [
+        _TypeChip(
+          label: s.saleLabel,
+          selected: _type == PropertyType.sale,
+          onTap: () => setState(() => _type = PropertyType.sale),
+          context: context,
+        ),
+        const SizedBox(width: 10),
+        _TypeChip(
+          label: s.rentLabel,
+          selected: _type == PropertyType.rent,
+          onTap: () => setState(() {
+            _type = PropertyType.rent;
+            _rentDur = RentDuration.monthly;
+          }),
+          context: context,
+        ),
+      ],
+    );
+  }
+
+  // ── Rent duration chips ────────────────────────────────────────────────────
+  Widget _buildRentDurationChips(_S s) {
+    return Row(
+      children: [
+        _TypeChip(
+          label: s.monthly,
+          selected: _rentDur == RentDuration.monthly,
+          onTap: () => setState(() => _rentDur = RentDuration.monthly),
+          context: context,
+          small: true,
+        ),
+        const SizedBox(width: 10),
+        _TypeChip(
+          label: s.yearly,
+          selected: _rentDur == RentDuration.yearly,
+          onTap: () => setState(() => _rentDur = RentDuration.yearly),
+          context: context,
+          small: true,
+        ),
+      ],
+    );
+  }
+
+  // ── Category dropdown ──────────────────────────────────────────────────────
+  Widget _buildCategoryDropdown(BuildContext context, double radius) {
+    return DropdownButtonFormField<PropertyCategory>(
+      value: _category,
+      decoration: InputDecoration(
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius / 2)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      ),
+      items: PropertyCategory.values.map((c) {
+        return DropdownMenuItem(
+          value: c,
+          child: Text(c.displayName),
+        );
+      }).toList(),
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          _category = v;
+          if (!_needsRooms) {
+            _bedroomsCtrl.clear();
+            _bathroomsCtrl.clear();
+          }
+        });
+      },
+    );
+  }
+
+  // ── Reusable text field ────────────────────────────────────────────────────
+  Widget _buildField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    String? prefixText,
+    String? suffixText,
+    String? helperText,
+    int maxLines = 1,
+    TextInputType? keyboardType,
+    List<TextInputFormatter>? inputFormatters,
+    String? Function(String?)? validator,
+  }) {
+    final radius = ResponsiveHelper.getResponsiveBorderRadius(context);
+    return TextFormField(
+      controller: controller,
+      maxLines: maxLines,
+      keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        prefixText: prefixText,
+        suffixText: suffixText,
+        helperText: helperText,
+        helperMaxLines: 2,
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(radius / 2)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      ),
+      validator: validator,
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small reusable widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  const _SectionLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: ThemeConfig.getTextPrimaryColor(context),
+          ),
+    );
+  }
+}
+
+class _TypeChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final BuildContext context;
+  final bool small;
+
+  const _TypeChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.context,
+    this.small = false,
+  });
+
+  @override
+  Widget build(BuildContext ctx) {
+    final primary = ThemeConfig.getPrimaryColor(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: EdgeInsets.symmetric(
+          horizontal: small ? 14 : 20,
+          vertical: small ? 8 : 10,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: selected ? primary : Colors.grey.shade400,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: small ? 13 : 14,
+            fontWeight: FontWeight.w600,
+            color: selected
+                ? Colors.white
+                : ThemeConfig.getTextSecondaryColor(context),
+          ),
+        ),
+      ),
     );
   }
 }

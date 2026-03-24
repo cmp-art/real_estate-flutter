@@ -163,13 +163,6 @@ class _AdminPropertyDetailScreenState
           _InfoSection(prop: _prop),
           const SizedBox(height: 20),
 
-          // ── Ownership verification ──
-          _OwnerVerificationSection(
-            prop:      _prop,
-            propertyId: _prop['id'] as String? ?? '',
-          ),
-          const SizedBox(height: 20),
-
           // ── Media gallery ──
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text('Media (${media.length} items)',
