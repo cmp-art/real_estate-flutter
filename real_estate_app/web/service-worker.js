@@ -1,7 +1,7 @@
 // service-worker.js — Patamjengo PWA
 // Handles: caching, offline fallback, Web Push notifications (Supabase-powered)
 
-const CACHE_NAME    = 'patamjengo-v2';
+const CACHE_NAME    = 'patamjengo-v3';
 const OFFLINE_URL   = '/index.html';
 
 const PRECACHE_URLS = [
