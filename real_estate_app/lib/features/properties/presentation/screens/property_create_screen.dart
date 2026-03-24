@@ -19,8 +19,6 @@ import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/responsive_helper.dart';
-import '../../../../core/utils/web_drop_zone.dart'
-    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../settings/presentation/providers/app_providers.dart'
@@ -388,15 +386,23 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         _snack(failure.message, isError: true);
       },
       (saved) async {
-        // Upload new photos
+        // Upload new photos and capture the final entity with image URLs
+        PropertyEntity finalSaved = saved;
+
         if (_images.isNotEmpty) {
           final uploadResult = await repo.uploadImages(saved.id, _images);
           await uploadResult.fold(
             (_) async => _snack(s.photoFail, isError: false),
             (urls) async {
-              final updated = saved.copyWith(
+              final withImages = saved.copyWith(
                   images: [...saved.images, ...urls]);
-              await repo.updateProperty(updated);
+              final updateResult = await repo.updateProperty(withImages);
+              // Use the server-returned entity so image URLs are reflected
+              // in the list; fall back to local copy if the update call fails.
+              updateResult.fold(
+                (_) { finalSaved = withImages; },
+                (u)  { finalSaved = u; },
+              );
             },
           );
         }
@@ -404,11 +410,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         if (!mounted) return;
         setState(() => _isLoading = false);
 
-        // Update in-memory providers
+        // Update in-memory providers with the entity that has image URLs
         if (_isEditing) {
-          ref.read(propertyListProvider.notifier).updatePropertyInList(saved);
+          ref.read(propertyListProvider.notifier).updatePropertyInList(finalSaved);
         } else {
-          ref.read(propertyListProvider.notifier).addProperty(saved);
+          ref.read(propertyListProvider.notifier).addProperty(finalSaved);
           // Increment usage counter
           try {
             await ref
@@ -451,22 +457,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         title: Text(_isEditing ? s.editProperty : s.addProperty),
         centerTitle: false,
       ),
-      body: WebDropZone(
-        maxFiles: AppConstants.maxImagesPerProperty,
-        maxBytesPerFile: AppConstants.maxImageSize,
-        onFilesDropped: (dropped) async {
-          final remaining = AppConstants.maxImagesPerProperty - _images.length;
-          if (remaining <= 0) return;
-          final toAdd = dropped.take(remaining).toList();
-          await _cacheWebBytes(toAdd);
-          if (mounted) setState(() => _images = [..._images, ...toAdd]);
-        },
-        onOversized: (skipped, maxMB) => _snack(
-          '$skipped file${skipped > 1 ? 's' : ''} skipped — '
-          'must be under ${maxMB.toStringAsFixed(0)} MB',
-          isError: false,
-        ),
-        child: Form(
+      body: Form(
           key: _formKey,
           child: ListView(
             padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 32),
@@ -475,8 +466,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               _SectionLabel(s.photos),
               const SizedBox(height: 6),
               Text(
-                s.photosTip +
-                    (kIsWeb ? '\n${s.webDragDrop}' : ''),
+                s.photosTip,
                 style: TextStyle(
                   fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
                   color: ThemeConfig.getTextSecondaryColor(context),
@@ -703,7 +693,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             ],
           ),
         ),
-      ),
     );
   }
 
