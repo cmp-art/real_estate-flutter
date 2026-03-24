@@ -83,8 +83,8 @@ dependencies:
   tflite_flutter: ^0.10.4
   image: ^4.1.7
 
-  # On-device OCR — ownership verification (ID card + Hati name extraction)
-  google_mlkit_text_recognition: ^0.13.0
+  # EXIF GPS — reads GPS coordinates embedded in photo metadata
+  exif: ^3.3.0
 
   # Icons
   cupertino_icons: ^1.0.6

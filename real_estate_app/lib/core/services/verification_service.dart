@@ -1,245 +1,135 @@
 // lib/core/services/verification_service.dart
 //
-// Property Ownership Verification — on-device, zero API cost.
+// Ownership Verification — score-based, zero API cost, works on all platforms.
 //
-// ┌─────────────────────────────────────────────────────────┐
-// │  METHOD 1 — Near Owner (owner is at / near the property)│
-// │                                                         │
-// │  1. GPS check: distance from device to property.        │
-// │     0–300 m    → +50 pts                                │
-// │     300–1000 m → +30 pts                                │
-// │     1–2 km     → +15 pts                                │
-// │     > 2 km     → 0 pts (fail immediately)               │
-// │                                                         │
-// │  2. Photo: live camera shot vs listing photos.          │
-// │     Native: 25 base + cosine bonus → 0–50 pts.          │
-// │     Web:    25 pts if photo decodes, else 0.            │
-// │                                                         │
-// │  BOTH GPS and Photo must contribute — neither alone     │
-// │  reaches the 60-point threshold (max each = 50).        │
-// │                                                         │
-// │  Total ≥ 60 / 100 → Verified ✅                         │
-// │  Total < 60 / 100 → Rejected ❌                         │
-// └─────────────────────────────────────────────────────────┘
+// Replaces the old Near Owner (GPS + photo similarity) and Far Owner
+// (ML Kit OCR) system with a simpler, more reliable, cross-platform approach:
 //
-// ┌─────────────────────────────────────────────────────────┐
-// │  METHOD 2 — Far Owner (owner is not at the property)    │
-// │                                                         │
-// │  1. ID card  — NIDA / Driving License / Voter ID.       │
-// │     ML Kit OCR extracts the owner's name.               │
-// │                                                         │
-// │  2. Hati (Title Deed).                                  │
-// │     ML Kit OCR extracts the registered owner's name.    │
-// │                                                         │
-// │  Fuzzy token match (Jaccard) ≥ 70% → Verified ✅        │
-// │  Otherwise → Rejected ❌                                │
-// └─────────────────────────────────────────────────────────┘
+//   Signal 1 — NIDA number  (+35 pts)
+//     User enters their Tanzania National ID number.
+//     Validated for format, embedded date-of-birth, and uniqueness.
+//     Free — no government API needed.
 //
-// After verification (pass or fail) the result is logged to Supabase via
-// log_ownership_verification(). Nothing is uploaded until the user passes.
+//   Signal 2 — EXIF GPS     (+35 pts)
+//     Every photo taken with a phone camera contains hidden GPS coordinates.
+//     The system reads these and checks they match the property address.
+//     Works on Android, iOS, Web, PWA.  Free — pure-Dart exif package.
+//
+//   Signal 3 — Listing photos (+15 pts)
+//     3+ photos = full score, 1–2 = 10 pts.
+//
+//   Signal 4 — Account age   (+10 pts)
+//     Accounts older than 30 days get full points.
+//
+//   Signal 5 — Profile photo  (+5 pts)
+//     User has an avatar uploaded.
+//
+// Score 70–100 → Fully Verified      🟢
+// Score 35–69  → Partially Verified  🟡
+// Score 1–34   → Basic Listing       🟠
+// Score 0      → Unverified          🔴
+//
+// After a property is saved, call [attachVerificationToProperty] to log
+// the result to Supabase.
 
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/verification_result.dart';
-import 'ocr_service.dart';
-import 'photo_similarity_service.dart';
+import 'exif_gps_service.dart';
+import 'fraud_score_service.dart';
+import 'nida_validation_service.dart';
 
 void _vlog(String msg) {
   if (kDebugMode) debugPrint('[Verify] $msg');
 }
 
-// ── Thresholds ────────────────────────────────────────────────────────────────
-const int    _kNearOwnerPassThreshold = 60;    // out of 100
-const double _kFarOwnerPassThreshold  = 70.0;  // percent
-const double _kMaxDistanceMeters      = 2000.0; // 2 km GPS tolerance
-
-// GPS score bands (out of 50):
-//   ≤ 300 m    → 50 pts
-//   300–1000 m → 30 pts
-//   1–2 km     → 15 pts
-//   > 2 km     → 0 pts / immediate fail
-// Photo score (out of 50): neither alone meets the 60-pt threshold.
-
 class VerificationService {
-  final PhotoSimilarityService _photoSim;
-  final OcrService             _ocr;
-  final SupabaseClient         _supabase;
+  final SupabaseClient _supabase;
 
-  VerificationService({
-    required PhotoSimilarityService photoSimilarityService,
-    required OcrService             ocrService,
-    SupabaseClient?                 supabaseClient,
-  })  : _photoSim = photoSimilarityService,
-        _ocr      = ocrService,
-        _supabase = supabaseClient ?? Supabase.instance.client;
+  VerificationService({SupabaseClient? supabaseClient})
+      : _supabase = supabaseClient ?? Supabase.instance.client;
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // METHOD 1 — NEAR OWNER
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Main verification entry point ────────────────────────────────────────
 
-  /// Verifies that the user is physically near the property and their live
-  /// camera photo matches the listing photos.
+  /// Computes a [VerificationResult] from all available signals.
   ///
-  /// [propertyLatitude]  / [propertyLongitude] — coordinates entered on the
-  ///   listing form (or picked from map).
-  ///
-  /// [listingPhotos] — images the user has already selected for the listing
-  ///   (held in device memory, not yet uploaded to Supabase).
-  ///
-  /// [livePhoto] — fresh photo taken from the camera right now.
-  Future<VerificationResult> verifyNearOwner({
-    required double   propertyLatitude,
-    required double   propertyLongitude,
+  /// [rawNida]       — the NIDA string the user typed (may be empty / invalid).
+  /// [listingPhotos] — XFile list of photos the user added to the listing.
+  /// [propertyLat]   — latitude from the address geocoder.
+  /// [propertyLng]   — longitude from the address geocoder.
+  Future<VerificationResult> verify({
+    required String      rawNida,
     required List<XFile> listingPhotos,
-    required XFile    livePhoto,
+    required double?     propertyLat,
+    required double?     propertyLng,
   }) async {
-    // ── 1. GPS score ─────────────────────────────────────────────────────
-    final gpsResult = await _computeGpsScore(propertyLatitude, propertyLongitude);
-    final gpsScore      = gpsResult.$1;
-    final distanceM     = gpsResult.$2;
-    final gpsFailReason = gpsResult.$3;
+    final userId = _supabase.auth.currentUser?.id ?? '';
 
-    _vlog('GPS: ${distanceM.toStringAsFixed(0)} m → score $gpsScore/50');
+    // ── Signal 1: NIDA ───────────────────────────────────────────────────
+    _vlog('Validating NIDA...');
+    final nidaService = NidaValidationService();
+    final nidaResult  = await nidaService.validate(
+      raw:           rawNida,
+      currentUserId: userId,
+    );
+    _vlog('NIDA valid: ${nidaResult.isValid} '
+          '(${nidaResult.error ?? nidaResult.normalizedNida})');
 
-    if (gpsFailReason != null) {
-      // > 2 km → immediate fail
-      final result = VerificationResult.nearOwner(
-        verified:      false,
-        gpsScore:      0,
-        photoScore:    0,
-        distanceMeters: distanceM,
-        rejectionReason: gpsFailReason,
-      );
-      await _log(result, propertyId: null);
-      return result;
+    // ── Signal 2: EXIF GPS ───────────────────────────────────────────────
+    _vlog('Scanning ${listingPhotos.length} photo(s) for EXIF GPS...');
+    final exifService  = ExifGpsService();
+    final exifScan     = await exifService.scanPhotos(
+      photos:      listingPhotos,
+      propertyLat: propertyLat,
+      propertyLng: propertyLng,
+    );
+    _vlog('EXIF GPS matched: ${exifScan.matched} '
+          '(distance: ${exifScan.distanceMeters?.toStringAsFixed(0) ?? "—"} m, '
+          '${exifScan.photosWithGps}/${listingPhotos.length} photos had GPS)');
+
+    // ── Signal 3: Photos count ───────────────────────────────────────────
+    final photosCount = listingPhotos.length;
+
+    // ── Signal 4: Account age ────────────────────────────────────────────
+    final createdAtStr = _supabase.auth.currentUser?.createdAt;
+    int accountAgeDays = 0;
+    if (createdAtStr != null) {
+      try {
+        final created = DateTime.parse(createdAtStr);
+        accountAgeDays = DateTime.now().difference(created).inDays;
+      } catch (_) {}
     }
+    _vlog('Account age: $accountAgeDays days');
 
-    // ── 2. Photo similarity score ─────────────────────────────────────────
-    final photoScore = await _photoSim.comparePhotos(
-      livePhoto:    livePhoto,
-      listingPhotos: listingPhotos,
-    );
-    _vlog('Photo score: $photoScore/50');
+    // ── Signal 5: Profile photo ──────────────────────────────────────────
+    final meta            = _supabase.auth.currentUser?.userMetadata;
+    final hasProfilePhoto = (meta?['avatar_url'] as String?)?.isNotEmpty == true;
+    _vlog('Has profile photo: $hasProfilePhoto');
 
-    final totalScore = gpsScore + photoScore;
-    final passed     = totalScore >= _kNearOwnerPassThreshold;
-
-    _vlog('Total: $totalScore/100 → ${passed ? "VERIFIED ✅" : "REJECTED ❌"}');
-
-    final result = VerificationResult.nearOwner(
-      verified:      passed,
-      gpsScore:      gpsScore,
-      photoScore:    photoScore,
-      distanceMeters: distanceM,
-      rejectionReason: passed
-          ? null
-          : 'Score $totalScore/100 is below the required 60. '
-            'GPS: $gpsScore/50, Photo: $photoScore/50. '
-            'Both location and a valid photo of the property are required.',
+    // ── Fraud score ──────────────────────────────────────────────────────
+    final scoreService = FraudScoreService();
+    final result = scoreService.calculate(
+      nidaValidated:         nidaResult.isValid,
+      exifGpsMatched:        exifScan.matched,
+      exifGpsDistanceMeters: exifScan.distanceMeters,
+      photosCount:           photosCount,
+      accountAgeDays:        accountAgeDays,
+      hasProfilePhoto:       hasProfilePhoto,
+      nidaNumber:            nidaResult.normalizedNida,
     );
 
-    await _log(result, propertyId: null);
+    _vlog('Score: ${result.fraudScore}/100 → ${result.tierLabel} ${result.tierEmoji}');
     return result;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // METHOD 2 — FAR OWNER
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Attach to saved property ─────────────────────────────────────────────
 
-  /// Verifies ownership by matching the name on an ID card against the name
-  /// on a Hati (Title Deed) using on-device ML Kit OCR.
-  ///
-  /// [idImage]        — photo of the ID card (NIDA, Driving License, or Voter ID).
-  /// [hatiImage]      — photo of the Hati (Title Deed).
-  /// [idDocumentType] — which ID was used ('nida' | 'driving_license' | 'voter').
-  Future<VerificationResult> verifyFarOwner({
-    required XFile  idImage,
-    required XFile  hatiImage,
-    required String idDocumentType,
-  }) async {
-    // ── 1. OCR both documents ──────────────────────────────────────────────
-    _vlog('Running OCR on ID card...');
-    final idDoc   = await _ocr.processDocument(idImage);
-    _vlog('Running OCR on Hati...');
-    final hatiDoc = await _ocr.processDocument(hatiImage);
-
-    final idName   = idDoc.name;
-    final hatiName = hatiDoc.name;
-
-    // ── 2. Country check — both documents must be Tanzanian ───────────────
-    if (!idDoc.isTanzanian || !hatiDoc.isTanzanian) {
-      final which = !idDoc.isTanzanian && !hatiDoc.isTanzanian
-          ? 'ID card and Hati'
-          : !idDoc.isTanzanian ? 'ID card' : 'Hati';
-      final result = VerificationResult.farOwner(
-        verified: false,
-        nameMatchPct: 0.0,
-        idDocumentType: idDocumentType,
-        idNameExtracted: idDoc.name ?? '',
-        hatiNameExtracted: hatiDoc.name ?? '',
-        rejectionReason: '$which does not appear to be a Tanzanian document. '
-            'Only Tanzanian NIDA cards, Driving Licenses, Voter IDs, and Hati documents are accepted.',
-      );
-      await _log(result, propertyId: null);
-      return result;
-    }
-
-    if (idName == null || hatiName == null) {
-      final missing = idName == null && hatiName == null
-          ? 'Both ID card and Hati'
-          : idName == null ? 'ID card' : 'Hati';
-      _vlog('OCR failed: $missing — could not extract a name');
-
-      final result = VerificationResult.farOwner(
-        verified:          false,
-        nameMatchPct:      0.0,
-        idDocumentType:    idDocumentType,
-        idNameExtracted:   idName   ?? '',
-        hatiNameExtracted: hatiName ?? '',
-        rejectionReason: '$missing: could not read the owner\'s name. '
-            'Ensure the document is clear and well-lit.',
-      );
-      await _log(result, propertyId: null);
-      return result;
-    }
-
-    // ── 3. Fuzzy name match ───────────────────────────────────────────────
-    final matchPct = fuzzyNameMatch(idName, hatiName);
-    final passed   = matchPct >= _kFarOwnerPassThreshold;
-
-    _vlog('Name match: "$idName" vs "$hatiName" → ${matchPct.toStringAsFixed(1)}% → '
-        '${passed ? "VERIFIED ✅" : "REJECTED ❌"}');
-
-    final result = VerificationResult.farOwner(
-      verified:          passed,
-      nameMatchPct:      matchPct,
-      idDocumentType:    idDocumentType,
-      idNameExtracted:   idName,
-      hatiNameExtracted: hatiName,
-      rejectionReason: passed
-          ? null
-          : 'Name match ${matchPct.toStringAsFixed(0)}% is below the required 70%. '
-            'ID: "$idName" — Hati: "$hatiName". '
-            'Ensure both documents belong to the same owner.',
-    );
-
-    await _log(result, propertyId: null);
-    return result;
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // STAMP property after submission
-  // ══════════════════════════════════════════════════════════════════════════
-
-  /// Call this after the property has been saved to Supabase to link the
-  /// verification log to the property row.
-  ///
-  /// This updates `properties.is_owner_verified` via the DB function.
+  /// Logs the verification result to Supabase and marks
+  /// [is_owner_verified] on the property row (true when score ≥ 35).
   Future<void> attachVerificationToProperty({
-    required String propertyId,
+    required String             propertyId,
     required VerificationResult result,
   }) async {
     try {
@@ -259,94 +149,10 @@ class VerificationService {
         'p_rejection_reason':    result.rejectionReason,
         'p_app_version':         null,
       });
-      _vlog('Verification attached to property $propertyId');
+      _vlog('Verification attached to property $propertyId '
+            '(score ${result.fraudScore}, ${result.statusString})');
     } catch (e) {
-      _vlog('Failed to attach verification to property: $e');
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // INTERNALS
-  // ══════════════════════════════════════════════════════════════════════════
-
-  // ── GPS ──────────────────────────────────────────────────────────────────
-
-  /// Returns (gpsScore, distanceMeters, failReason).
-  /// failReason is non-null only when > 2 km (instant fail).
-  Future<(int, double, String?)> _computeGpsScore(
-    double propertyLat, double propertyLng,
-  ) async {
-    try {
-      final permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        final req = await Geolocator.requestPermission();
-        if (req == LocationPermission.denied ||
-            req == LocationPermission.deniedForever) {
-          return (0, 9999.0, 'Location permission denied. Please enable location access to verify near-owner.');
-        }
-      }
-
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
-        ),
-      );
-
-      final dist = Geolocator.distanceBetween(
-        pos.latitude, pos.longitude,
-        propertyLat, propertyLng,
-      );
-
-      _vlog('Device: (${pos.latitude}, ${pos.longitude})  '
-            'Property: ($propertyLat, $propertyLng)  '
-            'Distance: ${dist.toStringAsFixed(0)} m');
-
-      if (dist > _kMaxDistanceMeters) {
-        return (
-          0,
-          dist,
-          'You are ${(dist / 1000).toStringAsFixed(1)} km from the property. '
-          'Near-owner verification requires being within 2 km. '
-          'If you are far away, use the "Far Owner" method instead.',
-        );
-      }
-
-      final score = dist <= 300  ? 50   // ≤300 m  → 50 pts (needs photo to reach 60)
-                  : dist <= 1000 ? 30   // 300–1000 m → 30 pts
-                  :                15;  // 1–2 km  → 15 pts
-
-      return (score, dist, null);
-    } catch (e) {
-      _vlog('GPS error: $e');
-      return (0, 9999.0, 'Could not determine your location. Please enable GPS and try again.');
-    }
-  }
-
-  // ── Supabase logging ──────────────────────────────────────────────────────
-
-  Future<void> _log(VerificationResult result, {required String? propertyId}) async {
-    try {
-      await _supabase.rpc('log_ownership_verification', params: {
-        'p_property_id':         propertyId,
-        'p_user_id':             _supabase.auth.currentUser!.id,
-        'p_method':              result.methodString,
-        'p_status':              result.statusString,
-        'p_gps_score':           result.gpsScore,
-        'p_photo_score':         result.photoScore,
-        'p_total_score':         result.totalScore,
-        'p_distance_meters':     result.distanceMeters,
-        'p_id_document_type':    result.idDocumentType,
-        'p_id_name_extracted':   result.idNameExtracted,
-        'p_hati_name_extracted': result.hatiNameExtracted,
-        'p_name_match_pct':      result.nameMatchPct,
-        'p_rejection_reason':    result.rejectionReason,
-        'p_app_version':         null,
-      });
-    } catch (e) {
-      // Non-fatal: verification result is already computed on-device.
-      _vlog('Supabase log error (non-fatal): $e');
+      _vlog('Failed to attach verification (non-fatal): $e');
     }
   }
 }

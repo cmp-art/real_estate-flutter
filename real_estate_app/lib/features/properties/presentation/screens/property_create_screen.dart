@@ -31,8 +31,6 @@ import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../subscriptions/presentation/screens/subscription_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/models/verification_result.dart';
-import '../../../../core/services/ocr_service.dart';
-import '../../../../core/services/photo_similarity_service.dart';
 import '../../../../core/services/verification_service.dart';
 import '../widgets/verification_section_widget.dart';
 
@@ -1019,13 +1017,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       },
       (createdProperty) async {
         // Attach verification log to the newly created property (non-fatal).
-        if (_verificationResult != null && widget.property == null) {
+        // Only log when the user has interacted with the verification widget.
+        if (widget.property == null && _verificationResult != null) {
           try {
-            final verificationService = VerificationService(
-              photoSimilarityService: PhotoSimilarityService(),
-              ocrService: OcrService(),
-            );
-            await verificationService.attachVerificationToProperty(
+            await VerificationService().attachVerificationToProperty(
               propertyId: createdProperty.id,
               result:     _verificationResult!,
             );
@@ -1602,6 +1597,13 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                 _propertyLat = lat;
                 _propertyLng = lng;
               }),
+              // Clear stored coordinates whenever the user edits the text
+              // field manually so stale coords from a previous selection can
+              // never be used for GPS verification.
+              onCoordinatesCleared: () => setState(() {
+                _propertyLat = null;
+                _propertyLng = null;
+              }),
             ),
             _FieldTip(s.locationTip),
             SizedBox(height: ResponsiveHelper.getResponsivePadding(context)),
@@ -1701,43 +1703,23 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                 propertyLng:   _propertyLng,
               ),
               SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 2)),
-              // Warn if not yet verified
+              // Gentle tip when no verification has been entered yet
               if (_verificationResult == null)
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color:        Colors.amber.shade50,
+                    color:        Colors.blue.shade50,
                     borderRadius: BorderRadius.circular(8),
-                    border:       Border.all(color: Colors.amber.shade300),
+                    border:       Border.all(color: Colors.blue.shade200),
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.info_outline, color: Colors.amber, size: 18),
+                      Icon(Icons.info_outline, color: Colors.blue, size: 18),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Complete ownership verification before submitting.',
-                          style: TextStyle(fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (_verificationResult != null && _verificationResult!.isRejected)
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color:        Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border:       Border.all(color: Colors.red.shade300),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.cancel_outlined, color: Colors.red, size: 18),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Verification failed. Please try again before submitting.',
+                          'Verification is optional — enter your NIDA to '
+                          'earn a Verified badge and increase buyer trust.',
                           style: TextStyle(fontSize: 13),
                         ),
                       ),
@@ -1751,8 +1733,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: (_isLoading || _isValidating ||
-                    (widget.property == null && (_verificationResult == null || _verificationResult!.isRejected)))
+                onPressed: (_isLoading || _isValidating)
                     ? null
                     : () { _handleSubmit(); },
                 style: ElevatedButton.styleFrom(

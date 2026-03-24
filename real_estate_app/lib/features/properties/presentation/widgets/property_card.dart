@@ -5,6 +5,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../domain/entities/property_entity.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
+import 'trust_badge_widget.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 class PropertyCard extends StatelessWidget {
@@ -55,6 +56,12 @@ class PropertyCard extends StatelessWidget {
                           child: const Icon(Icons.home_work, size: 50),
                         ),
                 ),
+                // Trust badge — top left
+                if (property.isOwnerVerified)
+                  Positioned(
+                    top: 8, left: 8,
+                    child: TrustBadgeWidget(isVerified: true),
+                  ),
                 // Favorite Button
                 Positioned(
                   top: 8,
