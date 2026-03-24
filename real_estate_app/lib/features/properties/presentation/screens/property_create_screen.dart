@@ -304,6 +304,33 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     );
   }
 
+  // ── Resolve XFiles for upload (web: use cached bytes to bypass blob: SW issue) ─
+  // On web, image_picker returns XFile objects whose path is a blob: URL.
+  // The PWA service worker intercepts blob: fetches from its own context where
+  // the blob is inaccessible, so readAsBytes() would receive index.html bytes.
+  // We pre-cache bytes at pick time (_cacheWebBytes) and create byte-backed
+  // XFile objects here so the datasource's readAsBytes() never touches the
+  // blob URL at all.
+  Future<List<XFile>> _resolveUploadFiles() async {
+    if (!kIsWeb) return _images;
+    final result = <XFile>[];
+    for (final f in _images) {
+      var bytes = _webBytes[f.path];
+      if (bytes == null || bytes.isEmpty) {
+        try {
+          bytes = await f.readAsBytes();
+          if (bytes.isNotEmpty) _webBytes[f.path] = bytes;
+        } catch (_) {}
+      }
+      if (bytes != null && bytes.isNotEmpty) {
+        result.add(XFile.fromData(bytes,
+            name: f.name.isNotEmpty ? f.name : 'photo.jpg',
+            mimeType: 'image/jpeg'));
+      }
+    }
+    return result.isEmpty ? _images : result;
+  }
+
   // ── Photo picker ───────────────────────────────────────────────────────────
   Future<void> _pickImages() async {
     final remaining = AppConstants.maxImagesPerProperty - _images.length;
@@ -390,9 +417,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         PropertyEntity finalSaved = saved;
 
         if (_images.isNotEmpty) {
-          final uploadResult = await repo.uploadImages(saved.id, _images);
+          // On web: resolve blob-URL XFiles to byte-backed XFiles first
+          final toUpload = await _resolveUploadFiles();
+          final uploadResult = await repo.uploadImages(saved.id, toUpload);
           await uploadResult.fold(
-            (_) async => _snack(s.photoFail, isError: false),
+            (_) async => _snack(s.photoFail, isError: true),
             (urls) async {
               final withImages = saved.copyWith(
                   images: [...saved.images, ...urls]);
@@ -423,6 +452,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           } catch (_) {}
         }
         ref.invalidate(myPropertiesProvider);
+        ref.invalidate(propertyListProvider);
 
         _snack(_isEditing ? s.updatedOk : s.createdOk, isError: false);
         Navigator.pop(context, true);

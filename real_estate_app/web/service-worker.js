@@ -1,7 +1,7 @@
 // service-worker.js — Patamjengo PWA
 // Handles: caching, offline fallback, Web Push notifications (Supabase-powered)
 
-const CACHE_NAME    = 'patamjengo-v3';
+const CACHE_NAME    = 'patamjengo-v4';
 const OFFLINE_URL   = '/index.html';
 
 const PRECACHE_URLS = [
@@ -39,6 +39,11 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
 
   if (url.origin !== location.origin || request.method !== 'GET') return;
+  // blob: URLs are page-context-specific. A service worker calling fetch(blobUrl)
+  // runs in a separate context and cannot access the blob — it would fail and fall
+  // back to serving index.html instead of the image bytes.  Let the browser
+  // handle blob: fetches natively so readAsBytes() gets the correct data.
+  if (url.protocol === 'blob:') return;
 
   event.respondWith(
     fetch(request)
