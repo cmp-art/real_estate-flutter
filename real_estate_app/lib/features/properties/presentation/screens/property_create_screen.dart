@@ -488,7 +488,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               const SizedBox(height: 24),
 
               // ── Property Type ─────────────────────────────────────────
-              _SectionLabel(_isEditing ? t('property_type') : 'Type'),
+              _SectionLabel('Property Type'),
               const SizedBox(height: 8),
               _buildTypeChips(s),
               if (_type == PropertyType.rent) ...[
