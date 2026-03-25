@@ -349,8 +349,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
       var bytes = _webBytes[f.path];
       if (bytes == null || bytes.isEmpty) {
         try {
-          bytes = await f.readAsBytes();
-          if (bytes.isNotEmpty) _webBytes[f.path] = bytes;
+          bytes = await f.readAsBytes().timeout(const Duration(seconds: 10));
+          if (bytes.isNotEmpty && !_looksLikeHtml(bytes)) {
+            _webBytes[f.path] = bytes;
+          }
         } catch (_) {}
       }
       if (bytes != null && bytes.isNotEmpty) {
