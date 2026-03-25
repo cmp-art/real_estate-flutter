@@ -221,9 +221,6 @@ class ImageHelper {
             context: context,
             presentStyle: WebPresentStyle.dialog,
             size: const CropperSize(width: 520, height: 420),
-            enableExif: true,
-            enableZoom: true,
-            showZoomer: true,
           ),
         ],
       );
