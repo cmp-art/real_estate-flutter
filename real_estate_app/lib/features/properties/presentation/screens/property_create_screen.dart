@@ -1099,29 +1099,24 @@ class _MobileWebBanner extends StatelessWidget {
             'For the best experience, list your property from a PC browser or use the Android app.',
             style: TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
           ),
+          const SizedBox(height: 4),
+          const Text(
+            'On PC, visit: www.patamjengo.com',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.black54,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              _BannerButton(
-                icon: Icons.android_rounded,
-                label: 'Play Store',
-                color: Colors.green,
-                onTap: () async {
-                  final uri = Uri.parse(_playStoreUrl);
-                  if (await canLaunchUrl(uri)) launchUrl(uri);
-                },
-              ),
-              const SizedBox(width: 8),
-              _BannerButton(
-                icon: Icons.computer_rounded,
-                label: 'Use PC browser',
-                color: Colors.blueGrey,
-                onTap: () async {
-                  final uri = Uri.parse('https://patamjengo.netlify.app');
-                  if (await canLaunchUrl(uri)) launchUrl(uri);
-                },
-              ),
-            ],
+          _BannerButton(
+            icon: Icons.android_rounded,
+            label: 'Download on Play Store',
+            color: Colors.green,
+            onTap: () async {
+              final uri = Uri.parse(_playStoreUrl);
+              if (await canLaunchUrl(uri)) launchUrl(uri);
+            },
           ),
         ],
       ),
