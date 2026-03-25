@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:flutter/material.dart';
@@ -85,6 +86,13 @@ class ImageHelper {
   // [onOversized] is called when one or more images are skipped because they
   // exceed [AppConstants.maxImageSize].  The callback receives the number of
   // skipped files and the limit in MB so the caller can show a snackbar.
+  //
+  // On web (PWA / mobile browser) we intentionally pick ONE image at a time
+  // using pickImage() instead of pickMultiImage().  pickMultiImage decodes all
+  // selected photos in parallel on the browser canvas — each full JPEG decode
+  // costs 48–434 MB RAM depending on camera resolution.  Mobile browsers kill
+  // the tab if this exceeds ~300 MB.  Picking sequentially lets the browser GC
+  // between picks and stays safely within the memory budget.
   Future<List<XFile>> pickMultipleImages({
     int maxImages = 10,
     void Function(int skippedCount, double maxMB)? onOversized,
@@ -92,11 +100,25 @@ class ImageHelper {
     if (_isPickerActive) return [];     // already open — silently ignore
     _isPickerActive = true;
     try {
-      final List<XFile> images = await _picker.pickMultiImage(
-        maxWidth: 1920,
-        maxHeight: 1920,
-        imageQuality: 85,
-      );
+      List<XFile> images;
+
+      if (kIsWeb) {
+        // Web: single-file pick to avoid parallel canvas decodes crashing mobile
+        // browsers.  maxWidth/maxHeight capped at 1280 to reduce canvas RAM.
+        final XFile? single = await _picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1280,
+          maxHeight: 1280,
+          imageQuality: 85,
+        );
+        images = single != null ? [single] : [];
+      } else {
+        images = await _picker.pickMultiImage(
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85,
+        );
+      }
 
       if (images.isEmpty) return [];
 
