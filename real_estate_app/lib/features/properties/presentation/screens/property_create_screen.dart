@@ -383,9 +383,19 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         isError: false,
       ),
     );
-    if (picked.isNotEmpty && mounted) {
-      await _cacheWebBytes(picked);
-      setState(() => _images = [..._images, ...picked]);
+    if (picked.isEmpty || !mounted) return;
+
+    // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
+    final cropped = <XFile>[];
+    for (final image in picked) {
+      if (!mounted) break;
+      final result = await _imageHelper.cropToCard(context, image);
+      if (result != null) cropped.add(result);
+    }
+
+    if (cropped.isNotEmpty && mounted) {
+      await _cacheWebBytes(cropped);
+      setState(() => _images = [..._images, ...cropped]);
     }
   }
 

@@ -150,44 +150,89 @@ class ImageHelper {
     }
   }
 
-  // Crop image
+  // Crop image (free-form, legacy use)
   Future<File?> cropImage(File imageFile) async {
-  try {
-    final croppedFile = await ImageCropper().cropImage(
-      sourcePath: imageFile.path,
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: 'Crop Image',
-          toolbarColor: ThemeConfig.primaryColor,
-          toolbarWidgetColor: Colors.white,
-          initAspectRatio: CropAspectRatioPreset.ratio16x9,
-          lockAspectRatio: false,
-          aspectRatioPresets: [
-            CropAspectRatioPreset.square,
-            CropAspectRatioPreset.ratio16x9,
-            CropAspectRatioPreset.ratio4x3,
-          ],
-        ),
-        IOSUiSettings(
-          title: 'Crop Image',
-          aspectRatioLockEnabled: false,
-          aspectRatioPresets: [
-            CropAspectRatioPreset.square,
-            CropAspectRatioPreset.ratio16x9,
-            CropAspectRatioPreset.ratio4x3,
-          ],
-        ),
-      ],
-    );
-
-    if (croppedFile != null) {
-      return File(croppedFile.path);
+    try {
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: imageFile.path,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Image',
+            toolbarColor: ThemeConfig.primaryColor,
+            toolbarWidgetColor: Colors.white,
+            initAspectRatio: CropAspectRatioPreset.ratio16x9,
+            lockAspectRatio: false,
+            aspectRatioPresets: [
+              CropAspectRatioPreset.square,
+              CropAspectRatioPreset.ratio16x9,
+              CropAspectRatioPreset.ratio4x3,
+            ],
+          ),
+          IOSUiSettings(
+            title: 'Crop Image',
+            aspectRatioLockEnabled: false,
+            aspectRatioPresets: [
+              CropAspectRatioPreset.square,
+              CropAspectRatioPreset.ratio16x9,
+              CropAspectRatioPreset.ratio4x3,
+            ],
+          ),
+        ],
+      );
+      if (croppedFile != null) return File(croppedFile.path);
+      return null;
+    } catch (e) {
+      throw ValidationException(e.toString());
     }
-    return null;
-  } catch (e) {
-    throw ValidationException(e.toString());
   }
-}
+
+  // ── Crop an XFile to 4:3 for property card display ────────────────────────
+  // Forces the user to frame their photo in a 4:3 landscape ratio so it fills
+  // property cards perfectly without unexpected cropping at display time.
+  // Works on Android, iOS, and Web. Returns null if the user cancels.
+  Future<XFile?> cropToCard(BuildContext context, XFile image) async {
+    try {
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: image.path,
+        aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 88,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Frame your photo (4:3)',
+            toolbarColor: ThemeConfig.primaryColor,
+            toolbarWidgetColor: Colors.white,
+            statusBarColor: ThemeConfig.primaryColor,
+            activeControlsWidgetColor: ThemeConfig.primaryColor,
+            lockAspectRatio: true,
+            initAspectRatio: CropAspectRatioPreset.ratio4x3,
+            aspectRatioPresets: [CropAspectRatioPreset.ratio4x3],
+            showCropGrid: true,
+            hideBottomControls: false,
+          ),
+          IOSUiSettings(
+            title: 'Frame your photo',
+            aspectRatioLockEnabled: true,
+            resetAspectRatioEnabled: false,
+            aspectRatioPickerButtonHidden: true,
+            aspectRatioPresets: [CropAspectRatioPreset.ratio4x3],
+          ),
+          WebUiSettings(
+            context: context,
+            presentStyle: WebPresentStyle.dialog,
+            size: const CropperSize(width: 520, height: 420),
+            enableExif: true,
+            enableZoom: true,
+            showZoomer: true,
+          ),
+        ],
+      );
+      if (croppedFile == null) return null;
+      return XFile(croppedFile.path);
+    } catch (e) {
+      throw ValidationException(e.toString());
+    }
+  }
 
 
   // Show image source dialog

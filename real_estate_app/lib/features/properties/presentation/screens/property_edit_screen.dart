@@ -171,10 +171,20 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
       },
     );
 
-    if (images.isNotEmpty && mounted) {
-      await _cacheWebBytes(images);
+    if (images.isEmpty || !mounted) return;
+
+    // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
+    final cropped = <XFile>[];
+    for (final image in images) {
+      if (!mounted) break;
+      final result = await _imageHelper.cropToCard(context, image);
+      if (result != null) cropped.add(result);
+    }
+
+    if (cropped.isNotEmpty && mounted) {
+      await _cacheWebBytes(cropped);
       setState(() {
-        _selectedImages.addAll(images);
+        _selectedImages.addAll(cropped);
       });
     }
   }
