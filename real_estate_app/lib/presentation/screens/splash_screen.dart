@@ -1,6 +1,8 @@
 // lib/presentation/screens/splash_screen.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/config/theme_config.dart';
 import '../../core/utils/logger.dart';
 import '../../features/main_navigation/presentation/screens/main_screen.dart';
@@ -23,8 +25,88 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     _checkAuthStatus();
   }
 
+  /// Returns true when running in a mobile browser (phone/tablet web or PWA).
+  /// Uses screen width as a reliable proxy: phones are <600 logical px wide.
+  bool get _isMobileWeb {
+    if (!kIsWeb) return false;
+    return MediaQuery.sizeOf(context).width < 600;
+  }
+
+  Future<void> _showMobileWebWarning() async {
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          const Icon(Icons.phone_android_rounded, color: Colors.orange, size: 26),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Better on Desktop or App',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Patamjengo works best on a desktop browser or the Android app. '
+              'Some features (like photo uploads) may not work correctly on mobile browsers.',
+              style: TextStyle(fontSize: 14, height: 1.5),
+            ),
+            const SizedBox(height: 16),
+            _WarningOption(
+              icon: Icons.computer_rounded,
+              color: ThemeConfig.primaryColor,
+              title: 'Use on PC / Desktop',
+              subtitle: 'Open patamjengo.netlify.app on a desktop browser',
+            ),
+            const SizedBox(height: 10),
+            _WarningOption(
+              icon: Icons.android_rounded,
+              color: Colors.green,
+              title: 'Download Android App',
+              subtitle: 'Get the full experience from Google Play Store',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Continue anyway',
+                style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.android_rounded, size: 18),
+            label: const Text('Play Store'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final uri = Uri.parse(
+                  'https://play.google.com/store/apps/details?id=com.patamjengo.app');
+              if (await canLaunchUrl(uri)) launchUrl(uri);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _checkAuthStatus() async {
     await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+
+    // Warn mobile web / PWA users before proceeding
+    if (_isMobileWeb) await _showMobileWebWarning();
     if (!mounted) return;
 
     try {
@@ -134,6 +216,53 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Small helper widget used inside the mobile-web warning dialog ─────────────
+class _WarningOption extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  const _WarningOption({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: color, size: 20),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 13)),
+              Text(subtitle,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                      height: 1.3)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
