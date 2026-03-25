@@ -196,6 +196,14 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper>
     logger.d('🔍 AuthWrapper - Session exists: $hasActiveSession');
     logger.d('🔍 AuthWrapper - Password recovery: $isPasswordRecovery');
 
+    // ── ALWAYS show SplashScreen while auth is still loading ──────────────
+    // This prevents the LoginScreen flash that happens when Supabase hasn't
+    // yet restored the session from storage on the first build.
+    if (authState.isLoading) {
+      logger.d('⏳ Auth loading - showing SplashScreen');
+      return const SplashScreen();
+    }
+
     // Password recovery takes priority
     if (isPasswordRecovery) {
       logger.d('🔐 Password recovery mode - showing ResetPasswordScreen');
@@ -216,7 +224,7 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper>
 
     // Session exists but notifier hasn't loaded the user yet.
     // Trigger refreshUser() once as a fallback safety net.
-    if (!authState.isLoading && authState.valueOrNull == null) {
+    if (authState.valueOrNull == null) {
       if (!_refreshRequested) {
         _refreshRequested = true;
         logger.d('🔄 Session active but user null — triggering refresh');

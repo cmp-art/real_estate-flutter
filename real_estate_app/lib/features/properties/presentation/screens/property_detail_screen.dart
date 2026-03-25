@@ -130,7 +130,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               ),
               child: CachedNetworkImage(
                 imageUrl: images[index],
-                fit: BoxFit.cover,
+                fit: BoxFit.contain,
                 placeholder: (_, __) => Container(
                   color: Theme.of(context).scaffoldBackgroundColor,
                   child: const Center(child: CircularProgressIndicator()),
