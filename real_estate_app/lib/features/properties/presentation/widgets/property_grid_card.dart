@@ -351,40 +351,42 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
             Stack(
               children: [
                 // First image only — no carousel to reduce CDN egress
-                Container(
-                  height: 500,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      topRight: Radius.circular(12),
+                AspectRatio(
+                  aspectRatio: ResponsiveHelper.isDesktop(context) ? 16 / 9 : 4 / 3,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        topRight: Radius.circular(12),
+                      ),
                     ),
+                    child: widget.property.images.isNotEmpty
+                        ? ClipRRect(
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(12),
+                              topRight: Radius.circular(12),
+                            ),
+                            child: CachedNetworkImage(
+                              imageUrl: widget.property.images.first,
+                              cacheManager: CustomCacheManager.instance,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                              placeholder: (context, url) => Container(
+                                color: backgroundColor,
+                                child: const Center(child: CircularProgressIndicator(color: ThemeConfig.primaryColor)),
+                              ),
+                              errorWidget: (context, url, error) => Container(
+                                color: backgroundColor,
+                                child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor),
+                              ),
+                              fadeInDuration: const Duration(milliseconds: 300),
+                              fadeOutDuration: const Duration(milliseconds: 100),
+                            ),
+                          )
+                        : Center(child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor)),
                   ),
-                  child: widget.property.images.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(12),
-                            topRight: Radius.circular(12),
-                          ),
-                          child: CachedNetworkImage(
-                            imageUrl: widget.property.images.first,
-                            cacheManager: CustomCacheManager.instance,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            placeholder: (context, url) => Container(
-                              color: backgroundColor,
-                              child: const Center(child: CircularProgressIndicator(color: ThemeConfig.primaryColor)),
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              color: backgroundColor,
-                              child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor),
-                            ),
-                            fadeInDuration: const Duration(milliseconds: 300),
-                            fadeOutDuration: const Duration(milliseconds: 100),
-                          ),
-                        )
-                      : Center(child: Icon(Icons.home, size: ResponsiveHelper.getResponsiveIconSize(context), color: iconColor)),
                 ),
 
                 // Verified owner badge — top right
@@ -430,8 +432,8 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                 ),
 
 
-                // Media count badge — bottom right (tap to see all in detail screen)
-                if (widget.property.images.length + (widget.property.videos.isNotEmpty ? 1 : 0) > 1)
+                // Media count badge — bottom right
+                if (widget.property.images.length > 1)
                   Positioned(
                     bottom: 8, right: 8,
                     child: Container(
@@ -446,38 +448,13 @@ class _PropertyGridCardState extends ConsumerState<PropertyGridCard> {
                           const Icon(Icons.photo_library_outlined, color: Colors.white, size: 12),
                           const SizedBox(width: 3),
                           Text(
-                            '${widget.property.images.length + (widget.property.videos.isNotEmpty ? 1 : 0)}',
+                            '${widget.property.images.length}',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                // VIDEO badge — bottom left
-                if (widget.property.videos.isNotEmpty)
-                  Positioned(
-                    bottom: 8, left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade700,
-                        borderRadius: BorderRadius.circular(ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.videocam_rounded, color: Colors.white, size: 12),
-                          const SizedBox(width: 3),
-                          Text('VIDEO', style: TextStyle(
-                            color: Colors.white,
-                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-                            fontWeight: FontWeight.bold,
-                          )),
                         ],
                       ),
                     ),

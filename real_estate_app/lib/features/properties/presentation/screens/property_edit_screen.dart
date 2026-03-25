@@ -388,8 +388,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text(
                   '$skipped file${skipped > 1 ? 's' : ''} skipped — '
-                  'images must be under ${maxMB.toStringAsFixed(0)} MB, '
-                  'videos under 50 MB'),
+                  'images must be under ${maxMB.toStringAsFixed(0)} MB'),
               backgroundColor: Colors.orange,
               behavior: SnackBarBehavior.floating,
             ));

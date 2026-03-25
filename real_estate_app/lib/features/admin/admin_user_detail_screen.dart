@@ -10,7 +10,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/admin_service.dart';
@@ -137,7 +136,7 @@ extension AdminUserDetailsExtension on AdminService {
         final raw = await db
             .from('properties')
             .select('id, title, property_type, listing_type, price, '
-                'location, status, deleted_at, created_at, images, videos')
+                'location, status, deleted_at, created_at, images')
             .eq('owner_id', userId)
             .order('created_at', ascending: false)
             .limit(50);
@@ -205,7 +204,7 @@ extension AdminUserDetailsExtension on AdminService {
             .select('''
               id, campaign_id, ad_format, headline, description,
               call_to_action, image_url, logo_url, landing_url,
-              video_url, media_type, status, is_approved,
+              status, is_approved,
               impressions, clicks, created_at, deleted_at, deletion_reason,
               ad_campaigns (
                 advertiser_id,
@@ -1381,36 +1380,6 @@ class _AdCreativeCard extends StatefulWidget {
 }
 
 class _AdCreativeCardState extends State<_AdCreativeCard> {
-  VideoPlayerController? _videoCtrl;
-  bool _videoReady = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final mediaType = widget.ad['media_type'] as String? ?? 'image';
-    final videoUrl = widget.ad['video_url'] as String?;
-    if (mediaType == 'video' && videoUrl != null && videoUrl.isNotEmpty) {
-      _initVideo(videoUrl);
-    }
-  }
-
-  Future<void> _initVideo(String url) async {
-    try {
-      _videoCtrl = VideoPlayerController.networkUrl(Uri.parse(url));
-      await _videoCtrl!.initialize();
-      await _videoCtrl!.setLooping(true);
-      await _videoCtrl!.play();
-      if (mounted) setState(() => _videoReady = true);
-    } catch (e) {
-      debugPrint('Video init error: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    _videoCtrl?.dispose();
-    super.dispose();
-  }
 
   // ── Extract company name from nested join or flat field ─────────────────────
   String _companyName() {
@@ -1447,8 +1416,6 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
     final headline = ad['headline'] as String? ?? 'Ad';
     final company = _companyName();
     final imageUrl = ad['image_url'] as String?;
-    final videoUrl = ad['video_url'] as String?;
-    final mediaType = ad['media_type'] as String? ?? 'image';
     final description = ad['description'] as String?;
     final callToAction = ad['call_to_action'] as String?;
     final landingUrl = ad['landing_url'] as String?;
@@ -1456,7 +1423,6 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
     final isDeleted = ad['deleted_at'] != null;
     final isApproved = ad['is_approved'] as bool? ?? false;
     final status = ad['status'] as String? ?? '—';
-    final isVideo = mediaType == 'video';
     final hasLanding = landingUrl != null && landingUrl.isNotEmpty;
 
     Color statusColor = ThemeConfig.warningColor;
@@ -1480,8 +1446,8 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
       child: InkWell(
         onTap: hasLanding ? _openUrl : null,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // ── 220 px media — real video or cached image ─────────────────────
-          _buildMedia(imageUrl, videoUrl, mediaType, context),
+          // ── Media ─────────────────────────────────────────────────────────
+          _buildMedia(imageUrl, context),
 
           // ── Sponsored label + ⋮ menu ──────────────────────────────────────
           Padding(
@@ -1614,17 +1580,6 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
                         color: statusColor),
                   ),
                 ),
-                if (isVideo) ...[
-                  const SizedBox(width: 6),
-                  Icon(Icons.play_circle_outline_rounded,
-                      size: 13,
-                      color: ThemeConfig.getTextSecondaryColor(context)),
-                  const SizedBox(width: 3),
-                  Text('Video',
-                      style: TextStyle(
-                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-                          color: ThemeConfig.getTextSecondaryColor(context))),
-                ],
               ]),
 
               // CTA button — only when landing URL is present
@@ -1675,38 +1630,7 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
   }
 
   // ── Media widget ─────────────────────────────────────────────────────────────
-  Widget _buildMedia(String? imageUrl, String? videoUrl,
-      String mediaType, BuildContext context) {
-    // Playing video (initialized)
-    if (mediaType == 'video' && _videoCtrl != null && _videoReady) {
-      return AspectRatio(
-        aspectRatio: _videoCtrl!.value.aspectRatio,
-        child: VideoPlayer(_videoCtrl!),
-      );
-    }
-
-    // Video loading — show thumbnail + play icon
-    if (mediaType == 'video') {
-      final thumb = (imageUrl != null && imageUrl.isNotEmpty) ? imageUrl : null;
-      return Container(
-        height: 220,
-        color: Colors.black87,
-        child: Stack(alignment: Alignment.center, children: [
-          if (thumb != null)
-            CachedNetworkImage(
-              imageUrl: thumb,
-              width: double.infinity,
-              height: 220,
-              fit: BoxFit.cover,
-              errorWidget: (_, __, ___) => const SizedBox(),
-            ),
-          Icon(Icons.play_circle_fill_rounded,
-              color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-        ]),
-      );
-    }
-
-    // Image
+  Widget _buildMedia(String? imageUrl, BuildContext context) {
     final url = imageUrl ?? '';
     if (url.isEmpty) {
       return Container(
@@ -1724,7 +1648,6 @@ class _AdCreativeCardState extends State<_AdCreativeCard> {
         ]),
       );
     }
-
     return CachedNetworkImage(
       imageUrl: url,
       width: double.infinity,

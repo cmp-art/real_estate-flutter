@@ -1,8 +1,6 @@
 // lib/features/admin/presentation/screens/admin_ad_detail_screen.dart
 
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/config/theme_config.dart';
@@ -36,7 +34,6 @@ class _AdminAdDetailScreenState extends ConsumerState<AdminAdDetailScreen> {
   String? get _desc      => _ad['description']         as String?;
   String? get _cta       => _ad['call_to_action']      as String?;
   String? get _landing   => _ad['landing_url']         as String?;
-  String? get _mediaType => _ad['media_type']          as String?;
   String  get _status    => _ad['status']              as String? ?? '—';
   bool   get _isApproved => _ad['is_approved']         as bool?   ?? false;
   bool   get _isDeleted  => _ad['deleted_at']          != null;
@@ -279,10 +276,6 @@ class _AdminAdDetailScreenState extends ConsumerState<AdminAdDetailScreen> {
                     const Divider(),
                     _row(Icons.link_rounded, 'Landing URL', _landing!),
                   ],
-                  if (_mediaType != null) ...[
-                    const Divider(),
-                    _row(Icons.perm_media_rounded, 'Media Type', _mediaType!),
-                  ],
                 ]),
 
                 SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
@@ -387,23 +380,6 @@ class _AdminAdDetailScreenState extends ConsumerState<AdminAdDetailScreen> {
   // ── Sub-widgets ───────────────────────────────────────────────────────────────
 
   Widget _buildMediaPreview() {
-    if (_mediaType == 'video') {
-      // Show a playable video. videoUrl preferred, fall back to imageUrl.
-      final videoSrc = (_ad['video_url'] as String?)?.isNotEmpty == true
-          ? _ad['video_url'] as String
-          : _imageUrl;
-      if (videoSrc != null && videoSrc.isNotEmpty) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: SizedBox(
-            height: 240,
-            width: double.infinity,
-            child: _AdVideoPlayer(url: videoSrc),
-          ),
-        );
-      }
-    }
-    // Image ad
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Image.network(
@@ -476,86 +452,3 @@ class _AdminAdDetailScreenState extends ConsumerState<AdminAdDetailScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// AD VIDEO PLAYER WIDGET
-// ─────────────────────────────────────────────────────────────────────────
-
-class _AdVideoPlayer extends StatefulWidget {
-  final String url;
-  const _AdVideoPlayer({required this.url});
-
-  @override
-  State<_AdVideoPlayer> createState() => _AdVideoPlayerState();
-}
-
-class _AdVideoPlayerState extends State<_AdVideoPlayer> {
-  VideoPlayerController? _vpc;
-  ChewieController? _chc;
-  bool _error = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    try {
-      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await ctrl.initialize();
-      final chc = ChewieController(
-        videoPlayerController: ctrl,
-        autoPlay: false,
-        looping: false,
-        showControls: true,
-        allowFullScreen: true,
-        materialProgressColors: ChewieProgressColors(
-          playedColor: ThemeConfig.primaryColor,
-          handleColor: ThemeConfig.primaryColor,
-          backgroundColor: Colors.grey.shade700,
-          bufferedColor: Colors.grey.shade500,
-        ),
-      );
-      if (mounted) setState(() { _vpc = ctrl; _chc = chc; });
-    } catch (e) {
-      debugPrint('Ad video error: $e');
-      if (mounted) setState(() => _error = true);
-    }
-  }
-
-  @override
-  void dispose() {
-    _chc?.dispose();
-    _vpc?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_error) {
-      return Container(
-      color: Colors.black87,
-      child: Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(Icons.error_outline_rounded, color: Colors.red, size: ResponsiveHelper.getResponsiveIconSize(context)),
-          const SizedBox(height: 8),
-          const Text('Failed to load video', style: TextStyle(color: Colors.white70, fontSize: 12)),
-        ]),
-      ),
-    );
-    }
-    if (_chc == null) {
-      return Container(
-      color: Colors.black87,
-      child: const Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-          SizedBox(height: 12),
-          Text('Loading video...', style: TextStyle(color: Colors.white70, fontSize: 12)),
-        ]),
-      ),
-    );
-    }
-    return Chewie(controller: _chc!);
-  }
-}

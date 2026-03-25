@@ -780,7 +780,7 @@ class AdminService {
           .select('''
             id, campaign_id, ad_format, headline, description,
             call_to_action, image_url, logo_url, landing_url,
-            video_url, media_type, status, is_approved,
+            status, is_approved,
             created_at, deleted_at, deletion_reason,
             ad_campaigns (
               campaign_name, campaign_objective, total_budget,

@@ -1,6 +1,6 @@
 // lib/features/admin/presentation/screens/admin_property_detail_screen.dart
 // Full-screen admin view for a single property:
-//   - View all images and videos
+//   - View all images
 //   - Delete individual media items (with notification to owner)
 //   - Delete / restore / feature / verify the property
 //   - Send notification to owner
@@ -9,8 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/admin_service.dart';
@@ -41,32 +39,21 @@ class _AdminPropertyDetailScreenState
 
   List<String> get _images =>
       (_prop['images'] as List?)?.cast<String>() ?? [];
-  List<String> get _videos =>
-      (_prop['videos'] as List?)?.cast<String>() ?? [];
   List<String> get _mediaUrls =>
       (_prop['media_urls'] as List?)?.cast<String>() ?? [];
 
-  /// Combined media: images first, then videos, then any extra media_urls
+  /// Combined media: images first, then any extra media_urls (images only)
   List<_MediaItem> get _allMedia {
     final items = <_MediaItem>[];
     for (final url in _images) {
-      items.add(_MediaItem(url: url, isVideo: false));
-    }
-    for (final url in _videos) {
-      items.add(_MediaItem(url: url, isVideo: true));
+      items.add(_MediaItem(url: url));
     }
     for (final url in _mediaUrls) {
-      if (!_images.contains(url) && !_videos.contains(url)) {
-        items.add(_MediaItem(url: url, isVideo: _isVideoUrl(url)));
+      if (!_images.contains(url)) {
+        items.add(_MediaItem(url: url));
       }
     }
     return items;
-  }
-
-  bool _isVideoUrl(String url) {
-    final lower = url.toLowerCase();
-    return lower.endsWith('.mp4') || lower.endsWith('.mov') ||
-        lower.endsWith('.webm') || lower.endsWith('.avi');
   }
 
   @override
@@ -168,7 +155,7 @@ class _AdminPropertyDetailScreenState
             Text('Media (${media.length} items)',
                 style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.bold,
                     color: ThemeConfig.getTextPrimaryColor(context))),
-            Text('${_images.length} photos • ${_videos.length} videos',
+            Text('${_images.length} photos',
                 style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12),
                     color: ThemeConfig.getTextSecondaryColor(context))),
           ]),
@@ -288,13 +275,10 @@ class _AdminPropertyDetailScreenState
       // Optimistically remove from local state
       setState(() {
         final images = List<String>.from(_prop['images'] as List? ?? []);
-        final videos = List<String>.from(_prop['videos'] as List? ?? []);
         final mediaUrls = List<String>.from(_prop['media_urls'] as List? ?? []);
         images.remove(mediaUrl);
-        videos.remove(mediaUrl);
         mediaUrls.remove(mediaUrl);
         _prop['images'] = images;
-        _prop['videos'] = videos;
         _prop['media_urls'] = mediaUrls;
       });
       _snack('Media deleted. Owner has been notified.', true);
@@ -886,8 +870,7 @@ class _AttemptTile extends StatelessWidget {
 
 class _MediaItem {
   final String url;
-  final bool isVideo;
-  const _MediaItem({required this.url, required this.isVideo});
+  const _MediaItem({required this.url});
 }
 
 class _MediaTile extends StatelessWidget {
@@ -904,46 +887,21 @@ class _MediaTile extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Stack(children: [
-          // Image / video thumbnail
+          // Image thumbnail
           SizedBox.expand(
-            child: item.isVideo
-                ? Container(
-                    color: Colors.black87,
-                    child: Center(
-                      child: Icon(Icons.play_circle_fill_rounded,
-                          color: Colors.white70, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                    ))
-                : Image.network(item.url,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (_, child, progress) => progress == null
-                        ? child
-                        : Container(
-                            color: Colors.grey.shade200,
-                            child: const Center(
-                                child: CircularProgressIndicator(strokeWidth: 2))),
-                    errorBuilder: (_, __, ___) => Container(
+            child: Image.network(item.url,
+                fit: BoxFit.cover,
+                loadingBuilder: (_, child, progress) => progress == null
+                    ? child
+                    : Container(
                         color: Colors.grey.shade200,
-                        child: const Icon(Icons.broken_image_rounded,
-                            color: Colors.grey))),
+                        child: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2))),
+                errorBuilder: (_, __, ___) => Container(
+                    color: Colors.grey.shade200,
+                    child: const Icon(Icons.broken_image_rounded,
+                        color: Colors.grey))),
           ),
-          // Video badge
-          if (item.isVideo)
-            Positioned(
-              top: 4, left: 4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(4)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.videocam_rounded, color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                  const SizedBox(width: 2),
-                  Text('VIDEO',
-                      style: TextStyle(color: Colors.white, fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 8),
-                          fontWeight: FontWeight.bold)),
-                ]),
-              ),
-            ),
           // Delete button
           if (onDelete != null)
             Positioned(
@@ -980,99 +938,19 @@ class _FullscreenMediaView extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(item.isVideo ? 'Video' : 'Photo',
-            style: const TextStyle(color: Colors.white)),
+        title: const Text('Photo', style: TextStyle(color: Colors.white)),
       ),
       body: Center(
-        child: item.isVideo
-            ? _AdminVideoPlayer(url: item.url)
-            : InteractiveViewer(
-                child: Image.network(
-                  item.url,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) =>
-                      Icon(Icons.broken_image, color: Colors.white70, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                ),
-              ),
+        child: InteractiveViewer(
+          child: Image.network(
+            item.url,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                Icon(Icons.broken_image, color: Colors.white70, size: ResponsiveHelper.getResponsiveIconSize(context)),
+          ),
+        ),
       ),
     );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// REUSABLE ADMIN VIDEO PLAYER (used in property + ad detail)
-// ─────────────────────────────────────────────────────────────────────────
-
-class _AdminVideoPlayer extends StatefulWidget {
-  final String url;
-  const _AdminVideoPlayer({required this.url});
-
-  @override
-  State<_AdminVideoPlayer> createState() => _AdminVideoPlayerState();
-}
-
-class _AdminVideoPlayerState extends State<_AdminVideoPlayer> {
-  VideoPlayerController? _vpc;
-  ChewieController? _chc;
-  bool _error = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    try {
-      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await ctrl.initialize();
-      final chc = ChewieController(
-        videoPlayerController: ctrl,
-        autoPlay: true,
-        looping: false,
-        showControls: true,
-        allowFullScreen: true,
-        materialProgressColors: ChewieProgressColors(
-          playedColor: ThemeConfig.primaryColor,
-          handleColor: ThemeConfig.primaryColor,
-          backgroundColor: Colors.grey.shade700,
-          bufferedColor: Colors.grey.shade500,
-        ),
-      );
-      if (mounted) setState(() { _vpc = ctrl; _chc = chc; });
-    } catch (e) {
-      debugPrint('Admin video error: $e');
-      if (mounted) setState(() => _error = true);
-    }
-  }
-
-  @override
-  void dispose() {
-    _chc?.dispose();
-    _vpc?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_error) {
-      return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(Icons.error_outline_rounded, color: Colors.red, size: ResponsiveHelper.getResponsiveIconSize(context)),
-      SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-      const Text('Failed to load video', style: TextStyle(color: Colors.white70)),
-      SizedBox(height: ResponsiveHelper.getResponsiveSpacing(context)),
-      SelectableText(widget.url,
-          style: const TextStyle(color: Colors.white38, fontSize: 10)),
-    ]);
-    }
-    if (_chc == null) {
-      return const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-      SizedBox(height: 16),
-      Text('Loading video...', style: TextStyle(color: Colors.white70)),
-    ]);
-    }
-    return Chewie(controller: _chc!);
   }
 }
 

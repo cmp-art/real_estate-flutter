@@ -83,25 +83,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
+            Image.asset(
+              'assets/images/ic_launcher.png',
               width: 120,
               height: 120,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.home_work,
-                size: 70,
-                color: ThemeConfig.primaryColor,
-              ),
             ),
             const SizedBox(height: 32),
             const Text(

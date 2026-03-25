@@ -215,8 +215,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
     final statusColor = _getStatusColor(widget.property.status, isDarkMode);
     final statusTextColor = _getStatusTextColor(widget.property.status, isDarkMode);
 
-    final hasVideo = widget.property.videos.isNotEmpty;
-    final totalMedia = widget.property.images.length + (hasVideo ? 1 : 0);
+    final totalMedia = widget.property.images.length;
 
     return GestureDetector(
       onTap: widget.onTap,
@@ -236,43 +235,45 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
             // ── Image section ─────────────────────────────────────────────
             Stack(
               children: [
-                Container(
-                  height: 220,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    borderRadius:
-                        const BorderRadius.vertical(top: Radius.circular(12)),
+                AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(12)),
+                    ),
+                    child: widget.property.images.isNotEmpty
+                        ? ClipRRect(
+                            borderRadius:
+                                const BorderRadius.vertical(top: Radius.circular(12)),
+                            child: CachedNetworkImage(
+                              imageUrl: widget.property.images.first,
+                              cacheManager: CustomCacheManager.instance,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: double.infinity,
+                              placeholder: (context, url) => Container(
+                                color: backgroundColor,
+                                child: const Center(
+                                    child: CircularProgressIndicator(
+                                        color: ThemeConfig.primaryColor)),
+                              ),
+                              errorWidget: (context, url, error) => Container(
+                                color: backgroundColor,
+                                child: Icon(Icons.home,
+                                    size: ResponsiveHelper.getResponsiveIconSize(context),
+                                    color: iconColor),
+                              ),
+                              fadeInDuration: const Duration(milliseconds: 300),
+                              fadeOutDuration: const Duration(milliseconds: 100),
+                            ),
+                          )
+                        : Center(
+                            child: Icon(Icons.home,
+                                size: ResponsiveHelper.getResponsiveIconSize(context),
+                                color: iconColor)),
                   ),
-                  child: widget.property.images.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius:
-                              const BorderRadius.vertical(top: Radius.circular(12)),
-                          child: CachedNetworkImage(
-                            imageUrl: widget.property.images.first,
-                            cacheManager: CustomCacheManager.instance,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            placeholder: (context, url) => Container(
-                              color: backgroundColor,
-                              child: const Center(
-                                  child: CircularProgressIndicator(
-                                      color: ThemeConfig.primaryColor)),
-                            ),
-                            errorWidget: (context, url, error) => Container(
-                              color: backgroundColor,
-                              child: Icon(Icons.home,
-                                  size: ResponsiveHelper.getResponsiveIconSize(context),
-                                  color: iconColor),
-                            ),
-                            fadeInDuration: const Duration(milliseconds: 300),
-                            fadeOutDuration: const Duration(milliseconds: 100),
-                          ),
-                        )
-                      : Center(
-                          child: Icon(Icons.home,
-                              size: ResponsiveHelper.getResponsiveIconSize(context),
-                              color: iconColor)),
                 ),
                 // Trust badge — top right (only when owner is verified)
                 if (widget.property.isOwnerVerified == true)
@@ -329,35 +330,6 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                // VIDEO badge — bottom left
-                if (hasVideo)
-                  Positioned(
-                    bottom: 8, left: 8,
-                    child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade700,
-                        borderRadius: BorderRadius.circular(
-                            ResponsiveHelper.getResponsiveBorderRadius(context) / 2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.videocam_rounded,
-                              color: Colors.white, size: 12),
-                          const SizedBox(width: 3),
-                          Text('VIDEO',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: ResponsiveHelper.getResponsiveFontSize(
-                                    context, mobile: 10),
-                                fontWeight: FontWeight.bold,
-                              )),
                         ],
                       ),
                     ),

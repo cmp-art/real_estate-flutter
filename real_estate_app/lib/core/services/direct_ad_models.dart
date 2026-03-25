@@ -16,8 +16,6 @@ class DirectAd {
   final String landingUrl;
   final double bidAmount;
   final String biddingStrategy; // 'cpc' or 'cpm'
-  final String mediaType;       // 'image' or 'video'
-  final String? videoUrl;
   final String destinationType;  // 'website' | 'whatsapp' | 'profile'
   final String? advertiserUserId;  // auth user_id of the advertiser — used for in-app profile navigation
   final String? linkedPropertyId;  // for destination_type='property' — the property to open in-app
@@ -34,8 +32,6 @@ class DirectAd {
     required this.landingUrl,
     required this.bidAmount,
     this.biddingStrategy = 'cpc',
-    this.mediaType = 'image',
-    this.videoUrl,
     this.destinationType = 'website',
     this.advertiserUserId,
     this.linkedPropertyId,
@@ -54,8 +50,6 @@ class DirectAd {
       landingUrl:      json['landing_url'] as String,
       bidAmount:       (json['bid_amount'] as num).toDouble(),
       biddingStrategy: json['bidding_strategy'] as String? ?? 'cpc',
-      mediaType:       json['media_type'] as String? ?? 'image',
-      videoUrl:        json['video_url'] as String?,
       destinationType:   json['destination_type'] as String? ?? 'website',
       advertiserUserId:  json['advertiser_user_id'] as String?,
       linkedPropertyId:  json['linked_property_id'] as String?,
@@ -75,8 +69,6 @@ class DirectAd {
       'landing_url':      landingUrl,
       'bid_amount':       bidAmount,
       'bidding_strategy': biddingStrategy,
-      'media_type':       mediaType,
-      'video_url':        videoUrl,
       'destination_type':   destinationType,
       'advertiser_user_id': advertiserUserId,
       'linked_property_id': linkedPropertyId,
@@ -277,8 +269,6 @@ class AdCreative {
   final int impressions;
   final int clicks;
   final DateTime createdAt;
-  final String mediaType;       // 'image' or 'video'
-  final String? videoUrl;
   final String destinationType; // 'website' | 'whatsapp' | 'profile'
 
   AdCreative({
@@ -296,8 +286,6 @@ class AdCreative {
     required this.impressions,
     required this.clicks,
     required this.createdAt,
-    this.mediaType = 'image',
-    this.videoUrl,
     this.destinationType = 'website',
   });
 
@@ -317,8 +305,6 @@ class AdCreative {
       impressions:     json['impressions'] as int? ?? 0,
       clicks:          json['clicks'] as int? ?? 0,
       createdAt:       DateTime.parse(json['created_at'] as String),
-      mediaType:       json['media_type'] as String? ?? 'image',
-      videoUrl:        json['video_url'] as String?,
       destinationType: json['destination_type'] as String? ?? 'website',
     );
   }
@@ -486,8 +472,7 @@ enum AdFormat {
   banner728x90('banner_728x90', 'Banner 728×90'),
   nativeSmall('native_small', 'Native Small'),
   nativeMedium('native_medium', 'Native Medium'),
-  nativeLarge('native_large', 'Native Large'),
-  videoAd('video_ad', 'Video Ad');
+  nativeLarge('native_large', 'Native Large');
 
   final String value;
   final String displayName;
@@ -558,8 +543,7 @@ enum CallToAction {
   callNow('Call Now'),
   visitWebsite('Visit Website'),
   applyNow('Apply Now'),
-  scheduleTour('Schedule Tour'),
-  watchVideo('Watch Video');
+  scheduleTour('Schedule Tour');
 
   final String text;
   const CallToAction(this.text);

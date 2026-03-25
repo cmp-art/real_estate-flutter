@@ -273,15 +273,19 @@ class SplashScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: ThemeConfig.primaryColor,
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.home_work, size: 80, color: Colors.white),
-            SizedBox(height: 24),
-            Text(
+            Image.asset(
+              'assets/images/ic_launcher.png',
+              width: 120,
+              height: 120,
+            ),
+            const SizedBox(height: 24),
+            const Text(
               AppConstants.appName,
               style: TextStyle(
                 fontSize: 24,
@@ -289,8 +293,8 @@ class SplashScreen extends StatelessWidget {
                 color: Colors.white,
               ),
             ),
-            SizedBox(height: 48),
-            CircularProgressIndicator(
+            const SizedBox(height: 48),
+            const CircularProgressIndicator(
               valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
             ),
           ],

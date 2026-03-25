@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/direct_ad_models.dart';
@@ -1070,7 +1069,7 @@ class _CampaignDetailsScreenState
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Per-creative card widget — owns the VideoPlayerController lifecycle
+// Per-creative card widget
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _CreativeCard extends StatefulWidget {
@@ -1087,41 +1086,13 @@ class _CreativeCard extends StatefulWidget {
 }
 
 class _CreativeCardState extends State<_CreativeCard> {
-  VideoPlayerController? _videoController;
-  bool _isVideoInitialized = false;
-
   @override
   void initState() {
     super.initState();
-    if (widget.creative.mediaType == 'video' &&
-        widget.creative.videoUrl != null) {
-      _initVideo();
-    }
-  }
-
-  Future<void> _initVideo() async {
-    try {
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(widget.creative.videoUrl!),
-      );
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.setVolume(0); // muted preview in list
-      await controller.play();
-      if (mounted) {
-        setState(() {
-          _videoController = controller;
-          _isVideoInitialized = true;
-        });
-      }
-    } catch (e) {
-      debugPrint('Video init error: $e');
-    }
   }
 
   @override
   void dispose() {
-    _videoController?.dispose();
     super.dispose();
   }
 
@@ -1162,30 +1133,10 @@ class _CreativeCardState extends State<_CreativeCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Media (image or video) ──────────────────────────────────
+            // ── Media (image) ───────────────────────────────────────────
             Stack(
               children: [
                 _buildMedia(context, creative),
-                // Poster frame while video buffers (no black screen)
-                if (creative.mediaType == 'video' && !_isVideoInitialized)
-                  Positioned.fill(
-                    child: CachedNetworkImage(
-                      imageUrl: creative.imageUrl,
-                      fit: BoxFit.cover,
-                      color: Colors.black.withOpacity(0.4),
-                      colorBlendMode: BlendMode.darken,
-                    ),
-                  ),
-                if (creative.mediaType == 'video' && !_isVideoInitialized)
-                  Positioned.fill(
-                    child: Container(
-                      color: _isVideoInitialized ? Colors.transparent : Colors.black.withOpacity(0.1),
-                      child: Center(
-                        child: Icon(Icons.play_circle_fill_rounded,
-                            color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                      ),
-                    ),
-                  ),
                 // "Tap to open" hint overlay at bottom of media
                 Positioned(
                   bottom: 0,
@@ -1231,8 +1182,6 @@ class _CreativeCardState extends State<_CreativeCard> {
               child: Row(
                 children: [
                   _approvalChip(creative),
-                  SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-                  _mediaTypeChip(context, creative),
                   const Spacer(),
                   IconButton(
                     icon: Icon(Icons.delete_outline_rounded,
@@ -1383,48 +1332,6 @@ class _CreativeCardState extends State<_CreativeCard> {
   // ── Media builder ─────────────────────────────────────────────────────────
 
   Widget _buildMedia(BuildContext context, AdCreative creative) {
-    // Show live video if initialized — fixed 200px, cover-fills the container.
-    // LayoutBuilder + ClipRect + OverflowBox replicates BoxFit.cover for VideoPlayer
-    // so the container never expands to match the video's natural aspect ratio.
-    if (creative.mediaType == 'video' &&
-        _videoController != null &&
-        _isVideoInitialized) {
-      return SizedBox(
-        height: 200, // Fixed — matches image ads exactly
-        width: double.infinity,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final containerW = constraints.maxWidth;
-            const containerH = 200.0;
-            final videoAspect = _videoController!.value.aspectRatio;
-
-            // BoxFit.cover: scale so both axes are filled, clip overflow
-            double renderW, renderH;
-            if (containerW / containerH > videoAspect) {
-              renderW = containerW;
-              renderH = containerW / videoAspect;
-            } else {
-              renderH = containerH;
-              renderW = containerH * videoAspect;
-            }
-
-            return ClipRect(
-              child: OverflowBox(
-                maxWidth: renderW,
-                maxHeight: renderH,
-                child: SizedBox(
-                  width: renderW,
-                  height: renderH,
-                  child: VideoPlayer(_videoController!),
-                ),
-              ),
-            );
-          },
-        ),
-      );
-    }
-
-    // Image (or video thumbnail fallback using imageUrl)
     return CachedNetworkImage(
       imageUrl: creative.imageUrl,
       width: double.infinity,
@@ -1492,47 +1399,6 @@ class _CreativeCardState extends State<_CreativeCard> {
           color: color,
           letterSpacing: 0.5,
         ),
-      ),
-    );
-  }
-
-  Widget _mediaTypeChip(BuildContext context, AdCreative creative) {
-    final isVideo = creative.mediaType == 'video';
-    final color =
-        isVideo ? ThemeConfig.infoColor : ThemeConfig.getTextSecondaryColor(context);
-    return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: isVideo
-            ? ThemeConfig.infoColor.withOpacity(0.1)
-            : ThemeConfig.getColor(
-                context,
-                lightColor: ThemeConfig.lightInputFill,
-                darkColor: ThemeConfig.darkInputFill,
-              ),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isVideo
-                ? Icons.play_circle_outline_rounded
-                : Icons.image_outlined,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 3),
-          Text(
-            creative.mediaType.toUpperCase(),
-            style: TextStyle(
-              fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
       ),
     );
   }

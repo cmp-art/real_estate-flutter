@@ -559,8 +559,6 @@ class DirectAdService {
     required String imageUrl,
     String? logoUrl,
     required String landingUrl,
-    String mediaType = 'image',
-    String? videoUrl,
   }) async {
     try {
       final response = await _supabase.from('ad_creatives').insert({
@@ -572,8 +570,6 @@ class DirectAdService {
         'image_url': imageUrl,
         'logo_url': logoUrl,
         'landing_url': landingUrl,
-        'media_type': mediaType,
-        'video_url': videoUrl,
         'status': 'paused',  // starts paused; AI validation in create_creative_screen sets to active
         'is_approved': false,
       }).select().single();

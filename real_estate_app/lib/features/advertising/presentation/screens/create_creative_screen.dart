@@ -3,14 +3,10 @@
 // ignore_for_file: unused_import, unused_field
 
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:video_compress/video_compress.dart';
-import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/direct_ad_models.dart';
@@ -37,13 +33,13 @@ class _S {
   String get instructTitle => pick('📋 How to Create a Great Ad', '📋 Jinsi ya Kutengeneza Tangazo Nzuri');
   List<String> get instructions => sw ? [
     '✅ KURUHUSIWA: Mali isiyohamishika, chakula, maduka, teknolojia, magari, afya, elimu, fedha na biashara zote halali',
-    '🖼️ Pakia picha au video yenye ubora wa juu — inaonekana kwenye orodha ya mali mara moja baada ya kukubaliwa na AI',
+    '🖼️ Pakia picha yenye ubora wa juu — inaonekana kwenye orodha ya mali mara moja baada ya kukubaliwa na AI',
     '✍️ Kichwa kiwe kifupi na cha kuvutia — maneno 5–10 yanayoelezea bidhaa au huduma yako',
     '📞 Chagua WhatsApp au simu — njia inayopatikana zaidi na wateja Tanzania',
     '⚡ AI itakagua tangazo lako papo hapo — likubaliwe litaonekana mara moja kwenye app',
   ] : [
     '✅ ALL BUSINESSES WELCOME: Real estate, food, retail, tech, automotive, health, education, finance and any legitimate business',
-    '🖼️ Upload a high-quality image or video — once AI approves it goes live on the property list immediately',
+    '🖼️ Upload a high-quality image — once AI approves it goes live on the property list immediately',
     '✍️ Write a short compelling headline — 5–10 words about your product or service',
     '📞 Choose WhatsApp or phone — the most accessible contact method in Tanzania',
     '⚡ AI reviews your ad instantly — if approved it appears live in the app right away',
@@ -68,10 +64,6 @@ class _S {
   String get imageTip => pick(
     'High quality image for the Brand.',
     'picha nzuri ya Brand .',
-  );
-  String get videoTip => pick(
-    'Max 30 seconds for ads. ',
-    'Upeo wa sekunde 30 kwa matangazo. ',
   );
   String get logoTip => pick(
     'Optional — your agency or company logo.',
@@ -98,15 +90,14 @@ class _S {
     'Weka nambari ya nchi, mf. +255712345678. Ujumbe ulioandikwa mapema utatumwa mtumiaji anapogonga tangazo lako.',
   );
   String get formatTip => pick(
-    '"Native Medium" works best for most placements. Video Ads require a video file upload above.',
-    '"Native Medium" inafanya kazi vizuri kwa maeneo mengi. Matangazo ya Video yanahitaji faili la video kupakiwa hapo juu.',
+    '"Native Medium" works best for most placements.',
+    '"Native Medium" inafanya kazi vizuri kwa maeneo mengi.',
   );
 
   // Error messages
   String get headlineRequired => pick('Headline is required', 'Kichwa cha tangazo kinahitajika');
   String get headlineTooShort => pick('Headline too short — be more specific (min 5 characters)', 'Kichwa ni kifupi mno — kuwa wazi zaidi (angalau herufi 5)');
   String get imageRequired    => pick('Please upload a main image before submitting', 'Tafadhali pakia picha kuu kabla ya kutuma');
-  String get videoRequired    => pick('Please upload a video file for video ads', 'Tafadhali pakia faili la video kwa matangazo ya video');
   String get phoneRequired    => pick('Enter a phone number with country code (e.g. +255712345678)', 'Ingiza nambari ya simu yenye nambari ya nchi (mf. +255712345678)');
   String get whatsappRequired => pick('Enter a WhatsApp number with country code (e.g. +255712345678)', 'Ingiza nambari ya WhatsApp yenye nambari ya nchi (mf. +255712345678)');
   String get propertyRequired => pick('Select one of your property listings to link this ad to', 'Chagua moja ya matangazo yako ya mali kuunganisha tangazo hili');
@@ -481,7 +472,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   // Form selections
   String _selectedFormat    = 'native_medium';
   String _selectedCTA       = 'Learn More';
-  final String _selectedMediaType = 'image'; // 'image' or 'video'
 
   // Ad destination: 'phone' | 'whatsapp' | 'property' | 'profile' | 'website'
   String _destinationType = 'whatsapp';
@@ -491,21 +481,14 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
 
   // Picked local files
   File? _imageFile;
-  File? _videoFile;
   File? _logoFile;
 
   // Uploaded Supabase public URLs
   String? _imageUrl;
-  String? _videoUrl;
   String? _logoUrl;
-
-  // Video preview player (shows uploaded video in the upload area)
-  VideoPlayerController? _previewVideoController;
-  bool _isPreviewVideoInitialized = false;
 
   // UI state
   bool _isUploadingImage = false;
-  bool _isUploadingVideo = false;
   bool _isUploadingLogo = false;
   bool _isValidating = false;
   bool _isSubmitting = false;
@@ -513,7 +496,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   // ── helpers ──────────────────────────────────────────────────────────────
 
   bool get _anyUploading =>
-      _isUploadingImage || _isUploadingVideo || _isUploadingLogo || _isValidating;
+      _isUploadingImage || _isUploadingLogo || _isValidating;
 
   // bilingual helper — language comes from Supabase user metadata or app state
   // falls back to English if provider not available in this screen
@@ -533,14 +516,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
         return 'image/webp';
       case 'gif':
         return 'image/gif';
-      case 'mp4':
-        return 'video/mp4';
-      case 'mov':
-        return 'video/quicktime';
-      case 'avi':
-        return 'video/x-msvideo';
-      case 'webm':
-        return 'video/webm';
       default:
         return 'application/octet-stream';
     }
@@ -637,164 +612,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     } catch (e) {
       if (mounted) setState(() => _isUploadingImage = false);
       _showError('Could not open gallery: $e');
-    }
-  }
-
-  Future<void> _pickAndUploadVideo() async {
-    try {
-      final XFile? picked = await _imagePicker.pickVideo(
-        source: ImageSource.gallery,
-        maxDuration: const Duration(seconds: 30), // 30s ad limit at picker level
-      );
-      if (picked == null) return;
-
-      final file = File(picked.path);
-
-      // ── Duration check (30-second max) ────────────────────────────
-      // Verify at the controller level because maxDuration is advisory on
-      // some Android versions.
-      try {
-        final probe = VideoPlayerController.file(file);
-        await probe.initialize();
-        final dur = probe.value.duration;
-        await probe.dispose();
-        if (dur > const Duration(seconds: 30)) {
-          _showError('Ad videos must be 30 seconds or shorter.');
-          return;
-        }
-      } catch (_) {
-        // Can't read duration — continue and let compression proceed
-      }
-
-      // Raw size gate before compression (allow up to 500 MB uncompressed)
-      final rawBytes = await file.length();
-      if (rawBytes > 500 * 1024 * 1024) {
-        _showError('Video is too large. Please choose a shorter clip.');
-        return;
-      }
-
-      setState(() {
-        _videoFile = file;
-        _videoUrl = null;
-        _isUploadingVideo = true;
-      });
-
-      // ── Compress to 720p ──────────────────────────────────────────
-      // A 30-second 4K clip can be >200 MB. Compressing to 720p brings
-      // it to ~10 MB, which is fast to upload and stream.
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Row(children: [
-          SizedBox(width: 20, height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-          SizedBox(width: 12),
-          Text('Compressing video...'),
-        ]),
-        duration: Duration(seconds: 60),
-        backgroundColor: Colors.black87,
-      ));
-
-      File uploadFile = file;
-      try {
-        final info = await VideoCompress.compressVideo(
-          picked.path,
-          quality: VideoQuality.Res1280x720Quality,
-          deleteOrigin: false,
-          includeAudio: true,
-        );
-        if (info?.file != null) {
-          uploadFile = info!.file!;
-          debugPrint('Ad video compressed: ${rawBytes}B → ${await uploadFile.length()}B');
-        }
-      } catch (e) {
-        debugPrint('Ad video compression failed, using original: $e');
-      }
-
-      if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      // ── Generate thumbnail ────────────────────────────────────────
-      // The thumbnail becomes the poster frame shown before the video plays
-      // (no black screen). It is also used as the ad image_url if the
-      // advertiser didn't upload a separate thumbnail.
-      Uint8List? thumbBytes;
-      try {
-        thumbBytes = await VideoThumbnail.thumbnailData(
-          video: uploadFile.path,
-          imageFormat: ImageFormat.JPEG,
-          
-          maxWidth: ResponsiveHelper.getDialogWidth(context).toInt(),
-          quality: 85,
-        );
-      } catch (e) {
-        debugPrint('Ad thumbnail generation failed: $e');
-      }
-
-      // Upload video
-      final videoUrl = await _uploadToSupabase(uploadFile, 'ad_videos', 'video');
-
-      // Upload thumbnail (stored separately so it can be used as poster frame)
-      String? thumbnailUrl;
-      if (thumbBytes != null) {
-        try {
-          final ts = DateTime.now().millisecondsSinceEpoch;
-          final thumbPath = 'ad_thumbnails/${ts}_thumb.jpg';
-          await Supabase.instance.client.storage
-              .from(_storageBucket)
-              .uploadBinary(thumbPath, thumbBytes,
-                  fileOptions: const FileOptions(
-                    contentType: 'image/jpeg',
-                    cacheControl: '31536000', // 1 year — CDN edge caching
-                    upsert: true,
-                  ));
-          thumbnailUrl = Supabase.instance.client.storage
-              .from(_storageBucket)
-              .getPublicUrl(thumbPath);
-        } catch (e) {
-          debugPrint('Thumbnail upload failed (non-fatal): $e');
-        }
-      }
-
-      if (!mounted) return;
-      // Initialise preview controller for the 200px cover-fill preview area
-      if (videoUrl != null) {
-        _previewVideoController?.dispose();
-        _previewVideoController = null;
-        _isPreviewVideoInitialized = false;
-        try {
-          final previewCtrl = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
-          await previewCtrl.initialize();
-          await previewCtrl.setLooping(true);
-          await previewCtrl.setVolume(0);
-          await previewCtrl.play();
-          if (mounted) {
-            setState(() {
-              _previewVideoController = previewCtrl;
-              _isPreviewVideoInitialized = true;
-            });
-          }
-        } catch (e) {
-          debugPrint('Preview video init failed (non-fatal): $e');
-        }
-      }
-      if (videoUrl != null) {
-        setState(() {
-          _videoUrl = videoUrl;
-          // If advertiser hasn't set an image, use the auto-generated thumbnail
-          if (_imageUrl == null && thumbnailUrl != null) {
-            _imageUrl = thumbnailUrl;
-          }
-          _isUploadingVideo = false;
-        });
-        _showSuccess('Video uploaded successfully');
-      } else {
-        setState(() {
-          _videoFile = null;
-          _isUploadingVideo = false;
-        });
-        _showError('Video upload failed. Check your storage bucket.');
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isUploadingVideo = false);
-      _showError('Could not open gallery: \$e');
     }
   }
 
@@ -931,7 +748,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
       campaignObjective: widget.campaign.campaignObjective,
       landingUrl:        landingUrl,
       image:             _imageFile != null ? XFile(_imageFile!.path) : null,
-      video:             _videoFile != null ? XFile(_videoFile!.path) : null,
       submittedBy:       user?.id,
     );
 
@@ -1002,8 +818,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
         'landing_url':      landingUrl,
         'destination_type':    _destinationType,
         'linked_property_id':  linkedPropertyId,
-        'media_type':       'image', // video ads removed — image only
-        'video_url':        null,
         'status':           'active',   // goes live on property list immediately
         'is_approved':      true,
         'ai_approved':      true,
@@ -1228,7 +1042,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     _whatsappController.dispose();
     _whatsappMsgController.dispose();
     _websiteUrlController.dispose();
-    _previewVideoController?.dispose();
     super.dispose();
   }
 
@@ -1524,194 +1337,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     );
   }
 
-  // ── VIDEO UPLOAD ──────────────────────────────────────────────────────────
-
-  Widget _buildVideoUploadArea() {
-    final uploaded = _videoUrl != null;
-    final uploading = _isUploadingVideo;
-    final fileName = _videoFile?.path.split(Platform.pathSeparator).last;
-
-    return GestureDetector(
-      onTap: _anyUploading ? null : _pickAndUploadVideo,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        // No padding when showing the video preview — it fills edge-to-edge
-        padding: uploaded ? EdgeInsets.zero : EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context, multiplier: 3)),
-        decoration: BoxDecoration(
-          color: ThemeConfig.getColor(
-            context,
-            lightColor: ThemeConfig.lightInputFill,
-            darkColor: ThemeConfig.darkInputFill,
-          ),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: uploaded
-                ? ThemeConfig.successColor
-                : ThemeConfig.getColor(
-                    context,
-                    lightColor: ThemeConfig.lightBorder,
-                    darkColor: ThemeConfig.darkBorder,
-                  ),
-            width: uploaded ? 2 : 1,
-          ),
-        ),
-        child: uploading
-            ? _buildUploadingState('Uploading video...')
-            : uploaded
-                ? _buildVideoPreview(fileName)
-                                : _buildUploadPlaceholder(
-                    icon: Icons.video_library_rounded,
-                    primary: 'Tap to upload video',
-                    secondary: 'MP4 or MOV • Max 30 seconds (auto-compressed)',
-                  ),
-      ),
-    );
-  }
-
-  // ── VIDEO PREVIEW (shown after successful upload, fixed 200px cover-fill) ──
-
-  Widget _buildVideoPreview(String? fileName) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(13),
-      child: SizedBox(
-        height: 200, // Fixed — never expands to match video's natural ratio
-        width: double.infinity,
-        child: Stack(
-          children: [
-            // Cover-fill video player
-            if (_isPreviewVideoInitialized && _previewVideoController != null)
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final containerW = constraints.maxWidth;
-                  const containerH = 200.0;
-                  final videoAspect = _previewVideoController!.value.aspectRatio;
-
-                  // BoxFit.cover: scale so both axes are filled, clip overflow
-                  double renderW, renderH;
-                  if (containerW / containerH > videoAspect) {
-                    renderW = containerW;
-                    renderH = containerW / videoAspect;
-                  } else {
-                    renderH = containerH;
-                    renderW = containerH * videoAspect;
-                  }
-
-                  return ClipRect(
-                    child: OverflowBox(
-                      maxWidth: renderW,
-                      maxHeight: renderH,
-                      child: SizedBox(
-                        width: renderW,
-                        height: renderH,
-                        child: VideoPlayer(_previewVideoController!),
-                      ),
-                    ),
-                  );
-                },
-              )
-            else
-              // Placeholder while preview initialises
-              Container(
-                color: Colors.black87,
-                child: const Center(
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2),
-                ),
-              ),
-
-            // Dark scrim for text legibility
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.65)
-                  ],
-                ),
-              ),
-            ),
-
-            // Bottom row: filename + ✕ remove button
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 12,
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle_rounded,
-                      color: ThemeConfig.successColor, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      fileName ?? 'Video uploaded ✓',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 13),
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () {
-                      _previewVideoController?.dispose();
-                      setState(() {
-                        _videoFile = null;
-                        _videoUrl = null;
-                        _previewVideoController = null;
-                        _isPreviewVideoInitialized = false;
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: ThemeConfig.errorColor,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Icon(Icons.close_rounded,
-                          color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // VIDEO AD badge (top-left)
-            Positioned(
-              top: 10,
-              left: 10,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade700,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.videocam_rounded,
-                        color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                    const SizedBox(width: 3),
-                    Text('VIDEO AD',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 10),
-                          fontWeight: FontWeight.bold,
-                        )),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ── LOGO UPLOAD ───────────────────────────────────────────────────────────
 
   Widget _buildLogoUploadArea() {
@@ -1957,19 +1582,12 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   // ── AD FORMAT DROPDOWN ────────────────────────────────────────────────────
 
    Widget _buildAdFormatDropdown() {
-    final formats = _selectedMediaType == 'video'
-        ? [('video_ad', 'Video Ad')]
-        : [
-            ('native_medium', 'Native Medium — Card in property list'),
-            ('native_large', 'Native Large — Full-width card'),
-            ('native_small', 'Native Small — Compact banner'),
-            ('banner_300x250', 'Banner 300×250'),
-          ];
-
-    // Reset if video switched and format not applicable
-    if (!formats.any((f) => f.$1 == _selectedFormat)) {
-      _selectedFormat = formats.first.$1;
-    }
+    const formats = [
+      ('native_medium', 'Native Medium — Card in property list'),
+      ('native_large', 'Native Large — Full-width card'),
+      ('native_small', 'Native Small — Compact banner'),
+      ('banner_300x250', 'Banner 300×250'),
+    ];
 
     return DropdownButtonFormField<String>(
       initialValue: _selectedFormat,

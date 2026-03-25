@@ -2,7 +2,6 @@
 // COMPLETE FIXED VERSION - Fully theme-controlled
 // ignore_for_file: unused_local_variable
 
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,9 +9,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:patamjengo_app/features/settings/presentation/providers/app_providers.dart';
-import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
-
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
@@ -32,7 +28,6 @@ import '../providers/property_providers.dart';
 import '../../../favorites/presentation/widgets/favorite_button.dart';
 import '../../../../core/services/price_drop_alert_service.dart';
 import '../../domain/entities/property_entity.dart';
-import '../providers/video_providers.dart';
 import 'property_edit_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
@@ -51,48 +46,17 @@ class PropertyDetailScreen extends ConsumerStatefulWidget {
 class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
   final PageController _headerPageController = PageController();
   int _currentHeaderIndex = 0;
-  VideoPlayerController? _headerVideoController;
-  bool _headerVideoInitialized = false;
-  bool _headerVideoLoading = false; // true while buffering
-  // Only load/stream video when user explicitly taps play (saves egress)
-  bool _headerVideoPlayPressed = false;
   bool _isDescriptionExpanded = false;
 
   @override
   void initState() {
     super.initState();
-    // Do NOT pre-buffer video — wait for user tap to avoid wasted egress
   }
 
   @override
   void dispose() {
     _headerPageController.dispose();
-    _headerVideoController?.dispose();
     super.dispose();
-  }
-
-  Future<void> _initHeaderVideo(String url) async {
-    if (_headerVideoController != null) return;
-    if (mounted) setState(() => _headerVideoLoading = true);
-    try {
-      final ctrl = VideoPlayerController.networkUrl(Uri.parse(url));
-      await ctrl.initialize();
-      await ctrl.setLooping(true);
-      final isMuted = ref.read(videoMuteProvider);
-      await ctrl.setVolume(isMuted ? 0 : 1);
-      // Only play if user explicitly pressed play — never autoplay
-      if (_headerVideoPlayPressed) await ctrl.play();
-      if (mounted) {
-        setState(() {
-          _headerVideoController = ctrl;
-          _headerVideoInitialized = true;
-          _headerVideoLoading = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Detail video error: $e');
-      if (mounted) setState(() => _headerVideoLoading = false);
-    }
   }
 
   String get propertyId => widget.propertyId;
@@ -101,7 +65,6 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
   Widget build(BuildContext context) {
     final WidgetRef ref = this.ref;
     final propertyDetailState = ref.watch(propertyDetailProvider(propertyId));
-    // Video is NOT pre-buffered — only starts when user taps play
     final user = ref.watch(authNotifierProvider).value;
     final currentLanguage = ref.watch(languageProvider).languageCode;
 
@@ -127,19 +90,17 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
   }
 
 
-  // ── Header media: images + video in one PageView ──────────────────────────
+  // ── Header media: images in one PageView ─────────────────────────────────
   Widget _buildHeaderMedia(
     BuildContext context,
     WidgetRef ref,
     PropertyEntity property,
     String Function(String) t,
   ) {
-    final hasVideos  = property.videos.isNotEmpty;
-    final hasImages  = property.images.isNotEmpty;
-    final totalItems = property.images.length + (hasVideos ? 1 : 0);
-    final allMedia   = [...property.images, ...property.videos];
+    final images     = property.images;
+    final totalItems = images.length;
 
-    if (!hasImages && !hasVideos) {
+    if (totalItems == 0) {
       return Container(
         color: Theme.of(context).scaffoldBackgroundColor,
         child: Center(child: Icon(Icons.home_work, size: ResponsiveHelper.getResponsiveIconSize(context), color: Colors.white24)),
@@ -148,40 +109,27 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
 
     return Stack(
       children: [
-        // PageView: images first, then video page(s) at the end
+        // PageView: images only
         PageView.builder(
           controller: _headerPageController,
           itemCount: totalItems,
           onPageChanged: (index) {
             setState(() => _currentHeaderIndex = index);
-            if (hasVideos && index == property.images.length) {
-              // Resume only if user had already pressed play for this video
-              if (_headerVideoInitialized && _headerVideoPlayPressed) {
-                _headerVideoController?.play();
-              }
-              // Otherwise do nothing — wait for explicit tap on play button
-            } else {
-              _headerVideoController?.pause();
-            }
           },
           itemBuilder: (context, index) {
-            final isVideoPage = hasVideos && index == property.images.length;
-            if (isVideoPage) {
-              return _buildHeaderVideoPage(context, ref, property);
-            }
             return GestureDetector(
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => FullScreenGallery(
-                    mediaItems: allMedia,
+                    mediaItems: images,
                     initialIndex: index,
                     propertyTitle: property.title,
                   ),
                 ),
               ),
               child: CachedNetworkImage(
-                imageUrl: property.images[index],
+                imageUrl: images[index],
                 fit: BoxFit.cover,
                 placeholder: (_, __) => Container(
                   color: Theme.of(context).scaffoldBackgroundColor,
@@ -196,7 +144,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
           },
         ),
 
-        // Media counter (e.g. "2 / 3")
+        // Media counter (e.g. "2 / 5")
         if (totalItems > 1)
           Positioned(
             bottom: 16, right: 16,
@@ -210,28 +158,6 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 '${_currentHeaderIndex + 1} / $totalItems',
                 style: TextStyle(
                     color: Colors.white, fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12), fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-
-        // VIDEO badge (bottom-left) on video page
-        if (hasVideos && _currentHeaderIndex == property.images.length)
-          Positioned(
-            bottom: 16, left: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                  color: Colors.blue.shade700,
-                  borderRadius: BorderRadius.circular(6)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.videocam_rounded, color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-                  const SizedBox(width: 4),
-                  Text('VIDEO TOUR',
-                      style: TextStyle(
-                          color: Colors.white, fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 11), fontWeight: FontWeight.bold)),
-                ],
               ),
             ),
           ),
@@ -295,138 +221,6 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             ),
           ),
         ],
-      ],
-    );
-  }
-
-  Widget _buildHeaderVideoPage(BuildContext context, WidgetRef ref, PropertyEntity property) {
-    final isMuted = ref.watch(videoMuteProvider);
-    final allMedia = [...property.images, ...property.videos];
-    
-    if (!_headerVideoInitialized || _headerVideoController == null) {
-      // Show poster + play button — video only loads when user taps play
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          // Poster: first image darkened
-          if (property.images.isNotEmpty)
-            CachedNetworkImage(
-              imageUrl: property.images.first,
-              fit: BoxFit.cover,
-              color: Colors.black.withOpacity(0.45),
-              colorBlendMode: BlendMode.darken,
-            )
-          else
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF1a1a2e), Color(0xFF16213e), Color(0xFF0f3460)],
-                ),
-              ),
-            ),
-          // Play button or loading spinner
-          Center(
-            child: _headerVideoLoading
-                ? Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: const BoxDecoration(
-                        color: Colors.black54, shape: BoxShape.circle),
-                    child: const SizedBox(
-                      width: 36, height: 36,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2.5),
-                    ),
-                  )
-                : GestureDetector(
-                    onTap: () {
-                      setState(() => _headerVideoPlayPressed = true);
-                      _initHeaderVideo(property.videos.first);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white38, width: 2),
-                      ),
-                      child: const Icon(Icons.play_arrow_rounded,
-                          color: Colors.white, size: 44),
-                    ),
-                  ),
-          ),
-          // Label
-          if (!_headerVideoLoading)
-            Positioned(
-              bottom: 70, left: 0, right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text('Tap to play video tour',
-                      style: TextStyle(color: Colors.white70, fontSize: 13)),
-                ),
-              ),
-            ),
-        ],
-      );
-    }
-    // Sync volume with global mute state
-    _headerVideoController!.setVolume(isMuted ? 0 : 1);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _headerVideoController!.value.size.width,
-            height: _headerVideoController!.value.size.height,
-            child: VideoPlayer(_headerVideoController!),
-          ),
-        ),
-        // Mute button
-        Positioned(
-          bottom: 60, right: 16,
-          child: GestureDetector(
-            onTap: () {
-              final current = ref.read(videoMuteProvider);
-              ref.read(videoMuteProvider.notifier).state = !current;
-            },
-            child: Container(
-              padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context)),
-              decoration: const BoxDecoration(
-                  color: Colors.black54, shape: BoxShape.circle),
-              child: Icon(
-                isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                color: Colors.white, size: 20,
-              ),
-            ),
-          ),
-        ),
-        // Tap overlay to open full-screen (FIXED)
-        Positioned.fill(
-          child: GestureDetector(
-            onTap: () {
-              // Pause the video before navigating
-              _headerVideoController?.pause();
-              // Navigate to full-screen gallery
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => FullScreenGallery(
-                    mediaItems: allMedia,
-                    initialIndex: property.images.length, // Video index
-                    propertyTitle: property.title,
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
       ],
     );
   }
@@ -1257,27 +1051,13 @@ class _FullScreenGalleryState extends State<FullScreenGallery> {
             itemCount: widget.mediaItems.length,
             builder: (context, index) {
               final mediaUrl = widget.mediaItems[index];
-
-              final isVideo = mediaUrl.toLowerCase().endsWith('.mp4') ||
-                  mediaUrl.toLowerCase().endsWith('.mov') ||
-                  mediaUrl.toLowerCase().endsWith('.avi');
-
-              if (isVideo) {
-                return PhotoViewGalleryPageOptions.customChild(
-                  child: _VideoPlayerWidget(videoUrl: mediaUrl),
-                  initialScale: PhotoViewComputedScale.contained,
-                  minScale: PhotoViewComputedScale.contained,
-                  maxScale: PhotoViewComputedScale.covered * 1.5,
-                );
-              } else {
-                return PhotoViewGalleryPageOptions(
-                  imageProvider: CachedNetworkImageProvider(mediaUrl),
-                  initialScale: PhotoViewComputedScale.contained,
-                  minScale: PhotoViewComputedScale.contained,
-                  maxScale: PhotoViewComputedScale.covered * 2.0,
-                  heroAttributes: PhotoViewHeroAttributes(tag: mediaUrl),
-                );
-              }
+              return PhotoViewGalleryPageOptions(
+                imageProvider: CachedNetworkImageProvider(mediaUrl),
+                initialScale: PhotoViewComputedScale.contained,
+                minScale: PhotoViewComputedScale.contained,
+                maxScale: PhotoViewComputedScale.covered * 2.0,
+                heroAttributes: PhotoViewHeroAttributes(tag: mediaUrl),
+              );
             },
             onPageChanged: _onPageChanged,
             loadingBuilder: (context, event) => Center(
@@ -1317,99 +1097,6 @@ class _FullScreenGalleryState extends State<FullScreenGallery> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// Video Player Widget
-class _VideoPlayerWidget extends StatefulWidget {
-  final String videoUrl;
-  final String? posterUrl; // shown while the video buffers — no black screen
-
-  // ignore: unused_element_parameter
-  const _VideoPlayerWidget({required this.videoUrl, this.posterUrl});
-
-  @override
-  __VideoPlayerWidgetState createState() => __VideoPlayerWidgetState();
-}
-
-class __VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
-  late VideoPlayerController _videoController;
-  ChewieController? _chewieController;
-  final bool _initialized = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeVideoPlayer();
-  }
-
-  Future<void> _initializeVideoPlayer() async {
-    if (widget.videoUrl.startsWith('http')) {
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
-    } else if (widget.videoUrl.startsWith('file://')) {
-      _videoController = VideoPlayerController.file(
-          File(widget.videoUrl.replaceFirst('file://', '')));
-    } else {
-      _videoController = VideoPlayerController.asset(widget.videoUrl);
-    }
-
-    await _videoController.initialize();
-
-    setState(() {
-      _chewieController = ChewieController(
-        videoPlayerController: _videoController,
-        autoPlay: false,
-        looping: false,
-        showControls: true,
-        allowFullScreen: false,
-        materialProgressColors: ChewieProgressColors(
-          playedColor: ThemeConfig.primaryColor,
-          handleColor: ThemeConfig.primaryColor,
-          backgroundColor: Colors.grey.shade600,
-          bufferedColor: Colors.grey.shade400,
-        ),
-      );
-    });
-  }
-
-  @override
-  void dispose() {
-    _videoController.dispose();
-    _chewieController?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_chewieController == null) {
-      // Show poster frame while video buffers — never a black screen
-      return Container(
-        color: Colors.black,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (widget.posterUrl != null)
-              CachedNetworkImage(
-                imageUrl: widget.posterUrl!,
-                fit: BoxFit.cover,
-                color: Colors.black.withOpacity(0.3),
-                colorBlendMode: BlendMode.darken,
-                placeholder: (_, __) => Container(color: Colors.black),
-                errorWidget: (_, __, ___) => Container(color: Colors.black),
-              )
-            else
-              Container(color: Colors.black),
-            const Center(
-              child: CircularProgressIndicator(color: Colors.white70, strokeWidth: 2),
-            ),
-          ],
-        ),
-      );
-    }
-    return Container(
-      color: Colors.black,
-      child: Chewie(controller: _chewieController!),
     );
   }
 }
