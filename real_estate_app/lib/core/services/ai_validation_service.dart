@@ -426,7 +426,6 @@ class AiValidationService {
       // TFLite unavailable → rule-based fallback on text fields (never hard-block)
       if (!_classifier.isInitialized || !_health.isHealthy) {
         _log('TFLite unavailable for property photos — using rule-based fallback on text fields');
-        await _deleteTempThumbnails(tempThumbs);
         final fallback = _ruleBasedPropertyCheck(data);
         await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
         return fallback;
@@ -447,7 +446,6 @@ class AiValidationService {
             ],
           );
           await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-          await _deleteTempThumbnails(tempThumbs);
           return result;
         }
       }
@@ -459,10 +457,8 @@ class AiValidationService {
         ).timeout(_timeout);
         _health.recordSuccess();
         await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-        await _deleteTempThumbnails(tempThumbs);
         return result;
       } catch (e) {
-        await _deleteTempThumbnails(tempThumbs);
         // Server-side rate limit hit — hard-reject with countdown.
         if (e.toString().contains('rate_limited:')) {
           final secs = int.tryParse(e.toString().split(':').last) ?? 60;
@@ -542,7 +538,6 @@ class AiValidationService {
       // TFLite unavailable → rule-based fallback on text fields
       if (!_classifier.isInitialized || !_health.isHealthy) {
         _log('TFLite unavailable for media ad — using rule-based fallback on text fields');
-        await _deleteTempThumbnails(adThumbsToClean);
         final fallback = _ruleBasedAdCheck(data);
         await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
         return fallback;
@@ -563,8 +558,7 @@ class AiValidationService {
             ],
           );
           await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-          await _deleteTempThumbnails(adThumbsToClean);
-          return result;
+            return result;
         }
       }
 
@@ -577,10 +571,8 @@ class AiValidationService {
         ).timeout(_timeout);
         _health.recordSuccess();
         await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-        await _deleteTempThumbnails(adThumbsToClean);
         return result;
       } catch (e) {
-        await _deleteTempThumbnails(adThumbsToClean);
         if (e.toString().contains('rate_limited:')) {
           final secs = int.tryParse(e.toString().split(':').last) ?? 60;
           return _hardReject(
