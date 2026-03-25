@@ -250,7 +250,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                             child: CachedNetworkImage(
                               imageUrl: widget.property.images.first,
                               cacheManager: CustomCacheManager.instance,
-                              fit: BoxFit.contain,
+                              fit: BoxFit.cover,
                               width: double.infinity,
                               height: double.infinity,
                               placeholder: (context, url) => Container(
