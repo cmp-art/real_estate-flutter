@@ -6,7 +6,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, compute;
+import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -104,6 +105,21 @@ class _S {
   String get upgradeRequired => pick('Upgrade Required', 'Unahitajika Kupandisha Kiwango');
   String get cancel          => pick('Cancel', 'Ghairi');
   String get upgradePro      => pick('Upgrade to Pro', 'Panda kwa Pro');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top-level image compression — runs in a background isolate via compute().
+// image_picker_for_web ignores imageQuality, so web uploads are full-quality
+// and can be 3–10 MB each.  This re-encodes them as 80% JPEG (~300–600 KB).
+// ─────────────────────────────────────────────────────────────────────────────
+Uint8List _compressToJpeg(Uint8List bytes) {
+  try {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return bytes;
+    return Uint8List.fromList(img.encodeJpg(decoded, quality: 80));
+  } catch (_) {
+    return bytes; // Return original if anything fails
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,13 +285,32 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     for (final f in files) {
       if (_webBytes.containsKey(f.path)) continue;
       try {
-        final b = await f.readAsBytes();
-        if (b.isNotEmpty) _webBytes[f.path] = b;
+        // 10-second timeout prevents an old service worker from blocking
+        // blob: URL reads indefinitely.
+        final b = await f.readAsBytes()
+            .timeout(const Duration(seconds: 10));
+        // Ignore anything that looks like HTML (service worker fallback page)
+        if (b.length > 100 && !_looksLikeHtml(b)) {
+          _webBytes[f.path] = b;
+        }
       } catch (_) {}
     }
   }
 
-  // Returns the correct image widget for web (Image.memory) and native (Image.file)
+  /// Returns true if the bytes start with an HTML doctype / tag —
+  /// which means the service worker returned the offline fallback page
+  /// instead of the actual image.
+  static bool _looksLikeHtml(Uint8List b) {
+    if (b.length < 5) return false;
+    final head = String.fromCharCodes(b.take(15)).toLowerCase();
+    return head.contains('<!doc') || head.contains('<html');
+  }
+
+  // Returns the correct image widget for web (Image.memory) and native (Image.file).
+  // On web:
+  //   1. Use Image.memory if bytes were cached at pick time.
+  //   2. Otherwise fall back to Image.network(blob URL) — the browser renders
+  //      blob: URLs natively; the service worker now skips them (v4).
   Widget _thumb(XFile file, {double size = 90}) {
     if (!kIsWeb) {
       return Image.file(File(file.path),
@@ -285,22 +320,34 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (cached != null) {
       return Image.memory(cached, width: size, height: size, fit: BoxFit.cover);
     }
-    return FutureBuilder<Uint8List>(
-      future: file.readAsBytes().then((b) {
-        if (b.isNotEmpty) _webBytes[file.path] = b;
-        return b;
-      }),
-      builder: (_, snap) {
-        if (snap.hasData && snap.data!.isNotEmpty) {
-          return Image.memory(snap.data!,
-              width: size, height: size, fit: BoxFit.cover);
-        }
+    // Fallback: let Flutter load the blob URL directly. No FutureBuilder
+    // needed — Image.network handles the loading / error states itself.
+    return Image.network(
+      file.path,
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      loadingBuilder: (_, child, event) {
+        if (event == null) return child;
         return SizedBox(
           width: size,
           height: size,
-          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          child: Center(
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              value: event.expectedTotalBytes != null
+                  ? event.cumulativeBytesLoaded / event.expectedTotalBytes!
+                  : null,
+            ),
+          ),
         );
       },
+      errorBuilder: (_, __, ___) => SizedBox(
+        width: size,
+        height: size,
+        child: Icon(Icons.broken_image_rounded,
+            size: size * 0.5, color: Colors.grey.shade400),
+      ),
     );
   }
 
@@ -323,7 +370,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         } catch (_) {}
       }
       if (bytes != null && bytes.isNotEmpty) {
-        result.add(XFile.fromData(bytes,
+        // Compress in background isolate (web ignores imageQuality: 85,
+        // so uploads can be 3–10 MB; this brings them down to ~300–600 KB)
+        final compressed = await compute(_compressToJpeg, bytes);
+        result.add(XFile.fromData(compressed,
             name: f.name.isNotEmpty ? f.name : 'photo.jpg',
             mimeType: 'image/jpeg'));
       }

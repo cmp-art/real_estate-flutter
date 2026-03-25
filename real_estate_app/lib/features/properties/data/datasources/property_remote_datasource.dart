@@ -439,12 +439,8 @@ class PropertyRemoteDataSource {
           final propertyJson = Map<String, dynamic>.from(item);
           
           // Convert thumbnail_url to images array with single element.
-          // Apply Supabase Storage image transform so list cards load a
-          // 600px-wide optimised thumbnail instead of the full-size original.
           if (propertyJson['thumbnail_url'] != null) {
-            propertyJson['images'] = [
-              _toThumbnailUrl(propertyJson['thumbnail_url'] as String),
-            ];
+            propertyJson['images'] = [propertyJson['thumbnail_url'] as String];
           } else {
             propertyJson['images'] = [];
           }
@@ -470,19 +466,6 @@ class PropertyRemoteDataSource {
     }
 
     return properties;
-  }
-
-  /// Convert a Supabase Storage object URL to a resized thumbnail URL using
-  /// the Storage render/image endpoint (available on all Supabase plans).
-  /// Cards get a 600 px-wide JPEG at 70% quality — typically 20–50 KB vs
-  /// the 1–3 MB full-resolution original.
-  static String _toThumbnailUrl(String url) {
-    if (!url.contains('/storage/v1/object/public/')) return url;
-    return url.replaceFirst(
-          '/storage/v1/object/public/',
-          '/storage/v1/render/image/public/',
-        ) +
-        '?width=600&quality=70&resize=cover';
   }
 
   String _categoryToString(PropertyCategory category) {
