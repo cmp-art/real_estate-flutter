@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
@@ -540,6 +541,11 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               ),
               const SizedBox(height: 10),
               _buildPhotoSection(radius, s),
+              // Mobile web warning banner — shown only on phone/tablet browsers
+              if (kIsWeb && MediaQuery.sizeOf(context).width < 600) ...[
+                const SizedBox(height: 10),
+                _MobileWebBanner(),
+              ],
               const SizedBox(height: 24),
 
               // ── Property Type ─────────────────────────────────────────
@@ -1048,6 +1054,114 @@ class _TypeChip extends StatelessWidget {
                 ? Colors.white
                 : ThemeConfig.getTextSecondaryColor(context),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Mobile web warning banner ─────────────────────────────────────────────────
+class _MobileWebBanner extends StatelessWidget {
+  static const _playStoreUrl =
+      'https://play.google.com/store/apps/details?id=com.patamjengo.app';
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  color: Colors.orange, size: 18),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Photo upload may not work on mobile browsers',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.orange,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'For the best experience, list your property from a PC browser or use the Android app.',
+            style: TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _BannerButton(
+                icon: Icons.android_rounded,
+                label: 'Play Store',
+                color: Colors.green,
+                onTap: () async {
+                  final uri = Uri.parse(_playStoreUrl);
+                  if (await canLaunchUrl(uri)) launchUrl(uri);
+                },
+              ),
+              const SizedBox(width: 8),
+              _BannerButton(
+                icon: Icons.computer_rounded,
+                label: 'Use PC browser',
+                color: Colors.blueGrey,
+                onTap: () async {
+                  final uri = Uri.parse('https://patamjengo.netlify.app');
+                  if (await canLaunchUrl(uri)) launchUrl(uri);
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BannerButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _BannerButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 14),
+            const SizedBox(width: 4),
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ],
         ),
       ),
     );
