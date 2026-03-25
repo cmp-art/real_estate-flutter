@@ -8,7 +8,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -355,33 +354,14 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         } catch (_) {}
       }
       if (bytes != null && bytes.isNotEmpty) {
-        // Compress on web (imageQuality:85 is ignored by image_picker_for_web).
-        // Run synchronously on the main thread — no Web Worker needed.
-        // Yield once first so the "Saving…" UI renders before CPU work starts.
-        await Future.delayed(Duration.zero);
-        final upload = _compressWebBytes(bytes);
-        result.add(XFile.fromData(upload,
+        // image_picker_for_web v3 already applies imageQuality:85 + maxWidth/
+        // maxHeight via browser Canvas API — no extra compression needed here.
+        result.add(XFile.fromData(bytes,
             name: f.name.isNotEmpty ? f.name : 'photo.jpg',
             mimeType: 'image/jpeg'));
       }
     }
     return result.isEmpty ? _images : result;
-  }
-
-  /// Re-encodes [bytes] as JPEG at 80 % quality on the main thread.
-  /// Only compresses if the image can be decoded and the result is smaller.
-  /// Falls back to the original bytes on any error.
-  static Uint8List _compressWebBytes(Uint8List bytes) {
-    try {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return bytes;
-      final compressed =
-          Uint8List.fromList(img.encodeJpg(decoded, quality: 80));
-      // Only use compressed result if it actually saves space
-      return compressed.length < bytes.length ? compressed : bytes;
-    } catch (_) {
-      return bytes;
-    }
   }
 
   // ── Photo picker ───────────────────────────────────────────────────────────
