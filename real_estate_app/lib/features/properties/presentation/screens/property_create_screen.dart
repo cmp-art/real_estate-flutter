@@ -6,8 +6,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb, compute;
-import 'package:image/image.dart' as img;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -105,21 +104,6 @@ class _S {
   String get upgradeRequired => pick('Upgrade Required', 'Unahitajika Kupandisha Kiwango');
   String get cancel          => pick('Cancel', 'Ghairi');
   String get upgradePro      => pick('Upgrade to Pro', 'Panda kwa Pro');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Top-level image compression — runs in a background isolate via compute().
-// image_picker_for_web ignores imageQuality, so web uploads are full-quality
-// and can be 3–10 MB each.  This re-encodes them as 80% JPEG (~300–600 KB).
-// ─────────────────────────────────────────────────────────────────────────────
-Uint8List _compressToJpeg(Uint8List bytes) {
-  try {
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return bytes;
-    return Uint8List.fromList(img.encodeJpg(decoded, quality: 80));
-  } catch (_) {
-    return bytes; // Return original if anything fails
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,10 +354,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         } catch (_) {}
       }
       if (bytes != null && bytes.isNotEmpty) {
-        // Compress in background isolate (web ignores imageQuality: 85,
-        // so uploads can be 3–10 MB; this brings them down to ~300–600 KB)
-        final compressed = await compute(_compressToJpeg, bytes);
-        result.add(XFile.fromData(compressed,
+        result.add(XFile.fromData(bytes,
             name: f.name.isNotEmpty ? f.name : 'photo.jpg',
             mimeType: 'image/jpeg'));
       }
