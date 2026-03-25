@@ -37,8 +37,6 @@ import 'package:image_picker/image_picker.dart';
 import '../constants/app_constants.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:path_provider/path_provider.dart';
 // On-device image classifier (MobileNet V3 TFLite).
 import 'tflite_classifier.dart';
 
@@ -396,7 +394,6 @@ class AiValidationService {
     required int        bathrooms,
     required double     area,
     List<XFile>?        images,
-    List<XFile>?        videos,   // optional video files — thumbnails extracted for TFLite classification
     String?             submittedBy,
   }) async {
     // Rate limit.
@@ -417,41 +414,12 @@ class AiValidationService {
 
     await _ensureClassifierReady();
 
-    // ── Extract thumbnails from any submitted videos and merge into images ─
-    // TFLite cannot decode raw video bytes — we extract a JPEG frame from
-    // each video and treat it exactly like a photo for validation purposes.
     List<XFile> allMedia = [...(images ?? [])];
-    final tempThumbs = <XFile>[]; // temp thumbnail files to clean up after validation
-    if (videos != null && videos.isNotEmpty) {
-      for (int i = 0; i < videos.length; i++) {
-        final thumb = await _extractVideoThumbnail(videos[i]);
-        if (thumb != null) {
-          allMedia.add(thumb);
-          tempThumbs.add(thumb); // mark for cleanup after classification
-          _log('Property video ${i + 1}: thumbnail extracted → added to media set');
-        } else if (kIsWeb) {
-          // video_thumbnail not available on web — skip the frame, still validate images
-          _log('Property video ${i + 1}: web platform — skipping video thumbnail');
-        } else {
-          _log('Property video ${i + 1}: thumbnail extraction failed — hard rejecting');
-          await _deleteTempThumbnails(tempThumbs);
-          return _hardReject(
-            type: 'property', submittedBy: submittedBy,
-            reason: 'Could not process video ${i + 1}. Please use a valid MP4 or MOV file.',
-            suggestions: [
-              'Use an MP4 or MOV video file under 50 MB.',
-              'Or remove the video and use photos only.',
-            ],
-          );
-        }
-      }
-    }
 
     final hasImages = allMedia.isNotEmpty;
 
     _log('validateProperty — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
-         'photos=${images?.length ?? 0}, videos=${videos?.length ?? 0}, '
-         'total_media=${allMedia.length}, healthy=${_health.isHealthy}');
+         'photos=${images?.length ?? 0}, total_media=${allMedia.length}, healthy=${_health.isHealthy}');
 
     // ── IMAGE/VIDEO PATH ────────────────────────────────────────────────────
     if (hasImages) {
@@ -541,7 +509,6 @@ class AiValidationService {
     required String campaignObjective,
     required String landingUrl,
     XFile?          image,
-    XFile?          video,
     String?         submittedBy,
   }) async {
     // Rate limit.
@@ -562,47 +529,13 @@ class AiValidationService {
 
     await _ensureClassifierReady();
 
-    // Build the full media set: image + video thumbnail (if both provided).
-    // TFLite classifies every frame we send — more context = better decision.
     List<XFile> allAdMedia = [];
-    final adThumbsToClean = <XFile>[];
-
-    // Add image directly (already a JPEG/PNG).
     if (image != null) allAdMedia.add(image);
-
-    // Extract a thumbnail frame from video and add it alongside the image.
-    if (video != null) {
-      if (_isVideoFile(video)) {
-        _log('Ad video provided — extracting thumbnail frame for TFLite');
-        final thumb = await _extractVideoThumbnail(video);
-        if (thumb == null && kIsWeb) {
-          _log('Ad video: web platform — skipping video thumbnail');
-        } else if (thumb == null) {
-          _log('Video thumbnail extraction failed — hard rejecting');
-          return _hardReject(
-            type: 'ad', submittedBy: submittedBy,
-            reason: 'Could not process your video file. Please try a different video or use an image instead.',
-            suggestions: [
-              'Use an MP4 or MOV file under 50 MB.',
-              'Or upload a static image instead of a video.',
-            ],
-          );
-        } else {
-          allAdMedia.add(thumb);
-          adThumbsToClean.add(thumb);
-          _log('Ad video thumbnail extracted: ${thumb.path}');
-        }
-      } else {
-        // video param was passed but looks like an image — add it directly
-        allAdMedia.add(video);
-      }
-    }
 
     final hasMedia = allAdMedia.isNotEmpty;
 
     _log('validateAd — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
-         'image=${image != null}, video=${video != null}, '
-         'total_media=${allAdMedia.length}, healthy=${_health.isHealthy}');
+         'image=${image != null}, total_media=${allAdMedia.length}, healthy=${_health.isHealthy}');
 
     // ── MEDIA PATH ──────────────────────────────────────────────────────────
     if (hasMedia) {
@@ -821,64 +754,6 @@ class AiValidationService {
   // ══════════════════════════════════════════════════════════════════════════
   // IMAGE HELPERS
   // ══════════════════════════════════════════════════════════════════════════
-
-  // Detect if a file is a video based on its extension.
-  bool _isVideoFile(XFile file) {
-    final name = file.name.isNotEmpty ? file.name : file.path;
-    final ext  = name.split('.').last.toLowerCase();
-    return ['mp4', 'mov', 'avi', 'webm', 'mkv', '3gp', 'flv'].contains(ext);
-  }
-
-  // Delete temp thumbnail files produced by _extractVideoThumbnail.
-  // Only deletes files whose path is inside the system temp directory,
-  // so there is zero risk of accidentally deleting a user's original photo.
-  Future<void> _deleteTempThumbnails(List<XFile> files) async {
-    if (kIsWeb) return; // no temp files on web
-    try {
-      final tempDir = await getTemporaryDirectory();
-      for (final xfile in files) {
-        if (xfile.path.startsWith(tempDir.path)) {
-          try {
-            final ioFile = File(xfile.path);
-            if (await ioFile.exists()) await ioFile.delete();
-            _log('Cleaned up temp thumbnail: ${xfile.path.split('/').last}');
-          } catch (e) {
-            _log('Could not delete temp thumbnail: $e');
-          }
-        }
-      }
-    } catch (e) {
-      _log('Temp cleanup error: $e');
-    }
-  }
-
-  // Extract a single JPEG thumbnail frame from a video file.
-  // Returns null if extraction fails or on web (video_thumbnail is native-only).
-  Future<XFile?> _extractVideoThumbnail(XFile videoFile) async {
-    // video_thumbnail uses native platform channels — not available on web.
-    if (kIsWeb) {
-      _log('Web: video thumbnail extraction not supported — skipping');
-      return null;
-    }
-    try {
-      final tempDir = await getTemporaryDirectory();
-      final thumbPath = await VideoThumbnail.thumbnailFile(
-        video:          videoFile.path,
-        thumbnailPath:  tempDir.path,
-        imageFormat:    ImageFormat.JPEG,
-        maxWidth:       1280,
-        quality:        85,
-        timeMs:         0,     // frame at 0ms (start of video)
-      );
-      if (thumbPath == null) return null;
-      final thumbIo = File(thumbPath);
-      if (!await thumbIo.exists()) return null;
-      return XFile(thumbPath);
-    } catch (e) {
-      _log('Video thumbnail extraction error: $e');
-      return null;
-    }
-  }
 
   // Pick up to [max] photos spread evenly across the whole list.
   List<XFile> _pickRepresentative(List<XFile> files, int max) {
