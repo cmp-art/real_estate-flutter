@@ -2,6 +2,14 @@
 // Firebase Cloud Messaging service worker — handles background push on web/PWA.
 // Firebase automatically discovers this file at /firebase-messaging-sw.js.
 
+// Pass blob: URLs straight through — they are created in the page context and
+// cannot be fetched from a service worker context. Without this guard, mobile
+// Safari / PWA standalone mode can fail to read picked image bytes.
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.startsWith('blob:')) return;
+  // All other requests are handled by the Firebase SDK fetch handler below.
+});
+
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 

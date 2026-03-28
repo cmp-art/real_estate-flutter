@@ -114,6 +114,30 @@ class ImageHelper {
           imageQuality: 85,
         );
         images = single != null ? [single] : [];
+
+        // Immediately convert blob-URL XFiles to byte-backed XFile.fromData.
+        // image_picker_for_web returns XFiles whose path is a blob: URL.
+        // On mobile browsers (especially iOS Safari / PWA standalone), any
+        // subsequent fetch of that blob URL goes through the service worker,
+        // which can fail silently when returning without event.respondWith().
+        // Reading the bytes now — while still in the same JS context that
+        // created the blob — bypasses the service worker entirely.
+        final converted = <XFile>[];
+        for (final f in images) {
+          try {
+            final bytes = await f.readAsBytes();
+            if (bytes.isNotEmpty) {
+              converted.add(XFile.fromData(
+                bytes,
+                name: f.name.isNotEmpty ? f.name : 'photo.jpg',
+                mimeType: 'image/jpeg',
+              ));
+            }
+          } catch (_) {
+            converted.add(f); // fallback: keep original on unexpected error
+          }
+        }
+        images = converted;
       } else {
         images = await _picker.pickMultiImage(
           maxWidth: 1920,

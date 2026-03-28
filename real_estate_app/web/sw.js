@@ -78,8 +78,11 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   
-  // Skip non-HTTP requests
-  if (!request.url.startsWith('http')) {
+  // Skip non-HTTP requests and blob: URLs.
+  // blob: URLs are created in the page context and are not accessible from
+  // the service worker context — returning without respondWith() lets the
+  // browser read the blob natively.
+  if (!request.url.startsWith('http') || request.url.startsWith('blob:')) {
     return;
   }
   
