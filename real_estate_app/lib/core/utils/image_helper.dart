@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../config/theme_config.dart';
 import '../constants/app_constants.dart';
 import '../errors/exceptions.dart';
+import 'web_crop.dart' if (dart.library.io) 'web_crop_stub.dart';
 
 class ImageHelper {
   final ImagePicker _picker = ImagePicker();
@@ -215,20 +216,51 @@ class ImageHelper {
   // ── Crop an XFile to 4:3 for property card display ────────────────────────
   // Automatically center-crops the image to a 4:3 landscape ratio with no UI.
   // Works on Android, iOS, Web, and PWA.
+  //
+  // Web path uses Canvas API (hardware-accelerated, async, ~0 Dart heap cost).
+  // Native path uses the Dart image package (runs in main isolate).
   Future<XFile?> cropToCard(BuildContext context, XFile image) async {
+    final tag = DateTime.now().millisecondsSinceEpoch;
+
+    if (kIsWeb) {
+      // ── Web / PWA ──────────────────────────────────────────────────────────
+      // The Dart `image` package decodes / re-encodes synchronously on the
+      // main thread.  A 12 MP photo allocates ~100 MB of Dart heap and blocks
+      // the UI for 3–5 s on mobile, which triggers "Page Unresponsive" and
+      // can kill the browser tab.  Canvas API avoids both problems.
+      try {
+        final bytes = await image.readAsBytes();
+        if (bytes.isEmpty) return image;
+
+        final outBytes = await webCropToCard(bytes);
+        if (outBytes != null && outBytes.isNotEmpty) {
+          return XFile.fromData(
+            outBytes,
+            name: 'crop_$tag.jpg',
+            mimeType: 'image/jpeg',
+          );
+        }
+        // Canvas failed (unsupported format, security error, etc.) —
+        // return the already-sized bytes from image_picker unchanged.
+        return XFile.fromData(bytes, name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
+      } catch (_) {
+        return image; // last-resort fallback
+      }
+    }
+
+    // ── Android / iOS ──────────────────────────────────────────────────────
     try {
       final bytes = await image.readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded == null) return image; // fallback: return original
 
       // image package applies EXIF orientation on decode — no manual rotate needed
-      final src = decoded;
-      final srcW = src.width;
-      final srcH = src.height;
+      final srcW = decoded.width;
+      final srcH = decoded.height;
 
       // Target 4:3: pick the largest 4:3 rect that fits inside the source
       int cropW, cropH;
-      if (srcW / srcH >= 4 / 3) {
+      if (srcW * 3 >= srcH * 4) {
         cropH = srcH;
         cropW = (srcH * 4 / 3).round();
       } else {
@@ -238,27 +270,15 @@ class ImageHelper {
       final offsetX = (srcW - cropW) ~/ 2;
       final offsetY = (srcH - cropH) ~/ 2;
 
-      final cropped = img.copyCrop(src,
+      final cropped = img.copyCrop(decoded,
           x: offsetX, y: offsetY, width: cropW, height: cropH);
       final resized = img.copyResize(cropped, width: 1280);
       final outBytes = img.encodeJpg(resized, quality: 88);
 
-      if (kIsWeb) {
-        // Web/PWA: dart:io File and path_provider are not available.
-        // XFile.fromData holds the bytes in memory — no filesystem write needed.
-        return XFile.fromData(
-          outBytes,
-          name: 'crop_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          mimeType: 'image/jpeg',
-        );
-      } else {
-        // Android / iOS: write to a temp file and return the path.
-        final tmpDir = await getTemporaryDirectory();
-        final outPath =
-            '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        await File(outPath).writeAsBytes(outBytes);
-        return XFile(outPath);
-      }
+      final tmpDir = await getTemporaryDirectory();
+      final outPath = '${tmpDir.path}/crop_$tag.jpg';
+      await File(outPath).writeAsBytes(outBytes);
+      return XFile(outPath);
     } catch (e) {
       throw ValidationException(e.toString());
     }
