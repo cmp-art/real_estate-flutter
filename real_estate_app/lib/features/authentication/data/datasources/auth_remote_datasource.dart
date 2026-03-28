@@ -186,7 +186,8 @@ class AuthRemoteDataSource {
           .from(AppConstants.usersTable)
           .select()
           .eq('id', userId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
 
       if (existingProfile != null) {
         logger.d('User profile found in database');
@@ -213,7 +214,10 @@ class AuthRemoteDataSource {
         if (country != null) 'country': country,
       };
 
-      await supabaseClient.from(AppConstants.usersTable).insert(newProfile);
+      await supabaseClient
+          .from(AppConstants.usersTable)
+          .insert(newProfile)
+          .timeout(const Duration(seconds: 10));
       logger.d('User profile created successfully');
 
       return UserModel.fromJson(newProfile);
@@ -257,7 +261,7 @@ class AuthRemoteDataSource {
           .eq('id', authUser.id)
           .maybeSingle()
           .timeout(
-            const Duration(seconds: 5),
+            const Duration(seconds: 10),
             onTimeout: () {
               logger.w('getCurrentUser timeout');
               return null;

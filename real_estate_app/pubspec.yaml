@@ -130,3 +130,4 @@ flutter:
     - assets/.env
     - assets/docs/
     - assets/ml/
+    - assets/images/

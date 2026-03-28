@@ -3,7 +3,9 @@
 
 // ignore_for_file: unused_catch_stack
 
+import 'package:dartz/dartz.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/errors/failures.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthState;
 import '../../core/utils/logger.dart';
 import '../../features/settings/presentation/providers/app_providers.dart';
@@ -44,7 +46,13 @@ class AuthNotifier extends StateNotifier<AsyncValue<UserEntity?>> {
 
     Future.microtask(() async {
       try {
-        final result = await _repository.getCurrentUser();
+        final result = await _repository.getCurrentUser().timeout(
+          const Duration(seconds: 20),
+          onTimeout: () {
+            _logger.w('Auth init timed out — treating as logged out');
+            return const Right<Failure, UserEntity?>(null);
+          },
+        );
 
         if (mounted) {
           result.fold(
