@@ -9,23 +9,39 @@ class FavoriteRemoteDataSource {
 
   FavoriteRemoteDataSource(this.supabaseClient);
 
-  // Get all favorite properties for a user
+  // Get all favorite properties for a user.
+  // Two-step query: fetch ordered IDs from favorites, then load slim rows
+  // from property_list_view (80%+ less egress than full properties table).
   Future<List<PropertyModel>> getFavoriteProperties(String userId) async {
     try {
-      final data = await supabaseClient
+      // Step 1 — ordered favorite IDs (tiny payload: UUID + timestamp only).
+      final favRows = await supabaseClient
           .from(AppConstants.favoritesTable)
-          .select('property_id, ${AppConstants.propertiesTable}(*)')
+          .select('property_id')
           .eq('user_id', userId)
           .order('created_at', ascending: false);
 
-      final List<PropertyModel> properties = [];
-      for (var item in data) {
-        if (item['properties'] != null) {
-          properties.add(PropertyModel.fromJson(item['properties']));
-        }
-      }
+      if (favRows.isEmpty) return [];
 
-      return properties;
+      final ids = favRows
+          .map((r) => r['property_id'] as String)
+          .toList();
+
+      // Step 2 — slim property data from the optimised view.
+      final propRows = await supabaseClient
+          .from('property_list_view')
+          .select()
+          .inFilter('id', ids);
+
+      // Restore favorites order (view returns rows in arbitrary order).
+      final byId = {
+        for (final row in propRows) row['id'] as String: row,
+      };
+
+      return ids
+          .where(byId.containsKey)
+          .map((id) => PropertyModel.fromJson(byId[id]!))
+          .toList();
     } catch (e) {
       throw ServerException(e.toString());
     }

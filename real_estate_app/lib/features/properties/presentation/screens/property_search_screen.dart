@@ -1,6 +1,8 @@
 // features/properties/presentation/screens/property_search_screen.dart
 // FIXED VERSION with proper theme-based text colors using textPrimary/Secondary colors
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/config/theme_config.dart';
@@ -27,6 +29,7 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
   final _searchController = TextEditingController();
   final _focusNode = FocusNode();
   PropertyFilterEntity? _activeFilter;
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -39,6 +42,7 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -52,12 +56,10 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
   }
 
   void _onSearchChanged(String query) {
-    // Only update if query is not empty
-    if (query.trim().isNotEmpty) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
       ref.read(searchQueryProvider.notifier).state = query.trim();
-    } else {
-      ref.read(searchQueryProvider.notifier).state = '';
-    }
+    });
   }
 
   Future<void> _openFilterScreen() async {
