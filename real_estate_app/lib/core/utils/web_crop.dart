@@ -8,12 +8,13 @@
 //     3–5 s on mid-range phones, risking a "Page Unresponsive" kill on
 //     mobile Chrome / Safari PWA.
 //   • Canvas uses hardware-accelerated compositing in browser GPU memory,
-//     is fully async (onLoad/toBlob), and never touches the Dart heap.
+//     is fully async (onLoad), and never touches the Dart heap.
 
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 /// Center-crop [bytes] to 4:3 landscape and resize to at most 1 280 px wide
@@ -39,8 +40,13 @@ Future<Uint8List?> webCropToCard(Uint8List bytes) async {
 
   try {
     final imgEl = html.ImageElement()..src = url;
-    // Wait for decode — throws if the format is unsupported.
-    await imgEl.onLoad.first.timeout(const Duration(seconds: 15));
+
+    // Wait for the image to fully decode before drawing.
+    // onError fires for unsupported formats (e.g. HEIC on some browsers).
+    await Future.any([
+      imgEl.onLoad.first,
+      imgEl.onError.first.then((_) => throw Exception('image load error')),
+    ]).timeout(const Duration(seconds: 15));
 
     final srcW = imgEl.naturalWidth;
     final srcH = imgEl.naturalHeight;
@@ -51,31 +57,56 @@ Future<Uint8List?> webCropToCard(Uint8List bytes) async {
     if (srcW * 3 >= srcH * 4) {
       // Wider than 4:3 — constrain by height.
       cropH = srcH;
-      cropW = (srcH * 4 / 3).round();
+      cropW = (srcH * 4 ~/ 3); // integer division avoids double rounding
     } else {
       // Taller than 4:3 — constrain by width.
       cropW = srcW;
-      cropH = (srcW * 3 / 4).round();
+      cropH = (srcW * 3 ~/ 4);
     }
     final sx = (srcW - cropW) ~/ 2;
     final sy = (srcH - cropH) ~/ 2;
 
-    // Output: cap at 1 280 px wide (matches image_picker maxWidth).
-    final outW = cropW > 1280 ? 1280 : cropW;
-    final outH = (cropH * outW / cropW).round().clamp(1, 4096);
+    // Output: cap at 1 280 px wide, maintain exact 4:3.
+    // Use integer division throughout to avoid float-to-int canvas issues.
+    final outW = math.min(cropW, 1280);
+    final outH = math.max(1, cropH * outW ~/ cropW);
 
     final canvas = html.CanvasElement(width: outW, height: outH);
-    canvas.context2D.drawImageScaledFromSource(
+    final ctx = canvas.context2D;
+
+    // ── Fill white background ─────────────────────────────────────────────
+    // JPEG does not support alpha. If the source image has any transparent
+    // pixels, browsers fill them with BLACK during JPEG encoding, producing
+    // dark splotches. Pre-filling white ensures a clean background.
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, outW, outH);
+
+    ctx.drawImageScaledFromSource(
       imgEl,
-      sx.toDouble(), sy.toDouble(), cropW.toDouble(), cropH.toDouble(),
-      0, 0, outW.toDouble(), outH.toDouble(),
+      sx.toDouble(), sy.toDouble(),
+      cropW.toDouble(), cropH.toDouble(),
+      0.0, 0.0,
+      outW.toDouble(), outH.toDouble(),
     );
 
-    // Export as JPEG data-URL (quality 0.88 matches encodeJpg quality: 88).
+    // ── Force GPU synchronisation ─────────────────────────────────────────
+    // drawImageScaledFromSource queues a GPU command on mobile browsers.
+    // Calling toDataUrl() synchronously right after can capture a blank
+    // canvas if the GPU hasn't flushed yet. getImageData() forces a
+    // synchronous GPU readback, ensuring the draw is complete.
+    ctx.getImageData(0, 0, 1, 1);
+
     final dataUrl = canvas.toDataUrl('image/jpeg', 0.88);
     if (!dataUrl.contains(',')) return null;
 
-    return Uint8List.fromList(base64Decode(dataUrl.split(',').last));
+    // Validate the data URL actually contains JPEG bytes (starts with /9j/)
+    // before decoding — some browsers silently return a PNG data URL even
+    // when 'image/jpeg' is requested (e.g. when source has transparency).
+    final b64 = dataUrl.split(',').last;
+    final outBytes = Uint8List.fromList(base64Decode(b64));
+    if (outBytes.length < 100) return null; // suspiciously small — discard
+
+    return outBytes;
   } on TimeoutException {
     return null;
   } catch (_) {
