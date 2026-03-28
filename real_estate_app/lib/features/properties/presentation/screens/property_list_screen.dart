@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../../core/utils/location_utils.dart';
+import '../../../../core/utils/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -199,7 +200,9 @@ class _PropertyListScreenDirectAdsState
           ).timeout(const Duration(seconds: 8));
           guestRegion = await photonReverse(pos.latitude, pos.longitude);
         }
-      } catch (_) {}
+      } catch (e) {
+        logger.d('Geolocation for ads failed (non-critical)', error: e);
+      }
 
       List<DirectAd> ads = [];
       try {

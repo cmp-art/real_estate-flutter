@@ -1227,3 +1227,42 @@ DO $$ BEGIN
     RAISE NOTICE '  • notify_unread_message_reminders() (hourly cron)';
     RAISE NOTICE '=========================================';
 END $$;
+
+-- ============================================================================
+-- PART 21: TFLITE AI VALIDATION CONFIG
+-- Merged from sql_migration_tflite.sql — removes Claude API key config and
+-- registers the on-device MobileNet V3 TFLite model in app_config.
+-- ============================================================================
+
+-- Remove the Claude API key entry (AI validation now runs on-device via TFLite)
+DELETE FROM app_config WHERE key = 'claude_api_key';
+
+-- Update the AI validation description to reflect TFLite
+UPDATE app_config
+SET    description = 'Master switch: set to false to disable on-device TFLite validation and use rule-based fallback only'
+WHERE  key = 'ai_validation_enabled';
+
+-- Register TFLite model config (informational — model runs on-device, no API key needed)
+INSERT INTO app_config (key, value, description)
+VALUES (
+    'tflite_model',
+    'mobilenet_v3_small_100_224',
+    'On-device image classification model bundled with the app. No API key required.'
+)
+ON CONFLICT (key) DO UPDATE
+    SET value       = EXCLUDED.value,
+        description = EXCLUDED.description;
+
+COMMENT ON TABLE app_config IS
+    'Runtime admin configuration. AI image validation uses on-device MobileNet V3 TFLite — no API key needed.';
+
+-- Verify
+SELECT key, value, description FROM app_config ORDER BY key;
+
+DO $$ BEGIN
+    RAISE NOTICE '=========================================';
+    RAISE NOTICE '  Part 21: TFLite config merged';
+    RAISE NOTICE '  • claude_api_key removed from app_config';
+    RAISE NOTICE '  • tflite_model entry upserted';
+    RAISE NOTICE '=========================================';
+END $$;

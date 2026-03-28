@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/config/supabase_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/utils/logger.dart';
 import '../models/property_model.dart';
 import '../models/property_filter_model.dart';
 
@@ -78,28 +79,23 @@ class PropertyRemoteDataSource {
 
       // ✅ FIX: Check for null or empty response
       if (data == null) {
-        print('⚠️ getProperties: Received null response');
+        logger.w('getProperties: received null response');
         return [];
       }
 
       if (data is! List) {
-        print('⚠️ getProperties: Response is not a List, got: ${data.runtimeType}');
+        logger.w('getProperties: unexpected response type: ${data.runtimeType}');
         return [];
       }
 
-      if (data.isEmpty) {
-        print('ℹ️ getProperties: No properties found');
-        return [];
-      }
+      if (data.isEmpty) return [];
 
       return _parsePropertiesFromListView(data);
     } on PostgrestException catch (e) {
-      print('❌ PostgrestException in getProperties: ${e.message}');
-      print('   Code: ${e.code}, Details: ${e.details}');
+      logger.e('getProperties DB error', error: e);
       throw ServerException('Database error: ${e.message}');
     } catch (e, stackTrace) {
-      print('❌ Error in getProperties: $e');
-      print('   Stack trace: $stackTrace');
+      logger.e('getProperties failed', error: e, stackTrace: stackTrace);
       throw ServerException('Failed to load properties: ${e.toString()}');
     }
   }
@@ -158,14 +154,11 @@ class PropertyRemoteDataSource {
           .order('created_at', ascending: false)
           .range((page - 1) * limit, page * limit - 1);
 
-      if (data.isEmpty) {
-        print('ℹ️ getPropertiesByOwner: No properties found for owner $ownerId');
-        return [];
-      }
+      if (data.isEmpty) return [];
 
       return _parsePropertiesFromListView(data);
     } catch (e) {
-      print('❌ Error in getPropertiesByOwner: $e');
+      logger.e('getPropertiesByOwner failed', error: e);
       throw ServerException('Failed to load owner properties: ${e.toString()}');
     }
   }
@@ -216,7 +209,7 @@ class PropertyRemoteDataSource {
 
       return PropertyModel.fromJson(propertyJson);
     } catch (e) {
-      print('❌ Error creating property: $e');
+      logger.e('createProperty failed', error: e);
       throw ServerException('Failed to create property: ${e.toString()}');
     }
   }
@@ -267,7 +260,7 @@ class PropertyRemoteDataSource {
 
       return PropertyModel.fromJson(propertyJson);
     } catch (e) {
-      print('❌ Error updating property: $e');
+      logger.e('updateProperty failed', error: e);
       throw ServerException('Failed to update property: ${e.toString()}');
     }
   }
@@ -293,11 +286,11 @@ class PropertyRemoteDataSource {
         }
       }
     } on PostgrestException catch (e) {
-      print('❌ PostgrestException in deleteProperty: ${e.message}');
+      logger.e('deleteProperty DB error', error: e);
       throw ServerException('Database error: ${e.message}');
     } catch (e) {
       if (e is ServerException) rethrow;
-      print('❌ Error deleting property: $e');
+      logger.e('deleteProperty failed', error: e);
       throw ServerException('Failed to delete property: ${e.toString()}');
     }
   }
@@ -366,7 +359,7 @@ class PropertyRemoteDataSource {
 
       return uploadedUrls;
     } catch (e) {
-      print('❌ Error uploading images: $e');
+      logger.e('uploadImages failed', error: e);
       throw ServerException('Failed to upload images: ${e.toString()}');
     }
   }
@@ -388,7 +381,7 @@ class PropertyRemoteDataSource {
           .from(SupabaseConfig.propertyImagesBucket)
           .remove([filePath]);
     } catch (e) {
-      print('❌ Error deleting image: $e');
+      logger.e('deleteImage failed', error: e);
       throw ServerException('Failed to delete image: ${e.toString()}');
     }
   }
@@ -415,14 +408,11 @@ class PropertyRemoteDataSource {
           .order('created_at', ascending: false)
           .range((page - 1) * limit, page * limit - 1);
 
-      if (data.isEmpty) {
-        print('ℹ️ searchProperties: No results for query "$query"');
-        return [];
-      }
+      if (data.isEmpty) return [];
 
       return _parsePropertiesFromListView(data);
     } catch (e) {
-      print('❌ Error in searchProperties: $e');
+      logger.e('searchProperties failed', error: e);
       throw ServerException('Failed to search properties: ${e.toString()}');
     }
   }
@@ -455,14 +445,12 @@ class PropertyRemoteDataSource {
 
           properties.add(PropertyModel.fromJson(propertyJson));
         } catch (e) {
-          print('⚠️ Failed to parse property item: $e');
-          print('   Item data: $item');
-          // Continue parsing other properties
+          logger.w('Failed to parse property item', error: e);
           continue;
         }
       }
     } catch (e) {
-      print('❌ Error in _parsePropertiesFromListView: $e');
+      logger.e('_parsePropertiesFromListView failed', error: e);
     }
 
     return properties;

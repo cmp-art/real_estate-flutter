@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:patamjengo_app/features/settings/presentation/screens/app_translations.dart';
+import '../../../../core/utils/logger.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/dialog_utils.dart';
@@ -52,17 +53,14 @@ class SettingsScreen extends ConsumerWidget {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
-      print('🔄 Starting sign out process...');
+      logger.d('Starting sign out');
 
-      // Perform logout
       await ref.read(authNotifierProvider.notifier).logout();
 
-      print('📱 Logout completed');
+      logger.d('Logout completed');
 
-      // Small delay
       await Future.delayed(const Duration(milliseconds: 100));
 
-      // Navigate using stored navigator
       navigator.pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (context) => const LoginScreen(),
@@ -70,9 +68,6 @@ class SettingsScreen extends ConsumerWidget {
         (route) => false,
       );
 
-      print('🚪 Navigated to LoginScreen');
-
-      // Show success message
       Future.delayed(const Duration(milliseconds: 300), () {
         try {
           scaffoldMessenger.showSnackBar(
@@ -83,13 +78,12 @@ class SettingsScreen extends ConsumerWidget {
             ),
           );
         } catch (e) {
-          print('ℹ️ Could not show snackbar: $e');
+          logger.d('Could not show snackbar after sign out', error: e);
         }
       });
     } catch (e) {
-      print('❌ Sign out error: $e');
+      logger.e('Sign out error', error: e);
 
-      // Still navigate to login
       try {
         navigator.pushAndRemoveUntil(
           MaterialPageRoute(
@@ -98,7 +92,7 @@ class SettingsScreen extends ConsumerWidget {
           (route) => false,
         );
       } catch (navError) {
-        print('❌ Navigation error: $navError');
+        logger.e('Sign out navigation error', error: navError);
       }
     }
   }
@@ -177,28 +171,23 @@ class SettingsScreen extends ConsumerWidget {
     );
 
     try {
-      print('🗑️ Starting account deletion process...');
+      logger.d('Starting account deletion');
 
-      // Call the delete account method from auth provider
       final error = await ref.read(authNotifierProvider.notifier).deleteAccount(
             email: currentUser.email,
             password: password,
           );
 
-      // Close loading dialog safely
       if (isLoadingDialogShowing && context.mounted) {
         isLoadingDialogShowing = false;
-        navigator.pop(); // Close loading dialog
+        navigator.pop();
       }
 
       if (error != null) {
-        // Show error message
-        print('❌ Account deletion failed: $error');
+        logger.e('Account deletion failed: $error');
 
         if (context.mounted) {
-          // Wait a moment before showing error to avoid overlap
           await Future.delayed(const Duration(milliseconds: 100));
-
           if (context.mounted) {
             SnackbarUtils.showError(context, error);
           }
@@ -206,8 +195,7 @@ class SettingsScreen extends ConsumerWidget {
         return;
       }
 
-      // Success - account deleted
-      print('✅ Account deleted successfully');
+      logger.i('Account deleted successfully');
 
       // Small delay for user to see success
       await Future.delayed(const Duration(milliseconds: 300));
@@ -222,7 +210,6 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
 
-      // Show success message
       Future.delayed(const Duration(milliseconds: 300), () {
         try {
           scaffoldMessenger.showSnackBar(
@@ -233,19 +220,18 @@ class SettingsScreen extends ConsumerWidget {
             ),
           );
         } catch (e) {
-          print('ℹ️ Could not show snackbar: $e');
+          logger.d('Could not show snackbar after account deletion', error: e);
         }
       });
     } catch (e) {
-      print('❌ Account deletion error: $e');
+      logger.e('Account deletion error', error: e);
 
-      // Close loading dialog safely
       if (isLoadingDialogShowing && context.mounted) {
         isLoadingDialogShowing = false;
         try {
-          navigator.pop(); // Close loading dialog
+          navigator.pop();
         } catch (popError) {
-          print('⚠️ Error closing loading dialog: $popError');
+          logger.w('Error closing loading dialog', error: popError);
         }
       }
 

@@ -30,6 +30,7 @@ import '../../../../core/services/price_drop_alert_service.dart';
 import '../../domain/entities/property_entity.dart';
 import 'property_edit_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/utils/logger.dart';
 
 class PropertyDetailScreen extends ConsumerStatefulWidget {
   final String propertyId;
@@ -857,7 +858,13 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ScaffoldMessenger.of(ctx).showSnackBar(
                       const SnackBar(content: Text('Report submitted. Thank you.')));
                   }
-                } catch (_) {}
+                } catch (e) {
+                  logger.e('Property report submission failed', error: e);
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('Failed to submit report. Please try again.')));
+                  }
+                }
               },
               child: const Text('Submit Report'),
             ),

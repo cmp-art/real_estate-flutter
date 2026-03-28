@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../utils/logger.dart';
 
 // Conditional import: web_push_js.dart on Flutter web (dart:js_interop),
 // web_push_stub.dart (no-ops) on Android / iOS.
@@ -195,7 +196,9 @@ class PushNotificationService {
           .update({'is_active': false})
           .eq('user_id', userId)
           .eq('platform', platform);
-    } catch (_) {}
+    } catch (e) {
+      logger.w('Failed to deregister push token', error: e);
+    }
   }
 
   // ── Show a local notification banner ─────────────────────────────────────

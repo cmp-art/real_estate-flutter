@@ -19,6 +19,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/middleware/feature_gate_middleware.dart';
 import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
+import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../../../presentation/providers/auth_provider.dart';
@@ -495,7 +496,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             await ref
                 .read(subscriptionServiceProvider)
                 .incrementUsage(userId: user.id, featureName: 'create_listing');
-          } catch (_) {}
+          } catch (e) {
+            logger.w('Usage increment failed (non-critical)', error: e);
+          }
         }
         ref.invalidate(myPropertiesProvider);
         ref.invalidate(propertyListProvider);

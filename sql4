@@ -1452,7 +1452,8 @@ SELECT
     p.deleted_at,
     COALESCE(up.full_name, au.email, 'Unknown Owner') AS owner_name,
     up.avatar_url            AS owner_avatar,
-    p.rent_duration
+    p.rent_duration,
+    COALESCE(p.is_owner_verified, FALSE) AS is_owner_verified
 FROM       properties        p
 LEFT JOIN  user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'
 LEFT JOIN  subscription_tiers st ON st.id = us.tier_id
@@ -1955,6 +1956,7 @@ SELECT
     COALESCE(up.full_name, au.email, 'Unknown Owner') AS owner_name,
     up.avatar_url            AS owner_avatar,
     p.rent_duration,
+    COALESCE(p.is_owner_verified, FALSE) AS is_owner_verified,
     p.country                                          -- NEW: country filter support
 FROM       properties        p
 LEFT JOIN  user_subscriptions us ON us.user_id = p.owner_id AND us.status = 'active'

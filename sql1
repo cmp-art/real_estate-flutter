@@ -11,6 +11,141 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_cron";
 
 -- ============================================================================
+-- PART 0: CORE TABLES
+-- These are created here (IF NOT EXISTS) so all subsequent files can safely
+-- reference them. On a fresh database this creates them. On an existing
+-- database the statements are no-ops.
+-- ============================================================================
+
+-- Public users profile — lightweight mirror of auth.users used by chat RPCs
+-- and other cross-feature joins. user_profiles (sql4) is the authoritative
+-- profile store; this table holds just the fields needed for chat display.
+CREATE TABLE IF NOT EXISTS users (
+    id          UUID        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name   TEXT,
+    email       TEXT,
+    phone       TEXT,
+    avatar_url  TEXT,
+    bio         TEXT        CHECK (bio IS NULL OR length(bio) <= 500),
+    show_email  BOOLEAN     DEFAULT TRUE,
+    show_phone  BOOLEAN     DEFAULT TRUE,
+    country     TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Properties — core listing table
+CREATE TABLE IF NOT EXISTS properties (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    title               TEXT        NOT NULL,
+    description         TEXT        NOT NULL,
+    price               NUMERIC     NOT NULL CHECK (price >= 0),
+    type                TEXT        NOT NULL CHECK (type IN ('sale','rent')),
+    category            TEXT        NOT NULL CHECK (category IN ('house','apartment','land','commercial')),
+    location            TEXT        NOT NULL,
+    latitude            NUMERIC,
+    longitude           NUMERIC,
+    bedrooms            INTEGER     NOT NULL DEFAULT 0,
+    bathrooms           INTEGER     NOT NULL DEFAULT 0,
+    area                NUMERIC     NOT NULL DEFAULT 0,
+    images              TEXT[]      DEFAULT '{}',
+    videos              TEXT[]      DEFAULT '{}',
+    media_urls          TEXT[]      DEFAULT '{}',
+    owner_id            UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    status              TEXT        NOT NULL DEFAULT 'available'
+                        CHECK (status IN ('available','sold','rented','under_offer','off_market','pending','deleted')),
+    property_type       TEXT,
+    is_featured         BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_verified         BOOLEAN     NOT NULL DEFAULT FALSE,
+    views_count         INTEGER     DEFAULT 0,
+    is_owner_verified   BOOLEAN     DEFAULT FALSE,
+    verification_method TEXT        CHECK (verification_method IN ('near_owner','far_owner')),
+    verified_at         TIMESTAMPTZ,
+    deleted_at          TIMESTAMPTZ,
+    deleted_by_user     BOOLEAN     DEFAULT FALSE,
+    deleted_by_admin    UUID,
+    deletion_reason     TEXT,
+    moderated_by        UUID,
+    moderated_at        TIMESTAMPTZ,
+    rent_duration       TEXT,
+    country             TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT max_one_video_per_property
+        CHECK (array_length(videos, 1) IS NULL OR array_length(videos, 1) <= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_properties_owner_id    ON properties(owner_id);
+CREATE INDEX IF NOT EXISTS idx_properties_status      ON properties(status);
+CREATE INDEX IF NOT EXISTS idx_properties_type        ON properties(type);
+CREATE INDEX IF NOT EXISTS idx_properties_category    ON properties(category);
+CREATE INDEX IF NOT EXISTS idx_properties_location    ON properties(location);
+CREATE INDEX IF NOT EXISTS idx_properties_created_at  ON properties(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_properties_deleted_at  ON properties(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_properties_country     ON properties(country);
+CREATE INDEX IF NOT EXISTS idx_properties_is_featured ON properties(is_featured) WHERE is_featured = TRUE;
+
+ALTER TABLE properties ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can view available properties" ON properties;
+CREATE POLICY "Anyone can view available properties"
+    ON properties FOR SELECT TO authenticated, anon
+    USING (deleted_at IS NULL);
+
+DROP POLICY IF EXISTS "Owners can insert their properties" ON properties;
+CREATE POLICY "Owners can insert their properties"
+    ON properties FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() = owner_id);
+
+DROP POLICY IF EXISTS "Owners can update their properties" ON properties;
+CREATE POLICY "Owners can update their properties"
+    ON properties FOR UPDATE TO authenticated
+    USING (auth.uid() = owner_id) WITH CHECK (auth.uid() = owner_id);
+
+DROP POLICY IF EXISTS "Owners can delete their properties" ON properties;
+CREATE POLICY "Owners can delete their properties"
+    ON properties FOR DELETE TO authenticated
+    USING (auth.uid() = owner_id);
+
+DROP POLICY IF EXISTS "Service role full access to properties" ON properties;
+CREATE POLICY "Service role full access to properties"
+    ON properties FOR ALL TO service_role
+    USING (TRUE) WITH CHECK (TRUE);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON properties TO authenticated;
+GRANT SELECT ON properties TO anon;
+GRANT ALL ON properties TO service_role;
+
+-- Favorites — saved properties per user
+CREATE TABLE IF NOT EXISTS favorites (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    property_id UUID        NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, property_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_favorites_user_id     ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_property_id ON favorites(property_id);
+
+ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own favorites" ON favorites;
+CREATE POLICY "Users can view their own favorites"
+    ON favorites FOR SELECT TO authenticated USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can add to favorites" ON favorites;
+CREATE POLICY "Users can add to favorites"
+    ON favorites FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can remove their favorites" ON favorites;
+CREATE POLICY "Users can remove their favorites"
+    ON favorites FOR DELETE TO authenticated USING (auth.uid() = user_id);
+
+GRANT SELECT, INSERT, DELETE ON favorites TO authenticated;
+GRANT ALL ON favorites TO service_role;
+
+-- ============================================================================
 -- PART 1: USERS TABLE EXTENSIONS
 -- ============================================================================
 
@@ -475,7 +610,9 @@ AS $$
 
     FROM  conversations c
 
-    JOIN  users other_u
+    -- Use user_profiles (authoritative profile store) so that chat avatars
+    -- and names always match what the rest of the app displays.
+    LEFT JOIN  user_profiles other_u
           ON  other_u.id = CASE
                   WHEN c.user1_id = p_user_id THEN c.user2_id
                   ELSE c.user1_id
