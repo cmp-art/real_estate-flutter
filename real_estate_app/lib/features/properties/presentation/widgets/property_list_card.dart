@@ -277,7 +277,7 @@ class _PropertyListCardState extends ConsumerState<PropertyListCard> {
                 ),
                 // Trust badge — top right (only when owner is verified)
                 if (widget.property.isOwnerVerified == true)
-                  Positioned(
+                  const Positioned(
                     top: 8, right: 8,
                     child: TrustBadgeWidget(
                       isVerified: true,

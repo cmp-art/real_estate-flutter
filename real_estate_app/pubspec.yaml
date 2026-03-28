@@ -1,7 +1,7 @@
 name: patamjengo_app
 description: A real estate application for buying, selling, and renting properties
 publish_to: 'none'
-version: 1.0.0+11
+version: 1.0.0+12
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -48,8 +48,8 @@ dependencies:
   phone_numbers_parser: ^8.1.0
 
   # Image Handling
-  image_picker: ^1.0.7
-  image_cropper: ^8.0.0
+  image_picker: ^1.2.1
+  image_cropper: ^9.1.0
   photo_view: ^0.14.0
   carousel_slider: ^4.2.1
   smooth_page_indicator: ^1.1.0
@@ -76,7 +76,7 @@ dependencies:
   http: ^1.1.0
 
   # On-device AI — MobileNet V3 TFLite image validation
-  tflite_flutter: ^0.10.4
+  tflite_flutter: ^0.12.1
   image: ^4.1.7
 
   # EXIF GPS — reads GPS coordinates embedded in photo metadata

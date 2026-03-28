@@ -805,8 +805,8 @@ class _AttemptTile extends StatelessWidget {
       final dist  = (row['distance_meters'] as num?)?.toStringAsFixed(0);
       detail = 'Score: ${total ?? "??"}/100'
                '${dist != null ? "  •  ${dist}m away" : ""}'
-               '${gps   != null ? "  •  GPS ${gps}/40" : ""}'
-               '${photo != null ? "  •  Photo ${photo}/60" : ""}';
+               '${gps   != null ? "  •  GPS $gps/40" : ""}'
+               '${photo != null ? "  •  Photo $photo/60" : ""}';
     } else if (method == 'far_owner') {
       final pct = (row['name_match_pct'] as num?)?.toStringAsFixed(1);
       final idN = row['id_name_extracted']   as String?;

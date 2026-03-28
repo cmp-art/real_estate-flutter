@@ -559,7 +559,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               const SizedBox(height: 24),
 
               // ── Property Type ─────────────────────────────────────────
-              _SectionLabel('Property Type'),
+              const _SectionLabel('Property Type'),
               const SizedBox(height: 8),
               _buildTypeChips(s),
               if (_type == PropertyType.rent) ...[
@@ -940,7 +940,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   // ── Category dropdown ──────────────────────────────────────────────────────
   Widget _buildCategoryDropdown(BuildContext context, double radius) {
     return DropdownButtonFormField<PropertyCategory>(
-      value: _category,
+      initialValue: _category,
       decoration: InputDecoration(
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius / 2)),
         contentPadding:
@@ -1087,12 +1087,12 @@ class _MobileWebBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             children: [
-              const Icon(Icons.warning_amber_rounded,
+              Icon(Icons.warning_amber_rounded,
                   color: Colors.orange, size: 18),
-              const SizedBox(width: 6),
-              const Expanded(
+              SizedBox(width: 6),
+              Expanded(
                 child: Text(
                   'Photo upload may not work on mobile browsers',
                   style: TextStyle(

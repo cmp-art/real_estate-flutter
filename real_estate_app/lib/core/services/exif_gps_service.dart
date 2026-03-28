@@ -16,7 +16,6 @@
 // Cost: $0 — uses the pure-Dart `exif` package.
 
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';

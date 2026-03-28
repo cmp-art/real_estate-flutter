@@ -11,12 +11,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'unit/formatters_test.dart' as formatters_tests;
 import 'unit/property_entity_test.dart' as entity_tests;
 import 'unit/mortgage_calculator_test.dart' as mortgage_tests;
+import 'unit/image_crop_math_test.dart' as crop_tests;
+import 'unit/cdn_service_test.dart' as cdn_tests;
 
 void main() {
   // ── Unit test suites ───────────────────────────────────────────────────
   group('Formatters', () => formatters_tests.main());
   group('PropertyEntity', () => entity_tests.main());
   group('MortgageCalculator', () => mortgage_tests.main());
+  group('ImageCropMath', () => crop_tests.main());
+  group('CdnService', () => cdn_tests.main());
 
   // ── App widget smoke test ──────────────────────────────────────────────
   // This verifies the widget tree renders without throwing.

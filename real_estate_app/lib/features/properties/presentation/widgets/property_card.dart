@@ -58,7 +58,7 @@ class PropertyCard extends StatelessWidget {
                 ),
                 // Trust badge — top left
                 if (property.isOwnerVerified)
-                  Positioned(
+                  const Positioned(
                     top: 8, left: 8,
                     child: TrustBadgeWidget(isVerified: true),
                   ),

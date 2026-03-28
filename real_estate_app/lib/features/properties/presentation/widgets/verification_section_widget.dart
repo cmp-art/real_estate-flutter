@@ -154,7 +154,7 @@ class _VerificationSectionWidgetState
     if (user?.createdAt != null) {
       try {
         accountAgeDays =
-            DateTime.now().difference(DateTime.parse(user!.createdAt!)).inDays;
+            DateTime.now().difference(DateTime.parse(user!.createdAt)).inDays;
       } catch (_) {}
     }
     final meta            = user?.userMetadata;

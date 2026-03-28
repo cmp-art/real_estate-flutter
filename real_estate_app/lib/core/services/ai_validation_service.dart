@@ -31,7 +31,6 @@
 //   imagenet_labels.txt       — from storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt
 
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../constants/app_constants.dart';

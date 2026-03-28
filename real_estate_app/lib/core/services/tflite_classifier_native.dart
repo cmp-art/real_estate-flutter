@@ -4,7 +4,6 @@
 // Contains the real TFLite model inference — NOT compiled on web.
 // Imported only via the conditional export in tflite_classifier.dart.
 
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';

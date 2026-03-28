@@ -144,7 +144,7 @@ class _AdminBroadcastScreenState extends ConsumerState<AdminBroadcastScreen> {
   @override
   Widget build(BuildContext context) {
     final primary = ThemeConfig.getPrimaryColor(context);
-    final radius  = 12.0;
+    const radius  = 12.0;
 
     return Scaffold(
       backgroundColor: ThemeConfig.getBackgroundColor(context),

@@ -30,12 +30,12 @@ class TrustBadgeWidget extends StatelessWidget {
     if (!isVerified) return const SizedBox.shrink();
 
     if (compact) {
-      return Row(
+      return const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.verified, color: Colors.white, size: 11),
-          const SizedBox(width: 3),
-          const Text(
+          Icon(Icons.verified, color: Colors.white, size: 11),
+          SizedBox(width: 3),
+          Text(
             'VERIFIED',
             style: TextStyle(
               color:      Colors.white,

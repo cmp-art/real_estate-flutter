@@ -2,7 +2,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
+import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import '../config/theme_config.dart';
 import '../constants/app_constants.dart';
 import '../errors/exceptions.dart';
@@ -187,45 +189,52 @@ class ImageHelper {
   }
 
   // ── Crop an XFile to 4:3 for property card display ────────────────────────
-  // Forces the user to frame their photo in a 4:3 landscape ratio so it fills
-  // property cards perfectly without unexpected cropping at display time.
-  // Works on Android, iOS, and Web. Returns null if the user cancels.
+  // Automatically center-crops the image to a 4:3 landscape ratio with no UI.
+  // Works on Android, iOS, Web, and PWA.
   Future<XFile?> cropToCard(BuildContext context, XFile image) async {
     try {
-      final croppedFile = await ImageCropper().cropImage(
-        sourcePath: image.path,
-        aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
-        compressFormat: ImageCompressFormat.jpg,
-        compressQuality: 88,
-        uiSettings: [
-          AndroidUiSettings(
-            toolbarTitle: 'Frame your photo (4:3)',
-            toolbarColor: ThemeConfig.primaryColor,
-            toolbarWidgetColor: Colors.white,
-            statusBarColor: ThemeConfig.primaryColor,
-            activeControlsWidgetColor: ThemeConfig.primaryColor,
-            lockAspectRatio: true,
-            initAspectRatio: CropAspectRatioPreset.ratio4x3,
-            aspectRatioPresets: [CropAspectRatioPreset.ratio4x3],
-            showCropGrid: true,
-            hideBottomControls: false,
-          ),
-          IOSUiSettings(
-            title: 'Frame your photo',
-            aspectRatioLockEnabled: true,
-            resetAspectRatioEnabled: false,
-            aspectRatioPickerButtonHidden: true,
-            aspectRatioPresets: [CropAspectRatioPreset.ratio4x3],
-          ),
-          WebUiSettings(
-            context: context,
-            presentStyle: WebPresentStyle.dialog,
-            size: const CropperSize(width: 520, height: 420),
-          ),
-        ],
-      );
-      if (croppedFile == null) return null;
-      return XFile(croppedFile.path);
+      final bytes = await image.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return image; // fallback: return original
+
+      // image package applies EXIF orientation on decode — no manual rotate needed
+      final src = decoded;
+      final srcW = src.width;
+      final srcH = src.height;
+
+      // Target 4:3: pick the largest 4:3 rect that fits inside the source
+      int cropW, cropH;
+      if (srcW / srcH >= 4 / 3) {
+        cropH = srcH;
+        cropW = (srcH * 4 / 3).round();
+      } else {
+        cropW = srcW;
+        cropH = (srcW * 3 / 4).round();
+      }
+      final offsetX = (srcW - cropW) ~/ 2;
+      final offsetY = (srcH - cropH) ~/ 2;
+
+      final cropped = img.copyCrop(src,
+          x: offsetX, y: offsetY, width: cropW, height: cropH);
+      final resized = img.copyResize(cropped, width: 1280);
+      final outBytes = img.encodeJpg(resized, quality: 88);
+
+      if (kIsWeb) {
+        // Web/PWA: dart:io File and path_provider are not available.
+        // XFile.fromData holds the bytes in memory — no filesystem write needed.
+        return XFile.fromData(
+          outBytes,
+          name: 'crop_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          mimeType: 'image/jpeg',
+        );
+      } else {
+        // Android / iOS: write to a temp file and return the path.
+        final tmpDir = await getTemporaryDirectory();
+        final outPath =
+            '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        await File(outPath).writeAsBytes(outBytes);
+        return XFile(outPath);
+      }
     } catch (e) {
       throw ValidationException(e.toString());
     }

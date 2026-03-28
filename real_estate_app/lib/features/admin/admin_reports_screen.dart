@@ -473,7 +473,7 @@ class _ReportCard extends StatelessWidget {
               ),
               child: Text(
                 'Reason: $reason',
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 12,
                   color: ThemeConfig.errorColor,
                   fontWeight: FontWeight.w500,
