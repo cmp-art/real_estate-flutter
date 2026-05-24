@@ -11,6 +11,101 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_cron";
 
 -- ============================================================================
+-- PART -1: FORWARD-DECLARATION BOOTSTRAP
+-- These 5 SQL files have circular references across each other (sql1 needs
+-- user_profiles from sql4; sql3's policies need is_admin() from sql4; sql4's
+-- policies need user_notifications from sql5). A clean sql1->sql5 run would
+-- otherwise fail with "relation/function does not exist".
+--
+-- We pre-create the shared objects here so every file can reference them.
+-- The authoritative definitions live in their original files (sql4 for
+-- user_profiles/is_admin, sql5 for user_notifications) which use
+-- CREATE TABLE IF NOT EXISTS / CREATE OR REPLACE FUNCTION, so these declarations
+-- are safely superseded. Idempotent: harmless on a database that already exists.
+-- ============================================================================
+
+-- user_profiles — authoritative definition is in sql4 (kept in sync).
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id                   UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    role                 TEXT NOT NULL DEFAULT 'user'
+                         CHECK (role IN ('super_admin','admin','moderator','advertiser','agent','user')),
+    permissions          JSONB DEFAULT '[]'::jsonb,
+    full_name            TEXT,
+    email                TEXT,
+    phone                TEXT,
+    avatar_url           TEXT,
+    profile_image_url    TEXT,
+    bio                  TEXT CHECK (bio IS NULL OR length(bio) <= 500),
+    website              TEXT,
+    location             TEXT,
+    address              TEXT,
+    city                 TEXT,
+    country              TEXT DEFAULT 'TZ',
+    date_of_birth        DATE,
+    gender               TEXT,
+    nationality          TEXT,
+    user_type            TEXT DEFAULT 'regular',
+    account_type         TEXT DEFAULT 'personal',
+    profile_type         TEXT DEFAULT 'user',
+    show_email           BOOLEAN DEFAULT TRUE,
+    show_phone           BOOLEAN DEFAULT TRUE,
+    profile_visibility   TEXT    DEFAULT 'public',
+    notification_enabled BOOLEAN DEFAULT TRUE,
+    marketing_enabled    BOOLEAN DEFAULT FALSE,
+    preferred_language   TEXT    DEFAULT 'en',
+    preferred_currency   TEXT    DEFAULT 'TZS',
+    is_active            BOOLEAN DEFAULT TRUE,
+    is_verified          BOOLEAN DEFAULT FALSE,
+    email_verified       BOOLEAN DEFAULT FALSE,
+    phone_verified       BOOLEAN DEFAULT FALSE,
+    last_login_at        TIMESTAMPTZ,
+    login_count          INTEGER DEFAULT 0,
+    last_activity_at     TIMESTAMPTZ,
+    deactivated_at       TIMESTAMPTZ,
+    deactivation_reason  TEXT,
+    deleted_at           TIMESTAMPTZ,
+    deleted_by_admin     UUID,
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- user_notifications — authoritative definition is in sql5 (drops & recreates it).
+CREATE TABLE IF NOT EXISTS user_notifications (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    type       TEXT        NOT NULL,
+    title      TEXT        NOT NULL,
+    message    TEXT        NOT NULL,
+    data       JSONB       DEFAULT '{}'::JSONB,
+    is_read    BOOLEAN     DEFAULT FALSE,
+    read_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- is_admin() / is_super_admin() — authoritative definitions are in sql4.
+-- Bodies reference user_profiles (created above); plpgsql defers body checks to
+-- runtime, by which point sql4 has finalised everything.
+CREATE OR REPLACE FUNCTION is_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM user_profiles
+        WHERE id = user_id AND role IN ('super_admin','admin','moderator') AND is_active = TRUE
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE FUNCTION is_super_admin(user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (SELECT 1 FROM user_profiles WHERE id = user_id AND role='super_admin' AND is_active=TRUE);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+GRANT EXECUTE ON FUNCTION is_admin(UUID)       TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION is_super_admin(UUID) TO authenticated, anon;
+
+-- ============================================================================
 -- PART 0: CORE TABLES
 -- These are created here (IF NOT EXISTS) so all subsequent files can safely
 -- reference them. On a fresh database this creates them. On an existing

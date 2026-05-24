@@ -203,16 +203,23 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
 
     if (images.isEmpty || !mounted) return;
 
-    // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
-    // A crop failure is non-fatal — keep the original photo so it still uploads.
+    // ── Crop each photo to 4:3 and normalise it to a renderable format ────
+    // cropToCard returns null when an image can't be made browser-renderable
+    // (e.g. an iPhone HEIC the server couldn't transcode). Skip those instead
+    // of uploading a file that shows broken.
     final cropped = <XFile>[];
+    int skipped = 0;
     for (final image in images) {
       if (!mounted) break;
       try {
         final result = await _imageHelper.cropToCard(context, image);
-        cropped.add(result ?? image);
+        if (result != null) {
+          cropped.add(result);
+        } else {
+          skipped++;
+        }
       } catch (_) {
-        cropped.add(image);
+        skipped++;
       }
     }
 
@@ -222,6 +229,41 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
         _selectedImages.addAll(cropped);
       });
     }
+
+    if (skipped > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(sw
+            ? 'Picha $skipped imerukwa — haikuweza kushughulikiwa. Tumia programu au JPEG.'
+            : '$skipped photo${skipped > 1 ? 's' : ''} skipped — could not be processed. Try the app or a JPEG.'),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // ── Resolve XFiles for upload (web: use cached bytes to bypass blob: SW issue) ─
+  // On web, picker / drag-drop XFiles can carry a blob: URL. The PWA service
+  // worker may intercept blob: fetches and return the offline HTML page, so
+  // reading bytes lazily at upload time can yield index.html instead of the
+  // image. We cached the real bytes at pick/drop time (_cacheWebBytes), so here
+  // we build byte-backed XFiles the datasource can read directly.
+  Future<List<XFile>> _resolveUploadFiles() async {
+    if (!kIsWeb) return _selectedImages;
+    final result = <XFile>[];
+    for (final f in _selectedImages) {
+      var bytes = _webImageBytes[f.path];
+      if (bytes == null || bytes.isEmpty) {
+        try {
+          bytes = await f.readAsBytes().timeout(const Duration(seconds: 10));
+        } catch (_) {}
+      }
+      if (bytes != null && bytes.isNotEmpty) {
+        result.add(XFile.fromData(bytes,
+            name: f.name.isNotEmpty ? f.name : 'photo.jpg',
+            mimeType: f.mimeType ?? 'image/jpeg'));
+      }
+    }
+    return result.isEmpty ? _selectedImages : result;
   }
 
   void _removeExistingImage(int index) {
@@ -334,9 +376,10 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           PropertyEntity finalProperty = savedProperty;
 
           if (_selectedImages.isNotEmpty) {
+            final toUpload = await _resolveUploadFiles();
             final uploadResult = await repository.uploadImages(
               savedProperty.id,
-              _selectedImages,
+              toUpload,
             );
 
             await uploadResult.fold(

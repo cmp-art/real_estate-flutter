@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/config/supabase_config.dart';
 import '../../../../core/errors/exceptions.dart';
+import '../../../../core/utils/image_format.dart';
 import '../../../../core/utils/logger.dart';
 import '../models/property_model.dart';
 import '../models/property_filter_model.dart';
@@ -328,22 +329,37 @@ class PropertyRemoteDataSource {
           continue;
         }
 
+        // Decide the format from the bytes themselves — never trust the file
+        // name or XFile.mimeType. This is the last line of defence against
+        // storing a corrupt object: HEIC that no browser can render, an HTML
+        // page a PWA service worker substituted for a blob, or garbage. The
+        // crop/transcode step upstream normally converts everything to JPEG,
+        // so reaching this guard means that step could not, and the only safe
+        // action is to skip rather than store a file that renders broken.
+        final format = detectImageFormat(bytes);
+        if (!format.isBrowserRenderable) {
+          logger.w('uploadImages: image ${i + 1} is ${format.name} '
+              '(not renderable) — skipping');
+          failed++;
+          continue;
+        }
+
         final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final fileName = '${propertyId}_${timestamp}_$i.jpg';
+        final fileName = '${propertyId}_${timestamp}_$i.${format.fileExtension}';
         final filePath = '$userId/$fileName';
 
-        // Detect MIME type from XFile if available, fallback to image/jpeg
-        final mimeType = xfile.mimeType ?? 'image/jpeg';
-
-        // uploadBinary accepts Uint8List — works on web and native
-        // upsert:true prevents failure if the same file key already exists
+        // uploadBinary accepts Uint8List — works on web and native.
+        // contentType comes from the detected format so the stored object's
+        // Content-Type always matches its real bytes (a mismatched type makes
+        // browsers refuse to render it).
+        // upsert:true prevents failure if the same file key already exists.
         await supabaseClient.storage
             .from(SupabaseConfig.propertyImagesBucket)
             .uploadBinary(
               filePath,
               bytes,
               fileOptions: FileOptions(
-                contentType: mimeType,
+                contentType: format.mimeType,
                 cacheControl: '31536000',
                 upsert: true,
               ),

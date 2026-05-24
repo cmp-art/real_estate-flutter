@@ -424,22 +424,43 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     );
     if (picked.isEmpty || !mounted) return;
 
-    // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
-    // A crop failure is non-fatal — keep the original photo so it still uploads.
+    // ── Crop each photo to 4:3 and normalise it to a renderable format ────
+    // cropToCard returns null when an image can't be turned into something
+    // every browser can display (e.g. an iPhone HEIC the server couldn't
+    // transcode). We skip those rather than upload a file that shows broken,
+    // and tell the user how many were skipped.
     final cropped = <XFile>[];
+    int skipped = 0;
     for (final image in picked) {
       if (!mounted) break;
       try {
         final result = await _imageHelper.cropToCard(context, image);
-        cropped.add(result ?? image);
+        if (result != null) {
+          cropped.add(result);
+        } else {
+          skipped++;
+        }
       } catch (_) {
-        cropped.add(image);
+        skipped++;
       }
     }
 
     if (cropped.isNotEmpty && mounted) {
       await _cacheWebBytes(cropped);
       setState(() => _images = [..._images, ...cropped]);
+    }
+
+    if (skipped > 0 && mounted) {
+      final s = _s;
+      _snack(
+        s.pick(
+          '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
+              'could not be processed. Try the app or a JPEG.',
+          'Picha $skipped imerukwa — haikuweza kushughulikiwa. '
+              'Tumia programu au JPEG.',
+        ),
+        isError: true,
+      );
     }
   }
 

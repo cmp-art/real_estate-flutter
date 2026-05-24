@@ -3,6 +3,8 @@
 // ignore_for_file: unused_import, unused_field
 
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,6 +12,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/direct_ad_models.dart';
+import '../../../../core/services/image_upload_service.dart';
+import '../../../../core/utils/image_helper.dart';
 
 import '../../../properties/domain/entities/property_entity.dart';
 import '../../../properties/presentation/providers/ai_providers.dart';
@@ -467,7 +471,9 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   final _whatsappController   = TextEditingController();
   final _whatsappMsgController = TextEditingController();
   final _websiteUrlController  = TextEditingController();
-  final _imagePicker = ImagePicker();
+  final ImageHelper _imageHelper = ImageHelper();
+  // Web preview bytes for picked images (Image.memory works in CanvasKit).
+  final Map<String, Uint8List> _previewBytes = {};
 
   // Form selections
   String _selectedFormat    = 'native_medium';
@@ -479,9 +485,9 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   // For property destination — advertiser picks one of their listings
   PropertyEntity? _selectedProperty;
 
-  // Picked local files
-  File? _imageFile;
-  File? _logoFile;
+  // Picked images (XFile so the flow works on web + native)
+  XFile? _imageFile;
+  XFile? _logoFile;
 
   // Uploaded Supabase public URLs
   String? _imageUrl;
@@ -504,52 +510,17 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
 
   String get _storageBucket => 'advertisements';
 
-  /// Resolve MIME type from file extension so Supabase storage accepts the file.
-  String _mimeType(String ext) {
-    switch (ext) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'png':
-        return 'image/png';
-      case 'webp':
-        return 'image/webp';
-      case 'gif':
-        return 'image/gif';
-      default:
-        return 'application/octet-stream';
-    }
-  }
-
-  Future<String?> _uploadToSupabase(
-    File file,
-    String folder,
-    String label,
-  ) async {
-    try {
-      final ext = file.path.split('.').last.toLowerCase();
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final path = '$folder/${ts}_$label.$ext';
-      final bytes = await file.readAsBytes();
-      final mime = _mimeType(ext);
-
-      await Supabase.instance.client.storage.from(_storageBucket).uploadBinary(
-            path,
-            bytes,
-            fileOptions: FileOptions(
-              cacheControl: '31536000', // 1 year — CDN edge caching
-              upsert: true,
-              contentType: mime, // ✅ Required — tells Supabase the file type
-            ),
-          );
-
-      return Supabase.instance.client.storage
-          .from(_storageBucket)
-          .getPublicUrl(path);
-    } catch (e) {
-      debugPrint('Upload error ($label): $e');
-      return null;
-    }
+  // Web-safe preview for a picked image: Image.memory on web (CanvasKit can't
+  // read a File), Image.file on native.
+  Widget _previewImage(XFile file, {BoxFit fit = BoxFit.cover}) {
+    if (!kIsWeb) return Image.file(File(file.path), fit: fit);
+    final bytes = _previewBytes[file.path];
+    if (bytes != null) return Image.memory(bytes, fit: fit);
+    return Image.network(file.path,
+        fit: fit,
+        errorBuilder: (_, __, ___) => const ColoredBox(
+            color: Colors.black12,
+            child: Icon(Icons.broken_image_rounded, color: Colors.grey)));
   }
 
   void _showError(String msg) {
@@ -576,83 +547,90 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
 
   // ── pickers ──────────────────────────────────────────────────────────────
 
-  Future<void> _pickAndUploadImage() async {
+  // Pick → normalise (HEIC transcode + format validation) → upload, choosing
+  // the stored object's Content-Type/extension from the real bytes. Works on
+  // web, PWA and native.
+  Future<void> _pickAndUpload({
+    required String folder,
+    required String label,
+    required void Function(XFile? file, String? url) onPicked,
+    required void Function(bool uploading) setUploading,
+  }) async {
     try {
-      final XFile? picked = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: ResponsiveHelper.getDialogWidth(context),
-        maxHeight: 1080,
-        imageQuality: 85,
-      );
-      if (picked == null) return;
+      final picked =
+          await _imageHelper.pickSingleImage(source: ImageSource.gallery);
+      if (picked == null || !mounted) return;
 
-      final file = File(picked.path);
+      final normalized =
+          await _imageHelper.normalizeForUpload(context, picked, card: false);
+      if (normalized == null) {
+        _showError(_s.sw
+            ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
+            : 'That image could not be processed. Try the app or a JPEG.');
+        return;
+      }
+
+      final bytes = await normalized.readAsBytes();
+      if (bytes.isEmpty) {
+        _showError('That image could not be read. Please try another.');
+        return;
+      }
+      if (kIsWeb) _previewBytes[normalized.path] = bytes;
+
       setState(() {
-        _imageFile = file;
-        _imageUrl = null;
-        _isUploadingImage = true;
+        onPicked(normalized, null);
+        setUploading(true);
       });
 
-      final url = await _uploadToSupabase(file, 'ad_images', 'main');
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final url = await ImageUploadService.uploadImageBytes(
+        bucket: _storageBucket,
+        pathPrefix: '$folder/${ts}_$label',
+        bytes: bytes,
+      );
 
       if (!mounted) return;
       if (url != null) {
         setState(() {
+          onPicked(normalized, url);
+          setUploading(false);
+        });
+        _showSuccess(label == 'logo'
+            ? 'Logo uploaded successfully'
+            : 'Image uploaded successfully');
+      } else {
+        setState(() {
+          onPicked(null, null);
+          setUploading(false);
+        });
+        _showError('${label == 'logo' ? 'Logo' : 'Image'} upload failed. '
+            'Please try again.');
+      }
+    } catch (e) {
+      if (mounted) setState(() => setUploading(false));
+      _showError('Could not open gallery: $e');
+    }
+  }
+
+  Future<void> _pickAndUploadImage() => _pickAndUpload(
+        folder: 'ad_images',
+        label: 'main',
+        onPicked: (file, url) {
+          _imageFile = file;
           _imageUrl = url;
-          _isUploadingImage = false;
-        });
-        _showSuccess('Image uploaded successfully');
-      } else {
-        setState(() {
-          _imageFile = null;
-          _isUploadingImage = false;
-        });
-        _showError('Image upload failed. Check your storage bucket.');
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isUploadingImage = false);
-      _showError('Could not open gallery: $e');
-    }
-  }
-
-  Future<void> _pickAndUploadLogo() async {
-    try {
-      final XFile? picked = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: ResponsiveHelper.getDialogWidth(context),
-        maxHeight: 512,
-        imageQuality: 90,
+        },
+        setUploading: (v) => _isUploadingImage = v,
       );
-      if (picked == null) return;
 
-      final file = File(picked.path);
-      setState(() {
-        _logoFile = file;
-        _logoUrl = null;
-        _isUploadingLogo = true;
-      });
-
-      final url = await _uploadToSupabase(file, 'ad_logos', 'logo');
-
-      if (!mounted) return;
-      if (url != null) {
-        setState(() {
+  Future<void> _pickAndUploadLogo() => _pickAndUpload(
+        folder: 'ad_logos',
+        label: 'logo',
+        onPicked: (file, url) {
+          _logoFile = file;
           _logoUrl = url;
-          _isUploadingLogo = false;
-        });
-        _showSuccess('Logo uploaded successfully');
-      } else {
-        setState(() {
-          _logoFile = null;
-          _isUploadingLogo = false;
-        });
-        _showError('Logo upload failed. Check your storage bucket.');
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isUploadingLogo = false);
-      _showError('Could not open gallery: $e');
-    }
-  }
+        },
+        setUploading: (v) => _isUploadingLogo = v,
+      );
 
   // ── submission ────────────────────────────────────────────────────────────
 
@@ -682,7 +660,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
           return;
         }
         // Store digits-only in the URL path — safe from encoding issues.
-        landingUrl = 'https://call.nyumba.co.tz/\$digitsOnly';
+        landingUrl = 'https://call.nyumba.co.tz/$digitsOnly';
         break;
 
       // ── WhatsApp ──────────────────────────────────────────────────
@@ -697,7 +675,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
               ? 'Hi, I saw your ad on Nyumba and I am interested.'
               : _whatsappMsgController.text.trim(),
         );
-        landingUrl = 'https://wa.me/\$rawWa?text=\$msg';
+        landingUrl = 'https://wa.me/$rawWa?text=$msg';
         break;
 
       // ── Specific property listing ─────────────────────────────────
@@ -707,7 +685,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
           return;
         }
         linkedPropertyId = _selectedProperty!.id;
-        landingUrl = 'https://property.nyumba.co.tz/\${_selectedProperty!.id}';
+        landingUrl = 'https://property.nyumba.co.tz/${_selectedProperty!.id}';
         break;
 
       // ── In-app profile ────────────────────────────────────────────
@@ -717,7 +695,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
           _showError(_s.loginRequired);
           return;
         }
-        landingUrl = 'https://profile.nyumba.co.tz/\$userId';
+        landingUrl = 'https://profile.nyumba.co.tz/$userId';
         break;
 
       // ── External website (optional) ───────────────────────────────
@@ -747,7 +725,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
       companyType:       'advertiser',  // generic — all business types are allowed
       campaignObjective: widget.campaign.campaignObjective,
       landingUrl:        landingUrl,
-      image:             _imageFile != null ? XFile(_imageFile!.path) : null,
+      image:             _imageFile,
       submittedBy:       user?.id,
     );
 
@@ -1452,14 +1430,14 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   }
 
   Widget _buildImagePreview(
-    File file, {
+    XFile file, {
     required String label,
     required VoidCallback onRemove,
   }) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.file(file, fit: BoxFit.cover),
+        _previewImage(file),
         // Dark scrim at bottom
         Positioned(
           left: 0,

@@ -2,13 +2,17 @@
 // COMPLETE VERSION with Country Code Selector and Number-Only Phone Input
 
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../../core/config/supabase_config.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/country_codes.dart';
+import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../core/utils/snackbar_utils.dart';
 import '../../../../core/utils/image_helper.dart';
@@ -33,7 +37,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   final _imageHelper = ImageHelper();
   final _searchController = TextEditingController();
 
-  File? _selectedImage;
+  XFile? _selectedImage;
+  Uint8List? _selectedImageBytes; // web preview + upload bytes
   UserType _selectedUserType = UserType.buyer;
   bool _showEmail = true;
   bool _showPhone = true;
@@ -90,10 +95,75 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   }
 
   Future<void> _pickImage() async {
-    final image = await _imageHelper.showImageSourceDialog(context);
-    if (image != null) {
-      setState(() => _selectedImage = image);
+    final currentLanguage = ref.read(languageProvider).languageCode;
+    final sw = currentLanguage == 'sw';
+
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: Text(sw ? 'Chagua kwenye Galari' : 'Choose from Gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: Text(sw ? 'Piga Picha' : 'Take a Photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: Text(sw ? 'Ghairi' : 'Cancel'),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    final picked = await _imageHelper.pickSingleImage(source: source);
+    if (picked == null || !mounted) return;
+
+    // Normalise: transcodes iPhone HEIC to JPEG and validates the format, so a
+    // broken/unrenderable avatar is never stored.
+    final normalized =
+        await _imageHelper.normalizeForUpload(context, picked, card: false);
+    if (normalized == null) {
+      if (mounted) {
+        SnackbarUtils.showError(
+            context,
+            sw
+                ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
+                : 'That photo could not be processed. Try the app or a JPEG.');
+      }
+      return;
     }
+
+    final bytes = await normalized.readAsBytes();
+    if (bytes.isEmpty || !mounted) return;
+
+    setState(() {
+      _selectedImage = normalized;
+      _selectedImageBytes = bytes;
+    });
+  }
+
+  ImageProvider? _avatarProvider(String? existingUrl) {
+    if (_selectedImage != null) {
+      if (kIsWeb) {
+        return _selectedImageBytes != null
+            ? MemoryImage(_selectedImageBytes!)
+            : null;
+      }
+      return FileImage(File(_selectedImage!.path));
+    }
+    if (existingUrl != null && existingUrl.isNotEmpty) {
+      return CachedNetworkImageProvider(existingUrl);
+    }
+    return null;
   }
 
   void _showCountryCodePicker() {
@@ -256,9 +326,22 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
 
     String? imageUrl = user.avatarUrl;
     if (_selectedImage != null) {
-      await Future.delayed(const Duration(seconds: 1));
-      // Here you would upload the image and get the URL
-      // imageUrl = await uploadImage(_selectedImage!);
+      final bytes = _selectedImageBytes ?? await _selectedImage!.readAsBytes();
+      // Path must start with the user id — profile-images RLS only allows a
+      // user to write under their own <userId>/ folder.
+      final uploaded = await ImageUploadService.uploadImageBytes(
+        bucket: SupabaseConfig.profileImagesBucket,
+        pathPrefix: '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}',
+        bytes: bytes,
+      );
+      if (uploaded == null) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          SnackbarUtils.showError(context, t('failed_to_update_profile'));
+        }
+        return;
+      }
+      imageUrl = uploaded;
     }
 
     // Combine country code with phone number
@@ -344,11 +427,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                     child: CircleAvatar(
                       radius: 60,
                       backgroundColor: Colors.grey.shade200,
-                      backgroundImage: _selectedImage != null
-                          ? FileImage(_selectedImage!)
-                          : (user?.avatarUrl != null
-                              ? CachedNetworkImageProvider(user!.avatarUrl!)
-                              : null) as ImageProvider?,
+                      backgroundImage: _avatarProvider(user?.avatarUrl),
                       child: _selectedImage == null && user?.avatarUrl == null
                           ? Text(
                               user?.fullName[0].toUpperCase() ?? 'U',

@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import '../config/theme_config.dart';
 import '../constants/app_constants.dart';
 import '../errors/exceptions.dart';
+import '../services/image_transcode_service.dart';
+import 'image_format.dart';
 import 'web_crop.dart' if (dart.library.io) 'web_crop_stub.dart';
 
 class ImageHelper {
@@ -225,13 +227,28 @@ class ImageHelper {
     }
   }
 
-  // ── Crop an XFile to 4:3 for property card display ────────────────────────
-  // Automatically center-crops the image to a 4:3 landscape ratio with no UI.
-  // Works on Android, iOS, Web, and PWA.
+  // ── Normalise any picked image into a safe-to-upload file ─────────────────
+  // Guarantees the result is something every browser can render: iPhone HEIC is
+  // transcoded to JPEG, the format is validated, and on [card]=true the image
+  // is center-cropped to 4:3 for property cards. Works on Android, iOS, Web and
+  // PWA. Used by property photos ([card]=true) and by avatars / logos / ad
+  // images ([card]=false, no crop so their own aspect ratio is preserved).
+  //
+  // RETURN CONTRACT:
+  //   • non-null XFile → ready to upload (JPEG, or an already-renderable
+  //     original) with a correct name/mimeType.
+  //   • null → the image could not be turned into anything renderable (HEIC the
+  //     server couldn't transcode, a service-worker HTML page, or garbage). The
+  //     caller MUST skip it rather than upload it, so we never store a file that
+  //     shows up broken.
   //
   // Web path uses Canvas API (hardware-accelerated, async, ~0 Dart heap cost).
-  // Native path uses the Dart image package (runs in main isolate).
-  Future<XFile?> cropToCard(BuildContext context, XFile image) async {
+  // Native path uses the Dart image package (runs in a background isolate).
+  Future<XFile?> normalizeForUpload(
+    BuildContext context,
+    XFile image, {
+    bool card = true,
+  }) async {
     final tag = DateTime.now().millisecondsSinceEpoch;
 
     if (kIsWeb) {
@@ -242,29 +259,62 @@ class ImageHelper {
       // can kill the browser tab.  Canvas API avoids both problems.
       try {
         final bytes = await image.readAsBytes();
-        if (bytes.isEmpty) return image;
+        if (bytes.isEmpty) return null;
 
-        final outBytes = await webCropToCard(bytes);
-        if (outBytes != null && outBytes.isNotEmpty) {
-          return XFile.fromData(
-            outBytes,
-            name: 'crop_$tag.jpg',
-            mimeType: 'image/jpeg',
-          );
+        final fmt = detectImageFormat(bytes);
+
+        // Service-worker offline page or undecodable junk — never store it.
+        if (fmt == DetectedImageFormat.html ||
+            fmt == DetectedImageFormat.unknown) {
+          return null;
         }
-        // Canvas failed (unsupported format, security error, etc.) —
-        // return the already-sized bytes from image_picker unchanged.
-        return XFile.fromData(bytes, name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
+
+        // HEIC: no browser except Safari can decode it, so the canvas cannot
+        // crop or re-encode it. Transcode to JPEG on the server (which also
+        // downscales). If the server can't be reached, skip the photo (return
+        // null) instead of uploading bytes that render broken.
+        if (fmt == DetectedImageFormat.heic) {
+          final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
+          if (jpeg == null || jpeg.isEmpty) return null;
+          if (!card) {
+            return XFile.fromData(jpeg,
+                name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
+          }
+          final cropped = await webCropToCard(jpeg);
+          final outBytes =
+              (cropped != null && cropped.isNotEmpty) ? cropped : jpeg;
+          return XFile.fromData(outBytes,
+              name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
+        }
+
+        // Renderable formats (JPEG/PNG/WebP/GIF): crop to 4:3 when [card],
+        // otherwise leave the image as-is to preserve its aspect ratio.
+        if (card) {
+          final outBytes = await webCropToCard(bytes);
+          if (outBytes != null && outBytes.isNotEmpty) {
+            return XFile.fromData(outBytes,
+                name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
+          }
+        }
+        // No crop requested (or the canvas crop failed) but the bytes are a
+        // valid renderable image — upload them unchanged with the correct
+        // type/extension rather than dropping a good photo.
+        return XFile.fromData(bytes,
+            name: 'photo_$tag.${fmt.fileExtension}', mimeType: fmt.mimeType);
       } catch (_) {
-        return image; // last-resort fallback
+        return null; // unprocessable — skip
       }
     }
 
     // ── Android / iOS ──────────────────────────────────────────────────────
+    // image_picker already down-scaled the image and transcoded HEIC→JPEG at
+    // pick time, so for the no-crop case the original file is upload-ready.
+    if (!card) return image;
+
     // Decode/crop/encode runs on a background isolate via compute() so a batch
     // of large photos can't block the UI thread and trigger an ANR ("app not
     // responding") on low-end devices. Crop is best-effort — fall back to the
-    // original picked image (already down-scaled by image_picker) on any error.
+    // original picked image on any error.
     try {
       final bytes = await image.readAsBytes();
       final outBytes = await compute(_cropToCardJpg, bytes);
@@ -276,6 +326,49 @@ class ImageHelper {
       return XFile(outPath);
     } catch (_) {
       return image;
+    }
+  }
+
+  // 4:3 center-crop for property cards — thin wrapper over [normalizeForUpload].
+  Future<XFile?> cropToCard(BuildContext context, XFile image) =>
+      normalizeForUpload(context, image, card: true);
+
+  // ── Pick a single image as an XFile (web + native) ────────────────────────
+  // Unlike [pickImageFromGallery]/[pickImageFromCamera] (which return a
+  // dart:io File and so only work on native), this returns an XFile usable on
+  // every platform. On web the bytes are read immediately — in the same JS
+  // context that created the blob — so the PWA service worker can't later
+  // intercept the blob: URL and hand back the offline page.
+  Future<XFile?> pickSingleImage({required ImageSource source}) async {
+    if (_isPickerActive) return null;
+    _isPickerActive = true;
+    try {
+      final XFile? shot = kIsWeb
+          ? await _picker.pickImage(source: source)
+          : await _picker.pickImage(
+              source: source,
+              maxWidth: 1920,
+              maxHeight: 1920,
+              imageQuality: 85,
+            );
+      if (shot == null) return null;
+
+      if (kIsWeb) {
+        final bytes = await shot.readAsBytes();
+        if (bytes.isNotEmpty) {
+          return XFile.fromData(
+            bytes,
+            name: shot.name.isNotEmpty ? shot.name : 'photo.jpg',
+            mimeType: 'image/jpeg',
+          );
+        }
+      }
+      return shot;
+    } catch (e) {
+      if (e.toString().contains('already_active')) return null;
+      throw ValidationException(e.toString());
+    } finally {
+      _isPickerActive = false;
     }
   }
 

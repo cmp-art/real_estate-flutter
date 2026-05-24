@@ -868,6 +868,49 @@ WHERE
     start_date > NOW() - INTERVAL '1 day'
     AND deleted_at IS NULL;
 
+-- ============================================================================
+-- One-time fix: repair ad_creatives.landing_url rows broken by the Dart
+-- string-interpolation bug in create_creative_screen._submit(). landing_url was
+-- built with single-quoted Dart strings and ESCAPED dollar signs (\$), so the
+-- LITERAL placeholder text was stored instead of the real value:
+--     phone    -> https://call.nyumba.co.tz/$digitsOnly
+--     whatsapp -> https://wa.me/$rawWa?text=$msg
+--     property -> https://property.nyumba.co.tz/${_selectedProperty!.id}
+--     profile  -> https://profile.nyumba.co.tz/$userId
+-- The Dart fix ships in the app build; this repairs already-stored rows.
+-- Idempotent: "landing_url LIKE '%$%'" only matches still-broken rows, so this
+-- is safe to re-run. Run it against LIVE data (like the one-time fixes above) —
+-- NOT as part of a clean re-run of this whole file, whose PART 1 drops the ad
+-- tables. 'website' rows are intentionally left untouched (a pasted URL may
+-- legitimately contain '$').
+-- ============================================================================
+
+-- property -> rebuild from the correctly-stored linked_property_id
+UPDATE ad_creatives
+SET    landing_url = 'https://property.nyumba.co.tz/' || linked_property_id::TEXT,
+       updated_at  = NOW()
+WHERE  destination_type   = 'property'
+  AND  landing_url        LIKE '%$%'
+  AND  linked_property_id IS NOT NULL;
+
+-- profile -> rebuild from the campaign's advertiser user_id
+UPDATE ad_creatives AS c
+SET    landing_url = 'https://profile.nyumba.co.tz/' || a.user_id::TEXT,
+       updated_at  = NOW()
+FROM   ad_campaigns AS cam
+JOIN   advertisers  AS a ON a.id = cam.advertiser_id
+WHERE  c.campaign_id      = cam.id
+  AND  c.destination_type = 'profile'
+  AND  c.landing_url      LIKE '%$%';
+
+-- phone + whatsapp -> the number/message were never persisted, so the URL
+-- cannot be rebuilt. Pause these so dead links stop serving; the advertiser
+-- re-opens the ad and re-enters the number (the fixed app then stores it right).
+UPDATE ad_creatives
+SET    status     = 'paused',
+       updated_at = NOW()
+WHERE  destination_type IN ('phone','whatsapp')
+  AND  landing_url LIKE '%$%';
 
 -- ============================================================================
 -- SELCOM WEBHOOK PAYMENT VERIFICATION
@@ -1174,8 +1217,9 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- Step 2: Register jobs
--- NOTE: inner SQL strings use $job$ delimiters (not $$) to avoid
---       colliding with the outer DO $$ block delimiter.
+-- NOTE: the inner SQL strings use a custom dollar-tag delimiter (dollar-job-dollar)
+--       rather than the standard double-dollar, so they do not collide with the
+--       outer DO block delimiter.
 DO $$
 BEGIN
     -- Job 1: every midnight UTC (= 3 AM Tanzania) — restore daily-budget-exhausted campaigns
