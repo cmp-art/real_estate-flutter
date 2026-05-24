@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
-import '../../../../core/config/supabase_config.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/country_codes.dart';
@@ -326,13 +325,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
 
     String? imageUrl = user.avatarUrl;
     if (_selectedImage != null) {
-      final bytes = _selectedImageBytes ?? await _selectedImage!.readAsBytes();
-      // Path must start with the user id — profile-images RLS only allows a
-      // user to write under their own <userId>/ folder.
-      final uploaded = await ImageUploadService.uploadImageBytes(
-        bucket: SupabaseConfig.profileImagesBucket,
-        pathPrefix: '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}',
-        bytes: bytes,
+      // Universal Upload Architecture: raw bytes → staging_media → Edge Function
+      // → public_media.  readAsBytes() inside uploadSingleRawToStaging bypasses
+      // Android Scoped Storage / iOS sandbox / PWA service-worker interception.
+      final uploaded = await ImageUploadService.uploadSingleRawToStaging(
+        file: _selectedImage!,
+        userId: user.id,
+        folder: 'avatar',
+        label: '0',
       );
       if (uploaded == null) {
         if (mounted) {

@@ -508,8 +508,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   // falls back to English if provider not available in this screen
   _S get _s => const _S(false); // override in build if languageProvider is accessible
 
-  String get _storageBucket => 'advertisements';
-
   // Web-safe preview for a picked image: Image.memory on web (CanvasKit can't
   // read a File), Image.file on native.
   Widget _previewImage(XFile file, {BoxFit fit = BoxFit.cover}) {
@@ -570,23 +568,37 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
         return;
       }
 
-      final bytes = await normalized.readAsBytes();
-      if (bytes.isEmpty) {
-        _showError('That image could not be read. Please try another.');
+      // Web-only: read bytes now for Image.memory preview (CanvasKit can't use
+      // File paths).  On native, Image.file works directly and readAsBytes() is
+      // deferred into uploadSingleRawToStaging where it acts as the Scoped
+      // Storage / service-worker bypass.
+      if (kIsWeb) {
+        final previewBytes = await normalized.readAsBytes();
+        if (previewBytes.isEmpty) {
+          _showError('That image could not be read. Please try another.');
+          return;
+        }
+        _previewBytes[normalized.path] = previewBytes;
+      }
+
+      final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
+      if (userId.isEmpty) {
+        _showError(_s.loginRequired);
         return;
       }
-      if (kIsWeb) _previewBytes[normalized.path] = bytes;
 
       setState(() {
         onPicked(normalized, null);
         setUploading(true);
       });
 
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final url = await ImageUploadService.uploadImageBytes(
-        bucket: _storageBucket,
-        pathPrefix: '$folder/${ts}_$label',
-        bytes: bytes,
+      // Universal Upload Architecture: raw bytes → staging_media → Edge Function
+      // → public_media. No client-side transcoding — backend handles all formats.
+      final url = await ImageUploadService.uploadSingleRawToStaging(
+        file: normalized,
+        userId: userId,
+        folder: folder,
+        label: label,
       );
 
       if (!mounted) return;

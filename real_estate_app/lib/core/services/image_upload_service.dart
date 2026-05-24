@@ -7,8 +7,9 @@
 // the process-staged-image Edge Function will create in public_media.
 // No client-side format detection or transcoding — the backend handles all of it.
 //
-// For single-image uploads (avatars, logos): uploadImageBytes() remains as the
-// direct-to-bucket path used where the caller has already normalised the bytes.
+// For single-image uploads (avatars, ad creatives, logos): uploadSingleRawToStaging()
+// uses the same async staging pipeline — raw bytes → staging_media → public_media.
+// uploadImageBytes() is kept only as a legacy fallback.
 
 import 'dart:typed_data';
 
@@ -81,9 +82,60 @@ class ImageUploadService {
     }
   }
 
-  /// Upload [bytes] directly to [bucket] for single-image use cases (avatars,
-  /// logos, ad images) where the caller has already normalised the bytes.
+  /// Upload a single raw image [file] to the private staging bucket for
+  /// non-property images (avatars, ad creatives, logos).
+  ///
+  /// Same "dumb pipe" pipeline as [uploadRawToStaging]: `readAsBytes()` is used
+  /// as the critical cross-platform fix, bypassing OS path restrictions on
+  /// Android Scoped Storage, iOS sandbox, and PWA service-worker interception.
+  ///
+  /// [folder] namespaces the image type, e.g. `'avatar'`, `'ad_images'`,
+  /// `'ad_logos'`.  [label] distinguishes uploads within the same folder, e.g.
+  /// `'0'` or `'main'`.
+  ///
+  /// Returns the predicted final public URL in public_media, or null on failure.
+  static Future<String?> uploadSingleRawToStaging({
+    required XFile file,
+    required String userId,
+    required String folder,
+    required String label,
+  }) async {
+    final Uint8List rawBytes = await file.readAsBytes();
+    if (rawBytes.isEmpty) {
+      logger.w('uploadSingleRawToStaging[$folder/$label]: empty byte stream — skipping');
+      return null;
+    }
+    if (_isHtmlPage(rawBytes)) {
+      logger.w('uploadSingleRawToStaging[$folder/$label]: bytes are an HTML page — skipping');
+      return null;
+    }
+
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final stagingPath = '$userId/${folder}_${timestamp}_$label.raw';
+
+    try {
+      await Supabase.instance.client.storage
+          .from(SupabaseConfig.stagingMediaBucket)
+          .uploadBinary(
+            stagingPath,
+            rawBytes,
+            fileOptions: const FileOptions(upsert: true),
+          );
+
+      final publicPath = '$userId/${folder}_${timestamp}_$label.jpg';
+      return '${SupabaseConfig.supabaseUrl}/storage/v1/object/public/'
+          '${SupabaseConfig.publicMediaBucket}/$publicPath';
+    } catch (e) {
+      logger.e('uploadSingleRawToStaging[$folder/$label] failed', error: e);
+      return null;
+    }
+  }
+
+  /// Upload [bytes] directly to [bucket] for single-image use cases where the
+  /// caller has already normalised the bytes and wants direct-to-bucket storage.
   /// Returns the public URL, or null if the upload fails.
+  ///
+  /// Prefer [uploadSingleRawToStaging] for new upload flows.
   static Future<String?> uploadImageBytes({
     required String bucket,
     required String pathPrefix,
