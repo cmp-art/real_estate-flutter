@@ -463,18 +463,17 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         // Upload new photos and capture the final entity with image URLs
         PropertyEntity finalSaved = saved;
 
+        bool uploadFailed = false;
         if (_images.isNotEmpty) {
           // On web: resolve blob-URL XFiles to byte-backed XFiles first
           final toUpload = await _resolveUploadFiles();
           final uploadResult = await repo.uploadImages(saved.id, toUpload);
           await uploadResult.fold(
-            (_) async => _snack(s.photoFail, isError: true),
+            (_) async { uploadFailed = true; },
             (urls) async {
               final withImages = saved.copyWith(
                   images: [...saved.images, ...urls]);
               final updateResult = await repo.updateProperty(withImages);
-              // Use the server-returned entity so image URLs are reflected
-              // in the list; fall back to local copy if the update call fails.
               updateResult.fold(
                 (_) { finalSaved = withImages; },
                 (u)  { finalSaved = u; },
@@ -484,6 +483,19 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         }
 
         if (!mounted) return;
+
+        if (uploadFailed) {
+          // Roll back: soft-delete the just-created property so it doesn't
+          // appear in listings without images. For edits the property already
+          // exists, so leave it as-is (text changes were already saved).
+          if (!_isEditing) {
+            try { await repo.deleteProperty(saved.id); } catch (_) {}
+          }
+          setState(() => _isLoading = false);
+          _snack(s.photoFail, isError: true);
+          return;
+        }
+
         setState(() => _isLoading = false);
 
         // Update in-memory providers with the entity that has image URLs
@@ -491,7 +503,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           ref.read(propertyListProvider.notifier).updatePropertyInList(finalSaved);
         } else {
           ref.read(propertyListProvider.notifier).addProperty(finalSaved);
-          // Increment usage counter
           try {
             await ref
                 .read(subscriptionServiceProvider)
@@ -979,7 +990,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     int maxLines = 1,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
-    String? Function(String?)? validator,
+    FormFieldValidator<String>? validator,
   }) {
     final radius = ResponsiveHelper.getResponsiveBorderRadius(context);
     return TextFormField(

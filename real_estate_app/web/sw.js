@@ -78,11 +78,10 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   
-  // Skip non-HTTP requests and blob: URLs.
-  // blob: URLs are created in the page context and are not accessible from
-  // the service worker context — returning without respondWith() lets the
-  // browser read the blob natively.
-  if (!request.url.startsWith('http') || request.url.startsWith('blob:')) {
+  // Skip non-HTTP, blob:, and non-GET requests.
+  // Non-GET methods (PUT, POST, DELETE) — e.g. Supabase storage uploads —
+  // must pass through natively. Intercepting them would block the upload.
+  if (!request.url.startsWith('http') || request.url.startsWith('blob:') || request.method !== 'GET') {
     return;
   }
   
