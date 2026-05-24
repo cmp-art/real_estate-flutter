@@ -46,24 +46,27 @@ class ImageTranscodeService {
 
     final uri = Uri.parse('$baseUrl/functions/v1/transcode-image');
 
-    // Prefer the signed-in user's token so the function can be deployed with
-    // JWT verification on; fall back to the anon key otherwise. The apikey
-    // header is required by the Supabase API gateway either way.
-    final token =
-        Supabase.instance.client.auth.currentSession?.accessToken ?? anonKey;
+    // Header strategy for Supabase's new API-key system: publishable keys
+    // (sb_publishable_...) are NOT JWTs. The function is deployed with
+    // verify_jwt=false, so the gateway accepts the `apikey` header alone. We add
+    // an `Authorization: Bearer` header ONLY when we have a real user-session
+    // JWT — sending the publishable key there makes the gateway reject the call
+    // with UNAUTHORIZED_INVALID_JWT_FORMAT, which is what silently broke HEIC/
+    // AVIF uploads on the web.
+    final accessToken =
+        Supabase.instance.client.auth.currentSession?.accessToken;
+    final headers = <String, String>{
+      'apikey': anonKey,
+      'Content-Type': 'application/octet-stream',
+    };
+    if (accessToken != null && accessToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $accessToken';
+    }
 
     try {
       final resp = await http
-          .post(
-            uri,
-            headers: {
-              'Authorization': 'Bearer $token',
-              'apikey': anonKey,
-              'Content-Type': 'application/octet-stream',
-            },
-            body: bytes,
-          )
-          .timeout(const Duration(seconds: 30));
+          .post(uri, headers: headers, body: bytes)
+          .timeout(const Duration(seconds: 45));
 
       if (resp.statusCode != 200) {
         logger.w('transcodeToJpeg: HTTP ${resp.statusCode} '
