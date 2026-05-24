@@ -25,14 +25,34 @@ import 'dart:typed_data';
 Future<Uint8List?> webCropToCard(Uint8List bytes) async {
   if (bytes.isEmpty) return null;
 
-  // Detect MIME from magic bytes (JPEG vs PNG).
-  String mimeType = 'image/jpeg';
-  if (bytes.length > 3 &&
-      bytes[0] == 0x89 &&
-      bytes[1] == 0x50 &&
-      bytes[2] == 0x4E &&
-      bytes[3] == 0x47) {
+  // Detect MIME type from magic bytes so the Blob has the correct Content-Type.
+  // A mismatch (e.g. AVIF/WebP bytes labelled 'image/jpeg') causes some mobile
+  // browsers to reject the image, silently returning a failed load event.
+  final String mimeType;
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+    mimeType = 'image/jpeg';
+  } else if (bytes.length >= 4 &&
+      bytes[0] == 0x89 && bytes[1] == 0x50 &&
+      bytes[2] == 0x4E && bytes[3] == 0x47) {
     mimeType = 'image/png';
+  } else if (bytes.length >= 4 &&
+      bytes[0] == 0x47 && bytes[1] == 0x49 &&
+      bytes[2] == 0x46 && bytes[3] == 0x38) {
+    mimeType = 'image/gif';
+  } else if (bytes.length >= 12 &&
+      bytes[0] == 0x52 && bytes[1] == 0x49 &&
+      bytes[2] == 0x46 && bytes[3] == 0x46 &&
+      bytes[8] == 0x57 && bytes[9] == 0x45 &&
+      bytes[10] == 0x42 && bytes[11] == 0x50) {
+    mimeType = 'image/webp';
+  } else if (bytes.length >= 12 &&
+      bytes[4] == 0x66 && bytes[5] == 0x74 &&
+      bytes[6] == 0x79 && bytes[7] == 0x70) {
+    final brand = String.fromCharCodes(bytes.sublist(8, 12)).toLowerCase();
+    mimeType = (brand == 'avif' || brand == 'avis') ? 'image/avif' : 'image/heic';
+  } else {
+    mimeType = 'application/octet-stream';
   }
 
   final blob = html.Blob([bytes], mimeType);

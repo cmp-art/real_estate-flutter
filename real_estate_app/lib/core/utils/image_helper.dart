@@ -267,16 +267,10 @@ class ImageHelper {
         // transcoder can't turn it into one. Never store it.
         if (fmt == DetectedImageFormat.html) return null;
 
-        // Formats the browser canvas can't reliably decode (HEIC, AVIF) and
-        // anything we couldn't identify (BMP/TIFF/JPEG-XL/HEIC variants/…):
-        // hand the raw bytes to the server transcoder, which runs ImageMagick
-        // and decodes far more formats than a mobile browser canvas can. It
-        // returns a downscaled JPEG. If the server can't be reached or can't
-        // decode the bytes, skip the photo (return null) instead of uploading
-        // something that renders broken.
-        if (fmt == DetectedImageFormat.heic ||
-            fmt == DetectedImageFormat.avif ||
-            fmt == DetectedImageFormat.unknown) {
+        // HEIC: no mobile browser Canvas can decode this — only Safari on
+        // Apple devices renders HEIC. Must go through the server transcoder.
+        // If the transcoder is unavailable, skip the photo.
+        if (fmt == DetectedImageFormat.heic) {
           final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
           if (jpeg == null || jpeg.isEmpty) return null;
           if (!card) {
@@ -286,6 +280,34 @@ class ImageHelper {
           final cropped = await webCropToCard(jpeg);
           final outBytes =
               (cropped != null && cropped.isNotEmpty) ? cropped : jpeg;
+          return XFile.fromData(outBytes,
+              name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
+        }
+
+        // AVIF or unrecognised format: try Canvas first.
+        // Chrome on Android 89+ renders AVIF natively in the Canvas API, so
+        // most users never need the server here. We only call the transcoder
+        // when the Canvas itself reports an error, which means the browser
+        // genuinely cannot decode the format.
+        if (fmt == DetectedImageFormat.avif ||
+            fmt == DetectedImageFormat.unknown) {
+          if (card) {
+            final canvasCropped = await webCropToCard(bytes);
+            if (canvasCropped != null && canvasCropped.isNotEmpty) {
+              return XFile.fromData(canvasCropped,
+                  name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
+            }
+          }
+          // Canvas couldn't render it — fall back to server transcoder.
+          final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
+          if (jpeg == null || jpeg.isEmpty) return null;
+          if (!card) {
+            return XFile.fromData(jpeg,
+                name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
+          }
+          final serverCropped = await webCropToCard(jpeg);
+          final outBytes =
+              (serverCropped != null && serverCropped.isNotEmpty) ? serverCropped : jpeg;
           return XFile.fromData(outBytes,
               name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
         }
