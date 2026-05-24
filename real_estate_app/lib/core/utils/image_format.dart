@@ -18,6 +18,7 @@ enum DetectedImageFormat {
   webp,
   gif,
   heic, // HEIC/HEIF — only Safari decodes this; needs transcoding elsewhere.
+  avif, // AVIF — not universally renderable (older Safari/browsers); transcode.
   html, // service-worker offline page returned in place of an image.
   unknown,
 }
@@ -36,6 +37,8 @@ extension DetectedImageFormatX on DetectedImageFormat {
         return 'image/gif';
       case DetectedImageFormat.heic:
         return 'image/heic';
+      case DetectedImageFormat.avif:
+        return 'image/avif';
       case DetectedImageFormat.html:
       case DetectedImageFormat.unknown:
         return 'application/octet-stream';
@@ -55,6 +58,8 @@ extension DetectedImageFormatX on DetectedImageFormat {
         return 'gif';
       case DetectedImageFormat.heic:
         return 'heic';
+      case DetectedImageFormat.avif:
+        return 'avif';
       case DetectedImageFormat.html:
       case DetectedImageFormat.unknown:
         return 'bin';
@@ -62,7 +67,8 @@ extension DetectedImageFormatX on DetectedImageFormat {
   }
 
   /// True for formats that every target browser can render in an <img> tag.
-  /// HEIC is excluded (Safari-only); HTML/unknown are obviously excluded.
+  /// HEIC (Safari-only) and AVIF (no older Safari/browsers) are excluded so
+  /// they get transcoded first; HTML/unknown are obviously excluded.
   bool get isBrowserRenderable {
     switch (this) {
       case DetectedImageFormat.jpeg:
@@ -71,6 +77,7 @@ extension DetectedImageFormatX on DetectedImageFormat {
       case DetectedImageFormat.gif:
         return true;
       case DetectedImageFormat.heic:
+      case DetectedImageFormat.avif:
       case DetectedImageFormat.html:
       case DetectedImageFormat.unknown:
         return false;
@@ -80,9 +87,9 @@ extension DetectedImageFormatX on DetectedImageFormat {
 
 /// Detect the real image format from the leading bytes.
 ///
-/// Recognises JPEG, PNG, GIF, WebP and the HEIF/HEIC family, plus the HTML
-/// fallback page a service worker may substitute for a blob. Anything else is
-/// [DetectedImageFormat.unknown].
+/// Recognises JPEG, PNG, GIF, WebP, the HEIF/HEIC family and AVIF, plus the
+/// HTML fallback page a service worker may substitute for a blob. Anything else
+/// is [DetectedImageFormat.unknown].
 DetectedImageFormat detectImageFormat(Uint8List b) {
   if (b.length < 12) return DetectedImageFormat.unknown;
 
@@ -120,8 +127,11 @@ DetectedImageFormat detectImageFormat(Uint8List b) {
     return DetectedImageFormat.webp;
   }
 
-  // HEIF / HEIC: ISO-BMFF "ftyp" box at offset 4, with a HEIF-family brand.
-  // Brands: heic, heix, hevc, heim, heis, hevm, hevs, mif1, msf1, heif.
+  // HEIF / HEIC and AVIF: ISO-BMFF "ftyp" box at offset 4, told apart by the
+  // major brand at offset 8. Both need server-side transcoding for the web —
+  // no mobile browser canvas reliably decodes HEIC, and AVIF isn't renderable
+  // on older Safari/browsers (some viewers would see it broken).
+  // HEIF brands: heic, heix, hevc, heim, heis, hevm, hevs, mif1, msf1, heif.
   if (b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70) {
     final brand = String.fromCharCodes(b.sublist(8, 12)).toLowerCase();
     const heifBrands = {
@@ -129,6 +139,7 @@ DetectedImageFormat detectImageFormat(Uint8List b) {
       'heif',
     };
     if (heifBrands.contains(brand)) return DetectedImageFormat.heic;
+    if (brand == 'avif' || brand == 'avis') return DetectedImageFormat.avif;
   }
 
   // HTML — a service worker returned the offline fallback page instead of the

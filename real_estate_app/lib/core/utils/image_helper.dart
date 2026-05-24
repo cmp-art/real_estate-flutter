@@ -263,17 +263,20 @@ class ImageHelper {
 
         final fmt = detectImageFormat(bytes);
 
-        // Service-worker offline page or undecodable junk — never store it.
-        if (fmt == DetectedImageFormat.html ||
-            fmt == DetectedImageFormat.unknown) {
-          return null;
-        }
+        // Service-worker offline page — it's HTML, never an image, and the
+        // transcoder can't turn it into one. Never store it.
+        if (fmt == DetectedImageFormat.html) return null;
 
-        // HEIC: no browser except Safari can decode it, so the canvas cannot
-        // crop or re-encode it. Transcode to JPEG on the server (which also
-        // downscales). If the server can't be reached, skip the photo (return
-        // null) instead of uploading bytes that render broken.
-        if (fmt == DetectedImageFormat.heic) {
+        // Formats the browser canvas can't reliably decode (HEIC, AVIF) and
+        // anything we couldn't identify (BMP/TIFF/JPEG-XL/HEIC variants/…):
+        // hand the raw bytes to the server transcoder, which runs ImageMagick
+        // and decodes far more formats than a mobile browser canvas can. It
+        // returns a downscaled JPEG. If the server can't be reached or can't
+        // decode the bytes, skip the photo (return null) instead of uploading
+        // something that renders broken.
+        if (fmt == DetectedImageFormat.heic ||
+            fmt == DetectedImageFormat.avif ||
+            fmt == DetectedImageFormat.unknown) {
           final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
           if (jpeg == null || jpeg.isEmpty) return null;
           if (!card) {

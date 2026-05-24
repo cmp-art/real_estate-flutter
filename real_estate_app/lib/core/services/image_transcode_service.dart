@@ -24,13 +24,15 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/supabase_config.dart';
+import '../constants/app_constants.dart';
 import '../utils/logger.dart';
 
 class ImageTranscodeService {
-  // Edge Function bodies are capped (~a few MB). HEIC photos are well under
-  // this; anything larger is almost certainly not a HEIC still image, so we
-  // skip the round-trip and let the caller drop it.
-  static const int _maxInputBytes = 10 * 1024 * 1024;
+  // Match the app's image-size limit and the Edge Function's own MAX_INPUT_BYTES
+  // (both 15 MB). A larger body has already been filtered out upstream and the
+  // function would reject it anyway, so skip the round-trip and let the caller
+  // drop it.
+  static const int _maxInputBytes = AppConstants.maxImageSize;
 
   /// Convert arbitrary image [bytes] (typically HEIC) to JPEG via the
   /// `transcode-image` Edge Function. Returns JPEG bytes on success, or null
