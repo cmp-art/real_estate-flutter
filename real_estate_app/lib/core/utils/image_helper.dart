@@ -102,6 +102,10 @@ class ImageHelper {
     int maxImages = 10,
     ImageSource source = ImageSource.gallery,
     void Function(int skippedCount, double maxMB)? onOversized,
+    // Called when one or more images could not be read at the browser level
+    // (service-worker HTML poison or expired blob URL). The count is how many
+    // were silently unreadable so the caller can show a user-facing warning.
+    void Function(int count)? onUnreadable,
   }) async {
     if (_isPickerActive) return [];     // already open — silently ignore
     _isPickerActive = true;
@@ -139,25 +143,33 @@ class ImageHelper {
 
       // Web: convert blob: URL XFiles to byte-backed XFiles, one at a time so
       // peak memory stays bounded. Reading the bytes now — in the same JS
-      // context that created the blob — also bypasses the service worker, which
-      // can otherwise intercept blob: fetches and return the offline page.
+      // context that created the blob — bypasses the service worker, which can
+      // otherwise intercept blob: fetches and return the offline HTML page.
+      //
+      // If readAsBytes() returns empty bytes or an HTML page (service worker
+      // poison), the image is EXCLUDED rather than kept as a broken blob URL.
+      // The caller is notified via onUnreadable so it can show a snackbar.
       if (kIsWeb && images.isNotEmpty) {
         final converted = <XFile>[];
+        int unreadable = 0;
         for (final f in images) {
           try {
             final bytes = await f.readAsBytes();
-            converted.add(bytes.isNotEmpty
-                ? XFile.fromData(
-                    bytes,
-                    name: f.name.isNotEmpty ? f.name : 'photo.jpg',
-                    mimeType: 'image/jpeg',
-                  )
-                : f); // bytes empty (rare) — keep blob URL as fallback
+            if (bytes.isNotEmpty && !_isHtmlBytes(bytes)) {
+              converted.add(XFile.fromData(
+                bytes,
+                name: f.name.isNotEmpty ? f.name : 'photo.jpg',
+                mimeType: 'image/jpeg',
+              ));
+            } else {
+              unreadable++; // empty or HTML — truly unreadable, drop it
+            }
           } catch (_) {
-            converted.add(f); // keep original on unexpected error
+            unreadable++; // unexpected read error — drop it
           }
         }
         images = converted;
+        if (unreadable > 0) onUnreadable?.call(unreadable);
       }
 
       if (images.isEmpty) return [];
@@ -440,4 +452,23 @@ Uint8List? _cropToCardJpg(Uint8List bytes) {
       img.copyCrop(decoded, x: offsetX, y: offsetY, width: cropW, height: cropH);
   final resized = img.copyResize(cropped, width: 1280);
   return img.encodeJpg(resized, quality: 88);
+}
+
+// Returns true when bytes are an HTML page — the PWA service worker's offline
+// fallback page substituted in place of an image blob or file.
+bool _isHtmlBytes(Uint8List b) {
+  if (b.length < 5) return false;
+  var i = 0;
+  // Skip BOM and leading whitespace
+  while (i < b.length && i < 8 &&
+      (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0A || b[i] == 0x0D ||
+          b[i] == 0xEF || b[i] == 0xBB || b[i] == 0xBF)) {
+    i++;
+  }
+  if (i >= b.length || b[i] != 0x3C) return false; // must start with '<'
+  final head =
+      String.fromCharCodes(b.sublist(i, (i + 14).clamp(0, b.length))).toLowerCase();
+  return head.startsWith('<!doc') ||
+      head.startsWith('<html') ||
+      head.startsWith('<?xml');
 }

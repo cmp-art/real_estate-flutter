@@ -413,6 +413,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   }
 
   Future<void> _addPhotos(ImageSource source, int remaining) async {
+    int unreadableCount = 0;
+
     final picked = await _imageHelper.pickMultipleImages(
       maxImages: remaining,
       source: source,
@@ -421,28 +423,45 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         'each must be under ${maxMB.toStringAsFixed(0)} MB',
         isError: false,
       ),
+      // Fires when the service worker poisoned a blob URL with HTML bytes.
+      // We surface this immediately so the user knows to re-pick that photo.
+      onUnreadable: (count) => unreadableCount += count,
     );
-    if (picked.isEmpty || !mounted) return;
 
-    // Universal Upload Architecture: the backend handles all format conversion.
-    // normalizeForUpload() only does optional local crop for UX (consistent 4:3
-    // card display). It never returns null for a real image — HEIC/AVIF/unknown
-    // formats are uploaded raw and transcoded server-side. We still fall back
-    // to the original image if the crop itself throws an unexpected error.
+    if (!mounted) return;
+
+    // cropToCard is best-effort: on web it canvas-crops JPEG/PNG/WebP; for
+    // HEIC/AVIF it returns null and we fall back to the raw bytes the backend
+    // will transcode. We only drop an image if it had NO readable bytes at all
+    // (already filtered by pickMultipleImages via onUnreadable above).
     final ready = <XFile>[];
     for (final image in picked) {
       if (!mounted) break;
       try {
         final result = await _imageHelper.cropToCard(context, image);
-        ready.add(result ?? image); // crop is best-effort; never drop the image
+        // result == null means canvas couldn't decode it (e.g. HEIC on Chrome).
+        // Keep the original — backend handles the format. Never silently drop.
+        ready.add(result ?? image);
       } catch (_) {
-        ready.add(image); // keep original on any unexpected error
+        ready.add(image);
       }
     }
 
     if (ready.isNotEmpty && mounted) {
       await _cacheWebBytes(ready);
       setState(() => _images = [..._images, ...ready]);
+    }
+
+    // Warn about any photos the browser could not read at all
+    if (unreadableCount > 0 && mounted) {
+      _snack(
+        _s.pick(
+          '$unreadableCount photo${unreadableCount > 1 ? 's' : ''} could not be loaded '
+              '— try picking ${unreadableCount > 1 ? 'them' : 'it'} again.',
+          'Picha $unreadableCount hazikuweza kupakiwa — jaribu tena.',
+        ),
+        isError: true,
+      );
     }
   }
 
@@ -517,6 +536,19 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           await uploadResult.fold(
             (_) async { uploadFailed = true; },
             (urls) async {
+              // Warn if any images were silently dropped by the upload layer
+              // (e.g. empty bytes at upload time after picking).
+              final dropped = toUpload.length - urls.length;
+              if (dropped > 0 && mounted) {
+                _snack(
+                  _s.pick(
+                    '$dropped photo${dropped > 1 ? 's' : ''} failed to upload and '
+                        '${dropped > 1 ? 'were' : 'was'} skipped.',
+                    'Picha $dropped hazikupakiwa — ziliachwa.',
+                  ),
+                  isError: false,
+                );
+              }
               final withImages = saved.copyWith(
                   images: [...saved.images, ...urls]);
               final updateResult = await repo.updateProperty(withImages);
