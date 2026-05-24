@@ -1094,25 +1094,25 @@ class _MobileWebBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.orange.shade50,
+        color: Colors.blue.shade50,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.orange.shade200),
+        border: Border.all(color: Colors.blue.shade200),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Row(
             children: [
-              Icon(Icons.warning_amber_rounded,
-                  color: Colors.orange, size: 18),
+              Icon(Icons.info_outline_rounded,
+                  color: Colors.blue, size: 18),
               SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Photo upload may not work on mobile browsers',
+                  'Tip: use the Android app for the fastest experience',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: Colors.orange,
+                    color: Colors.blue,
                   ),
                 ),
               ),
@@ -1120,17 +1120,8 @@ class _MobileWebBanner extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           const Text(
-            'For the best experience, list your property from a PC browser or use the Android app.',
+            'Photo upload works on mobile browsers. For the smoothest experience, download the Android app.',
             style: TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'On PC, visit: www.patamjengo.com',
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.black54,
-              fontStyle: FontStyle.italic,
-            ),
           ),
           const SizedBox(height: 8),
           _BannerButton(

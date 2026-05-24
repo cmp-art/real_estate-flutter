@@ -107,12 +107,13 @@ class ImageHelper {
 
       if (kIsWeb) {
         // Web: single-file pick to avoid parallel canvas decodes crashing mobile
-        // browsers.  maxWidth/maxHeight capped at 1280 to reduce canvas RAM.
+        // browsers. No maxWidth/maxHeight/imageQuality here — image_picker_for_web
+        // runs an internal canvas resize/encode when any of those are set, which
+        // fails silently on mobile Chrome/Safari and returns empty bytes. All
+        // resizing (→ 1 280 px) and quality (JPEG 88 %) is handled in one
+        // well-guarded canvas pass inside webCropToCard instead.
         final XFile? single = await _picker.pickImage(
           source: ImageSource.gallery,
-          maxWidth: 1280,
-          maxHeight: 1280,
-          imageQuality: 85,
         );
         images = single != null ? [single] : [];
 
@@ -133,6 +134,8 @@ class ImageHelper {
                 name: f.name.isNotEmpty ? f.name : 'photo.jpg',
                 mimeType: 'image/jpeg',
               ));
+            } else {
+              converted.add(f); // bytes empty (rare) — keep blob URL as fallback
             }
           } catch (_) {
             converted.add(f); // fallback: keep original on unexpected error
