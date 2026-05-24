@@ -428,7 +428,9 @@ class _CampaignDetailsScreenState
                       ),
                     ),
                   );
-                  if (result == true && mounted) Navigator.pop(context, true);
+                  if (result == true && context.mounted) {
+                    Navigator.of(context).pop(true);
+                  }
                 } else if (v == 'invoice') {
                   Navigator.push(
                     context,
@@ -1441,56 +1443,4 @@ class _CreativeCardState extends State<_CreativeCard> {
       );
 
   // ─────────────────────────────────────────────────────────────
-  // RESPONSIVE LAYOUT HELPERS
-  // ─────────────────────────────────────────────────────────────
-  
-  /// Build responsive layout based on screen size
-  Widget _buildResponsiveLayout(BuildContext context, Widget child) {
-    if (ResponsiveHelper.isMobile(context)) {
-      return child;
-    }
-    
-    // Center content on larger screens with max width
-    return Center(
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: ResponsiveHelper.getMaxContentWidth(context, isWide: true),
-        ),
-        child: child,
-      ),
-    );
-  }
-  
-  /// Get responsive column count for grids
-  int _getResponsiveColumns(BuildContext context) {
-    return ResponsiveHelper.getGridColumns(
-      context,
-      mobile: 1,
-      tablet: 2,
-      desktop: 3,
-    );
-  }
-  
-  /// Build responsive row/column based on screen size
-  Widget _buildResponsiveRowOrColumn({
-    required BuildContext context,
-    required List<Widget> children,
-    MainAxisAlignment mainAxisAlignment = MainAxisAlignment.start,
-    CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.start,
-  }) {
-    if (ResponsiveHelper.isMobile(context)) {
-      return Column(
-        mainAxisAlignment: mainAxisAlignment,
-        crossAxisAlignment: crossAxisAlignment,
-        children: children,
-      );
-    }
-    
-    return Row(
-      mainAxisAlignment: mainAxisAlignment,
-      crossAxisAlignment: crossAxisAlignment,
-      children: children.map((child) => Expanded(child: child)).toList(),
-    );
-  }
-
 }

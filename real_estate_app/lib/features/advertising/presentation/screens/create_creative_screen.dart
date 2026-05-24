@@ -18,6 +18,7 @@ import '../../../../core/utils/image_helper.dart';
 import '../../../properties/domain/entities/property_entity.dart';
 import '../../../properties/presentation/providers/ai_providers.dart';
 import '../../../properties/presentation/providers/property_providers.dart';
+import '../../../settings/presentation/providers/app_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,26 +428,6 @@ class _FieldTip extends StatelessWidget {
   );
 }
 
-class _InfoBox extends StatelessWidget {
-  final String text;
-  const _InfoBox(this.text);
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    decoration: BoxDecoration(
-      color: ThemeConfig.infoColor.withOpacity(0.08),
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: ThemeConfig.infoColor.withOpacity(0.3)),
-    ),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Icon(Icons.info_outline_rounded, color: ThemeConfig.infoColor, size: ResponsiveHelper.getResponsiveIconSize(context)),
-      SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-      Expanded(child: Text(text, style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 12), height: 1.4,
-          color: ThemeConfig.getTextSecondaryColor(context)))),
-    ]),
-  );
-}
-
 class CreateCreativeScreen extends ConsumerStatefulWidget {
   final String campaignId;
   final AdCampaign campaign;
@@ -504,9 +485,14 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   bool get _anyUploading =>
       _isUploadingImage || _isUploadingLogo || _isValidating;
 
-  // bilingual helper — language comes from Supabase user metadata or app state
-  // falls back to English if provider not available in this screen
-  _S get _s => const _S(false); // override in build if languageProvider is accessible
+  // bilingual helper — reads current app language; falls back to English
+  _S get _s {
+    try {
+      return _S(ref.read(languageProvider).languageCode == 'sw');
+    } catch (_) {
+      return const _S(false);
+    }
+  }
 
   // Web-safe preview for a picked image: Image.memory on web (CanvasKit can't
   // read a File), Image.file on native.
@@ -986,36 +972,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
               }
             },
             child: Text(s.appealBtn),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPendingDialog() {
-    final s = _s;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(children: [
-          Container(
-            padding: EdgeInsets.all(ResponsiveHelper.getResponsiveSpacing(context)),
-            decoration: BoxDecoration(color: ThemeConfig.warningColor.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.hourglass_top_rounded, color: ThemeConfig.warningColor, size: ResponsiveHelper.getResponsiveIconSize(context)),
-          ),
-          SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-          Expanded(child: Text(s.aiPendingTitle,
-              style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 16), fontWeight: FontWeight.w700))),
-        ]),
-        content: Text(s.aiPendingMsg, style: TextStyle(fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14), height: 1.5)),
-        actions: [
-          ElevatedButton(
-            onPressed: () { Navigator.pop(ctx); Navigator.pop(context, true); },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: ThemeConfig.warningColor, foregroundColor: Colors.white),
-            child: Text(s.ok),
           ),
         ],
       ),
@@ -1566,37 +1522,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
           },
         ),
       ],
-    );
-  }
-
-  // ── AD FORMAT DROPDOWN ────────────────────────────────────────────────────
-
-   Widget _buildAdFormatDropdown() {
-    const formats = [
-      ('native_medium', 'Native Medium — Card in property list'),
-      ('native_large', 'Native Large — Full-width card'),
-      ('native_small', 'Native Small — Compact banner'),
-      ('banner_300x250', 'Banner 300×250'),
-    ];
-
-    return DropdownButtonFormField<String>(
-      initialValue: _selectedFormat,
-      style: TextStyle(
-        color: ThemeConfig.getTextPrimaryColor(context),
-        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 14),
-      ),
-      dropdownColor: ThemeConfig.getCardColor(context),
-      decoration: _inputDecoration(
-        label: 'Ad Format *',
-        hint: '',
-        icon: Icons.dashboard_rounded,
-      ),
-      items: formats.map((f) {
-        return DropdownMenuItem(value: f.$1, child: Text(f.$2));
-      }).toList(),
-      onChanged: (v) {
-        if (v != null) setState(() => _selectedFormat = v);
-      },
     );
   }
 
@@ -2389,59 +2314,6 @@ class _MediaTypeCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // RESPONSIVE LAYOUT HELPERS
-  // ─────────────────────────────────────────────────────────────
-  
-  /// Build responsive layout based on screen size
-  Widget _buildResponsiveLayout(BuildContext context, Widget child) {
-    if (ResponsiveHelper.isMobile(context)) {
-      return child;
-    }
-    
-    // Center content on larger screens with max width
-    return Center(
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: ResponsiveHelper.getMaxContentWidth(context, isWide: true),
-        ),
-        child: child,
-      ),
-    );
-  }
-  
-  /// Get responsive column count for grids
-  int _getResponsiveColumns(BuildContext context) {
-    return ResponsiveHelper.getGridColumns(
-      context,
-      mobile: 1,
-      tablet: 2,
-      desktop: 3,
-    );
-  }
-  
-  /// Build responsive row/column based on screen size
-  Widget _buildResponsiveRowOrColumn({
-    required BuildContext context,
-    required List<Widget> children,
-    MainAxisAlignment mainAxisAlignment = MainAxisAlignment.start,
-    CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.start,
-  }) {
-    if (ResponsiveHelper.isMobile(context)) {
-      return Column(
-        mainAxisAlignment: mainAxisAlignment,
-        crossAxisAlignment: crossAxisAlignment,
-        children: children,
-      );
-    }
-    
-    return Row(
-      mainAxisAlignment: mainAxisAlignment,
-      crossAxisAlignment: crossAxisAlignment,
-      children: children.map((child) => Expanded(child: child)).toList(),
     );
   }
 

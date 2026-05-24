@@ -44,8 +44,6 @@ class CreateCampaignScreen extends ConsumerStatefulWidget {
 
 class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
     with SingleTickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
-
   // Step controller
   int _currentStep = 0;
   bool _isCreating = false;
@@ -926,23 +924,6 @@ class _CreateCampaignScreenState extends ConsumerState<CreateCampaignScreen>
           ),
         ],
       ),
-    );
-  }
-
-  Widget _impactStat(String value, String label) {
-    return Column(
-      children: [
-        Text(value,
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: ThemeConfig.getPrimaryColor(context))),
-        const SizedBox(height: 2),
-        Text(label,
-            style: TextStyle(
-                fontSize: 10,
-                color: ThemeConfig.getTextSecondaryColor(context))),
-      ],
     );
   }
 

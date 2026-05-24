@@ -895,8 +895,11 @@ class _AdvertiserDashboardState extends ConsumerState<AdvertiserDashboard> {
       final ctr = double.tryParse(value.replaceAll('%', '')) ?? 0;
       if (ctr >= 1.0) {
         valueColor = Colors.green.shade600;
-      } else if (ctr >= 0.5)  valueColor = Colors.orange.shade600;
-      else                  valueColor = Colors.red.shade500;
+      } else if (ctr >= 0.5) {
+        valueColor = Colors.orange.shade600;
+      } else {
+        valueColor = Colors.red.shade500;
+      }
     }
     return Expanded(
       child: Column(
