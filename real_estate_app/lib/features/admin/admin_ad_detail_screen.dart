@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/config/theme_config.dart';
 import 'admin_dashboard_screen.dart';
-import '../../../../core/utils/responsive_helper.dart'; // for adminServiceProvider
+import '../../../../core/utils/responsive_helper.dart';
 
 class AdminAdDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> ad;

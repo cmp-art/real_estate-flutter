@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/services/direct_ad_models.dart';
 
-import '../../../../presentation/providers/auth_provider.dart';
+import '../../presentation/providers/auth_provider.dart';
 import '../advertising/presentation/provider/ad_providers.dart';
 import '../../../../core/utils/responsive_helper.dart';
 

@@ -174,9 +174,8 @@ class _AdminReportsScreenState extends ConsumerState<AdminReportsScreen> {
   }
 
   Future<void> _warnUser(Map<String, dynamic> report) async {
-    final reporterId = report['reported_by'] as String?;
-    final property   = report['properties'] as Map<String, dynamic>?;
-    final ownerId    = property?['owner_id'] as String?;
+    final property = report['properties'] as Map<String, dynamic>?;
+    final ownerId  = property?['owner_id'] as String?;
 
     if (ownerId == null) {
       _snack('Cannot identify the listing owner.', isError: true);

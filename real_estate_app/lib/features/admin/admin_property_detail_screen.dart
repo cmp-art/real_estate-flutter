@@ -8,14 +8,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/config/theme_config.dart';
-import '../../../../core/services/admin_service.dart';
 import '../../../../core/utils/responsive_helper.dart';
-
-// Reuse the provider from admin_dashboard_screen.dart
-final _adminSvc = Provider((ref) => AdminService(Supabase.instance.client));
+import 'admin_dashboard_screen.dart' show adminServiceProvider;
 
 class AdminPropertyDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> property;
@@ -150,6 +146,13 @@ class _AdminPropertyDetailScreenState
           _InfoSection(prop: _prop),
           const SizedBox(height: 20),
 
+          // ── Ownership verification history ──
+          _OwnerVerificationSection(
+            prop: _prop,
+            propertyId: _prop['id'] as String,
+          ),
+          const SizedBox(height: 20),
+
           // ── Media gallery ──
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text('Media (${media.length} items)',
@@ -263,7 +266,7 @@ class _AdminPropertyDetailScreenState
     );
 
     setState(() => _processing = true);
-    final result = await ref.read(_adminSvc).adminDeletePropertyMedia(
+    final result = await ref.read(adminServiceProvider).adminDeletePropertyMedia(
       _prop['id'] as String,
       mediaUrl,
       reason: reason?.isEmpty == true ? null : reason,
@@ -324,7 +327,7 @@ class _AdminPropertyDetailScreenState
     if (reason == null || !mounted) return;
 
     setState(() => _processing = true);
-    final result = await ref.read(_adminSvc).adminDeleteProperty(
+    final result = await ref.read(adminServiceProvider).adminDeleteProperty(
         _prop['id'] as String, reason: reason.isEmpty ? null : reason);
     setState(() {
       _processing = false;
@@ -382,7 +385,7 @@ class _AdminPropertyDetailScreenState
     if (confirmed != true || !mounted) return;
 
     setState(() => _processing = true);
-    final result = await ref.read(_adminSvc).adminRestoreProperty(
+    final result = await ref.read(adminServiceProvider).adminRestoreProperty(
         _prop['id'] as String,
         note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim());
     setState(() {
@@ -407,7 +410,7 @@ class _AdminPropertyDetailScreenState
   Future<void> _toggleFeature() async {
     final isFeatured = _prop['is_featured'] as bool? ?? false;
     setState(() => _processing = true);
-    final ok = await ref.read(_adminSvc).adminFeatureProperty(
+    final ok = await ref.read(adminServiceProvider).adminFeatureProperty(
         _prop['id'] as String, featured: !isFeatured);
     setState(() {
       _processing = false;
@@ -423,7 +426,7 @@ class _AdminPropertyDetailScreenState
   Future<void> _toggleVerify() async {
     final isVerified = _prop['is_verified'] as bool? ?? false;
     setState(() => _processing = true);
-    final ok = await ref.read(_adminSvc).adminVerifyProperty(
+    final ok = await ref.read(adminServiceProvider).adminVerifyProperty(
         _prop['id'] as String, verified: !isVerified);
     setState(() {
       _processing = false;
@@ -470,7 +473,7 @@ class _AdminPropertyDetailScreenState
       ),
     );
     if (sent == true && titleCtrl.text.isNotEmpty && msgCtrl.text.isNotEmpty) {
-      final ok = await ref.read(_adminSvc).sendNotificationToUser(
+      final ok = await ref.read(adminServiceProvider).sendNotificationToUser(
         userId: _prop['owner_id'] as String,
         title: titleCtrl.text.trim(),
         message: msgCtrl.text.trim(),
@@ -643,7 +646,7 @@ class _OwnerVerificationSectionState
   Future<void> _loadHistory() async {
     if (_loading || widget.propertyId.isEmpty) return;
     setState(() => _loading = true);
-    final svc = ref.read(_adminSvc);
+    final svc = ref.read(adminServiceProvider);
     final rows = await svc.getPropertyVerifications(widget.propertyId);
     if (mounted) setState(() { _history = rows; _loading = false; });
   }
@@ -674,7 +677,7 @@ class _OwnerVerificationSectionState
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: verified
-              ? Colors.green.withValues(alpha: 0.4)
+              ? Colors.green.withOpacity(0.4)
               : ThemeConfig.getColor(context,
                   lightColor: ThemeConfig.lightBorder,
                   darkColor:  ThemeConfig.darkBorder),
@@ -705,9 +708,9 @@ class _OwnerVerificationSectionState
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color:        badgeColor.withValues(alpha: 0.12),
+                    color:        badgeColor.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(20),
-                    border:       Border.all(color: badgeColor.withValues(alpha: 0.5)),
+                    border:       Border.all(color: badgeColor.withOpacity(0.5)),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     Icon(badgeIcon, size: 13, color: badgeColor),
@@ -822,9 +825,9 @@ class _AttemptTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color:        color.withValues(alpha: 0.05),
+        color:        color.withOpacity(0.05),
         borderRadius: BorderRadius.circular(8),
-        border:       Border.all(color: color.withValues(alpha: 0.3)),
+        border:       Border.all(color: color.withOpacity(0.3)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [

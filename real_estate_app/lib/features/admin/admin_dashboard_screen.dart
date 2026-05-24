@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'admin_archive_screen.dart';
-import 'admin_ad_detail_screen.dart'; // keep — referenced by _AdsTab (not shown in UI)
+import 'admin_ad_detail_screen.dart';
 import 'admin_reports_screen.dart';
 import 'admin_error_logs_screen.dart';
 import 'admin_broadcast_screen.dart';
@@ -44,7 +44,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 4, vsync: this);
+    _tab = TabController(length: 5, vsync: this);
     _checkAccess();
   }
 
@@ -169,6 +169,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
             Tab(icon: Icon(Icons.dashboard_rounded), text: 'Overview'),
             Tab(icon: Icon(Icons.people_rounded), text: 'Users'),
             Tab(icon: Icon(Icons.home_work_rounded), text: 'Properties'),
+            Tab(icon: Icon(Icons.ads_click_rounded), text: 'Ads'),
             Tab(icon: Icon(Icons.analytics_rounded), text: 'Analytics'),
           ],
         ),
@@ -179,6 +180,7 @@ class _AdminDashboardScreenState extends ConsumerState<AdminDashboardScreen>
           _OverviewTab(),
           _UsersTab(),
           _PropertiesTab(),
+          _AdsTab(),
           _AnalyticsTab(),
         ],
       ),
@@ -246,8 +248,8 @@ class _OverviewTabState extends ConsumerState<_OverviewTab> {
                     Icons.home_rounded, Colors.orange),
                 _StatCard('Active Campaigns', '${_stats!.activeCampaigns}',
                     Icons.campaign_rounded, Colors.purple),
-                _StatCard('Active Ads', '${_stats!.activeCampaigns}',
-                    Icons.campaign_rounded, Colors.green),
+                _StatCard('Pending Ads', '${_stats!.pendingAds}',
+                    Icons.pending_actions_rounded, Colors.amber),
                 _StatCard('Ad Revenue', 'TZS ${_formatNum(_stats!.totalAdRevenue)}',
                     Icons.monetization_on_rounded, Colors.teal),
                 _StatCard('Active Subscriptions', '${_stats!.activeSubscriptions}',
@@ -682,7 +684,8 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
 
   Future<void> _showRoleDialog(Map<String, dynamic> u) async {
     final roles = [
-      UserRole.user, UserRole.agent, UserRole.moderator, UserRole.admin
+      UserRole.user, UserRole.agent, UserRole.advertiser,
+      UserRole.moderator, UserRole.admin
     ];
     final selected = await showDialog<UserRole>(
       context: context,
@@ -1351,7 +1354,9 @@ class _PropertiesTabState extends ConsumerState<_PropertiesTab> {
   }
 }
 
-// _AdsTab kept but not shown in the tab bar (ads feature removed from UI).
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB 4: ADS — creative list, approve/reject/feature controls
+// ═══════════════════════════════════════════════════════════════════════════
 class _AdsTab extends ConsumerStatefulWidget {
   const _AdsTab();
   @override

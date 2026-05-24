@@ -1224,14 +1224,6 @@ class _CampaignsTabState extends ConsumerState<_CampaignsTab> {
     );
   }
 
-  Widget _menuItem(BuildContext context, IconData icon, String label, Color color) {
-    return Row(children: [
-      Icon(icon, size: 16, color: color),
-      SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context)),
-      Text(label, style: TextStyle(color: color)),
-    ]);
-  }
-
   // ── Actions (call adminServiceProvider) ──────────────────────────────────────
 
   Future<void> _approveAd(String id) async {
@@ -1861,7 +1853,7 @@ Widget _FinanceCard(
 
 Widget _SubTile(BuildContext context, Map<String, dynamic> s) {
   final status = s['status'] as String? ?? '';
-  final statusColor = status == 'running'
+  final statusColor = status == 'active'
       ? ThemeConfig.successColor
       : status == 'cancelled'
           ? ThemeConfig.errorColor
