@@ -9,7 +9,6 @@ import 'package:path_provider/path_provider.dart';
 import '../config/theme_config.dart';
 import '../constants/app_constants.dart';
 import '../errors/exceptions.dart';
-import '../services/image_transcode_service.dart';
 import 'image_format.dart';
 import 'web_crop.dart' if (dart.library.io) 'web_crop_stub.dart';
 
@@ -228,22 +227,20 @@ class ImageHelper {
   }
 
   // ── Normalise any picked image into a safe-to-upload file ─────────────────
-  // Guarantees the result is something every browser can render: iPhone HEIC is
-  // transcoded to JPEG, the format is validated, and on [card]=true the image
-  // is center-cropped to 4:3 for property cards. Works on Android, iOS, Web and
-  // PWA. Used by property photos ([card]=true) and by avatars / logos / ad
-  // images ([card]=false, no crop so their own aspect ratio is preserved).
+  // Universal Upload Architecture: the client is a "dumb pipe". All heavy
+  // processing (HEIC transcoding, EXIF stripping, format detection) happens
+  // asynchronously in the process-staged-image Edge Function after upload.
+  //
+  // This method still performs optional local optimisations for UX:
+  //   • Web: tries Canvas crop-to-4:3 for common formats (JPEG/PNG/WebP). Falls
+  //     back to raw bytes for HEIC/AVIF/unknown — the backend handles those.
+  //   • Native: uses image_picker's built-in HEIC→JPEG transcoding + runs the
+  //     crop in a background isolate for consistent card display.
   //
   // RETURN CONTRACT:
-  //   • non-null XFile → ready to upload (JPEG, or an already-renderable
-  //     original) with a correct name/mimeType.
-  //   • null → the image could not be turned into anything renderable (HEIC the
-  //     server couldn't transcode, a service-worker HTML page, or garbage). The
-  //     caller MUST skip it rather than upload it, so we never store a file that
-  //     shows up broken.
-  //
-  // Web path uses Canvas API (hardware-accelerated, async, ~0 Dart heap cost).
-  // Native path uses the Dart image package (runs in a background isolate).
+  //   • non-null XFile → bytes ready for staging upload.
+  //   • null ONLY for empty bytes or an HTML service-worker poison page.
+  //     HEIC / AVIF / unknown formats are NEVER dropped — they go to the backend.
   Future<XFile?> normalizeForUpload(
     BuildContext context,
     XFile image, {
@@ -253,81 +250,41 @@ class ImageHelper {
 
     if (kIsWeb) {
       // ── Web / PWA ──────────────────────────────────────────────────────────
-      // The Dart `image` package decodes / re-encodes synchronously on the
-      // main thread.  A 12 MP photo allocates ~100 MB of Dart heap and blocks
-      // the UI for 3–5 s on mobile, which triggers "Page Unresponsive" and
-      // can kill the browser tab.  Canvas API avoids both problems.
+      // readAsBytes() is the critical PWA / Scoped Storage fix: it forces the
+      // OS to resolve the file stream into raw bytes immediately, bypassing the
+      // service worker and Android's content:// URI routing that turns
+      // screenshots and WhatsApp photos into empty or HTML responses.
       try {
         final bytes = await image.readAsBytes();
         if (bytes.isEmpty) return null;
 
         final fmt = detectImageFormat(bytes);
 
-        // Service-worker offline page — it's HTML, never an image, and the
-        // transcoder can't turn it into one. Never store it.
+        // Service-worker offline page masquerading as an image — cannot recover.
         if (fmt == DetectedImageFormat.html) return null;
 
-        // HEIC: no mobile browser Canvas can decode this — only Safari on
-        // Apple devices renders HEIC. Must go through the server transcoder.
-        // If the transcoder is unavailable, skip the photo.
-        if (fmt == DetectedImageFormat.heic) {
-          final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
-          if (jpeg == null || jpeg.isEmpty) return null;
-          if (!card) {
-            return XFile.fromData(jpeg,
-                name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
-          }
-          final cropped = await webCropToCard(jpeg);
-          final outBytes =
-              (cropped != null && cropped.isNotEmpty) ? cropped : jpeg;
-          return XFile.fromData(outBytes,
-              name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
-        }
-
-        // AVIF or unrecognised format: try Canvas first.
-        // Chrome on Android 89+ renders AVIF natively in the Canvas API, so
-        // most users never need the server here. We only call the transcoder
-        // when the Canvas itself reports an error, which means the browser
-        // genuinely cannot decode the format.
-        if (fmt == DetectedImageFormat.avif ||
-            fmt == DetectedImageFormat.unknown) {
-          if (card) {
-            final canvasCropped = await webCropToCard(bytes);
-            if (canvasCropped != null && canvasCropped.isNotEmpty) {
-              return XFile.fromData(canvasCropped,
-                  name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
-            }
-          }
-          // Canvas couldn't render it — fall back to server transcoder.
-          final jpeg = await ImageTranscodeService.transcodeToJpeg(bytes);
-          if (jpeg == null || jpeg.isEmpty) return null;
-          if (!card) {
-            return XFile.fromData(jpeg,
-                name: 'photo_$tag.jpg', mimeType: 'image/jpeg');
-          }
-          final serverCropped = await webCropToCard(jpeg);
-          final outBytes =
-              (serverCropped != null && serverCropped.isNotEmpty) ? serverCropped : jpeg;
-          return XFile.fromData(outBytes,
-              name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
-        }
-
-        // Renderable formats (JPEG/PNG/WebP/GIF): crop to 4:3 when [card],
-        // otherwise leave the image as-is to preserve its aspect ratio.
+        // Canvas crop: fast GPU path for JPEG/PNG/WebP/GIF.
+        // For card=true it also center-crops to 4:3 and outputs JPEG.
+        // Skipped for HEIC/AVIF/unknown — Canvas can't decode those; the
+        // backend handles format conversion via ImageMagick.
         if (card) {
-          final outBytes = await webCropToCard(bytes);
-          if (outBytes != null && outBytes.isNotEmpty) {
-            return XFile.fromData(outBytes,
+          final cropped = await webCropToCard(bytes);
+          if (cropped != null && cropped.isNotEmpty) {
+            return XFile.fromData(cropped,
                 name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
           }
+        } else if (fmt.isBrowserRenderable) {
+          return XFile.fromData(bytes,
+              name: 'photo_$tag.${fmt.fileExtension}', mimeType: fmt.mimeType);
         }
-        // No crop requested (or the canvas crop failed) but the bytes are a
-        // valid renderable image — upload them unchanged with the correct
-        // type/extension rather than dropping a good photo.
+
+        // Canvas could not handle this format (HEIC, AVIF, very large image,
+        // or non-card path for non-renderable format). Upload the raw bytes —
+        // the process-staged-image Edge Function converts everything to JPEG.
         return XFile.fromData(bytes,
             name: 'photo_$tag.${fmt.fileExtension}', mimeType: fmt.mimeType);
       } catch (_) {
-        return null; // unprocessable — skip
+        return null;
       }
     }
 

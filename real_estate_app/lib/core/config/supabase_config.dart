@@ -25,6 +25,12 @@ class SupabaseConfig {
   static const String propertyImagesBucket = 'property-images';
   static const String profileImagesBucket = 'profile-images';
 
+  // Universal Upload Architecture buckets:
+  //   staging_media — private; Flutter uploads raw bytes here (INSERT only)
+  //   public_media  — public;  process-staged-image Edge Function writes JPEGs here
+  static const String stagingMediaBucket = 'staging_media';
+  static const String publicMediaBucket = 'public_media';
+
   // ── Deep-link scheme for auth callbacks ──────────────────────────────────
   // Must match the <data android:scheme="patamjengo" /> intent-filter
   // and the Supabase Dashboard → Auth → URL Configuration redirect URL.

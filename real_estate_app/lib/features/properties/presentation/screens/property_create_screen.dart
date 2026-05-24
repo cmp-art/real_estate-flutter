@@ -424,43 +424,25 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     );
     if (picked.isEmpty || !mounted) return;
 
-    // ── Crop each photo to 4:3 and normalise it to a renderable format ────
-    // cropToCard returns null when an image can't be turned into something
-    // every browser can display (e.g. an iPhone HEIC the server couldn't
-    // transcode). We skip those rather than upload a file that shows broken,
-    // and tell the user how many were skipped.
-    final cropped = <XFile>[];
-    int skipped = 0;
+    // Universal Upload Architecture: the backend handles all format conversion.
+    // normalizeForUpload() only does optional local crop for UX (consistent 4:3
+    // card display). It never returns null for a real image — HEIC/AVIF/unknown
+    // formats are uploaded raw and transcoded server-side. We still fall back
+    // to the original image if the crop itself throws an unexpected error.
+    final ready = <XFile>[];
     for (final image in picked) {
       if (!mounted) break;
       try {
         final result = await _imageHelper.cropToCard(context, image);
-        if (result != null) {
-          cropped.add(result);
-        } else {
-          skipped++;
-        }
+        ready.add(result ?? image); // crop is best-effort; never drop the image
       } catch (_) {
-        skipped++;
+        ready.add(image); // keep original on any unexpected error
       }
     }
 
-    if (cropped.isNotEmpty && mounted) {
-      await _cacheWebBytes(cropped);
-      setState(() => _images = [..._images, ...cropped]);
-    }
-
-    if (skipped > 0 && mounted) {
-      final s = _s;
-      _snack(
-        s.pick(
-          '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
-              'could not be processed. Try the app or a JPEG.',
-          'Picha $skipped imerukwa — haikuweza kushughulikiwa. '
-              'Tumia programu au JPEG.',
-        ),
-        isError: true,
-      );
+    if (ready.isNotEmpty && mounted) {
+      await _cacheWebBytes(ready);
+      setState(() => _images = [..._images, ...ready]);
     }
   }
 
@@ -578,7 +560,13 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         ref.invalidate(myPropertiesProvider);
         ref.invalidate(propertyListProvider);
 
-        _snack(_isEditing ? s.updatedOk : s.createdOk, isError: false);
+        // Photos are uploaded to staging and will appear within seconds as the
+        // backend processes them. The listing card shimmer covers this window.
+        final baseMsg = _isEditing ? s.updatedOk : s.createdOk;
+        final fullMsg = _images.isNotEmpty
+            ? '$baseMsg ${s.pick("Photos are being processed and will appear shortly.", "Picha zinashughulikiwa na zitaonekana hivi karibuni.")}'
+            : baseMsg;
+        _snack(fullMsg, isError: false);
         Navigator.pop(context, true);
       },
     );

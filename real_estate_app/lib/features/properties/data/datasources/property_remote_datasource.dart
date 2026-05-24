@@ -4,10 +4,10 @@
 
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../../../core/constants/app_constants.dart';
 import '../../../../core/config/supabase_config.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/errors/exceptions.dart';
-import '../../../../core/utils/image_format.dart';
+import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/utils/logger.dart';
 import '../models/property_model.dart';
 import '../models/property_filter_model.dart';
@@ -296,9 +296,15 @@ class PropertyRemoteDataSource {
     }
   }
 
-  /// OPTIMIZED: Upload images with compression
-  /// NOTE: Images should be compressed on client-side BEFORE upload
-  /// Max size: 15MB per image (enforced by storage bucket)
+  /// Universal Upload Architecture: uploads raw bytes to the private
+  /// staging_media bucket. Returns the predicted final public_media URLs
+  /// so the property record can be updated immediately — the backend
+  /// process-staged-image Edge Function (triggered via webhook) processes
+  /// each file asynchronously and makes those URLs live.
+  ///
+  /// The Flutter client is a "dumb pipe": no format checks, no transcoding.
+  /// All heavy processing (HEIC→JPEG, EXIF stripping, format detection) runs
+  /// server-side, covering all platforms including PWA Scoped Storage edge cases.
   Future<List<String>> uploadImages(String propertyId, List<XFile> images) async {
     final userId = supabaseClient.auth.currentUser?.id;
     if (userId == null) {
@@ -308,71 +314,18 @@ class PropertyRemoteDataSource {
     final List<String> uploadedUrls = [];
     int failed = 0;
 
-    // Upload each image independently. A single bad photo (empty blob, oversize,
-    // network blip) must not abort the whole batch and sink the listing — we
-    // skip it and keep going, only failing hard if NONE succeed.
     for (int i = 0; i < images.length; i++) {
-      try {
-        final xfile = images[i];
-
-        // Read bytes — works on both web (blob URL) and native (file path)
-        final bytes = await xfile.readAsBytes();
-
-        if (bytes.isEmpty) {
-          logger.w('uploadImages: image ${i + 1} read empty — skipping');
-          failed++;
-          continue;
-        }
-        if (bytes.length > AppConstants.maxImageSize) {
-          logger.w('uploadImages: image ${i + 1} exceeds size limit — skipping');
-          failed++;
-          continue;
-        }
-
-        // Decide the format from the bytes themselves — never trust the file
-        // name or XFile.mimeType. This is the last line of defence against
-        // storing a corrupt object: HEIC that no browser can render, an HTML
-        // page a PWA service worker substituted for a blob, or garbage. The
-        // crop/transcode step upstream normally converts everything to JPEG,
-        // so reaching this guard means that step could not, and the only safe
-        // action is to skip rather than store a file that renders broken.
-        final format = detectImageFormat(bytes);
-        if (!format.isBrowserRenderable) {
-          logger.w('uploadImages: image ${i + 1} is ${format.name} '
-              '(not renderable) — skipping');
-          failed++;
-          continue;
-        }
-
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final fileName = '${propertyId}_${timestamp}_$i.${format.fileExtension}';
-        final filePath = '$userId/$fileName';
-
-        // uploadBinary accepts Uint8List — works on web and native.
-        // contentType comes from the detected format so the stored object's
-        // Content-Type always matches its real bytes (a mismatched type makes
-        // browsers refuse to render it).
-        // upsert:true prevents failure if the same file key already exists.
-        await supabaseClient.storage
-            .from(SupabaseConfig.propertyImagesBucket)
-            .uploadBinary(
-              filePath,
-              bytes,
-              fileOptions: FileOptions(
-                contentType: format.mimeType,
-                cacheControl: '31536000',
-                upsert: true,
-              ),
-            );
-
-        uploadedUrls.add(
-          supabaseClient.storage
-              .from(SupabaseConfig.propertyImagesBucket)
-              .getPublicUrl(filePath),
-        );
-      } catch (e) {
-        logger.e('uploadImages: image ${i + 1} failed — skipping', error: e);
+      final url = await ImageUploadService.uploadRawToStaging(
+        file: images[i],
+        userId: userId,
+        propertyId: propertyId,
+        index: i,
+      );
+      if (url != null) {
+        uploadedUrls.add(url);
+      } else {
         failed++;
+        logger.w('uploadImages: image ${i + 1} staging failed — skipping');
       }
     }
 
@@ -380,7 +333,6 @@ class PropertyRemoteDataSource {
       logger.w('uploadImages: $failed of ${images.length} image(s) skipped');
     }
 
-    // Only a hard failure if every single image failed to upload.
     if (uploadedUrls.isEmpty && images.isNotEmpty) {
       throw ServerException(
         'Could not upload photos. Please check your connection and try again.',

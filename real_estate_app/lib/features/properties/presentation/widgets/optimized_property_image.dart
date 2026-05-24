@@ -63,24 +63,24 @@ class OptimizedPropertyImage extends StatelessWidget {
   }
   
   Widget _buildError(BuildContext context) {
-    return Container(
-      width: width,
-      height: height,
-      color: Colors.grey[300],
-      child: const Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.broken_image,
-            color: Colors.grey,
-            size: 48,
+    // Images in public_media may still be processing (backend converts raw
+    // uploads asynchronously). Show a shimmer so the user sees "loading" rather
+    // than "broken" during the brief processing window (typically 1–3 seconds).
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Shimmer.fromColors(
+      baseColor: isDark ? Colors.grey[800]! : Colors.grey[300]!,
+      highlightColor: isDark ? Colors.grey[700]! : Colors.grey[100]!,
+      child: Container(
+        width: width,
+        height: height,
+        color: Colors.white,
+        child: Center(
+          child: Icon(
+            Icons.image_outlined,
+            size: 28,
+            color: isDark ? Colors.grey[600]! : Colors.grey[400]!,
           ),
-          SizedBox(height: 8),
-          Text(
-            'Image unavailable',
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
-        ],
+        ),
       ),
     );
   }

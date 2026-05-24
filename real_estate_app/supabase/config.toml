@@ -1,0 +1,20 @@
+# Supabase project configuration.
+# Only the settings this project depends on are listed; the CLI fills defaults.
+
+project_id = "qeddjlmexurmeiuslgqn"
+
+# The image transcoder must be reachable by the app using the publishable
+# (anon) API key, including unauthenticated/guest flows. Supabase's new API-key
+# format (sb_publishable_...) is NOT a JWT, so the gateway's JWT verification
+# rejected every call with UNAUTHORIZED_INVALID_JWT_FORMAT — which silently
+# dropped HEIC/AVIF photos on the web. Turning verification off lets the
+# function run with the apikey header alone. The function only transcodes image
+# bytes to JPEG (no database access, no secrets), so public access is safe.
+[functions.transcode-image]
+verify_jwt = false
+
+# Webhook-triggered background worker: processes raw uploads from staging_media,
+# transcodes via ImageMagick, and publishes clean JPEGs to public_media.
+# Called by Supabase internal webhook (not by the Flutter client), so no JWT.
+[functions.process-staged-image]
+verify_jwt = false
