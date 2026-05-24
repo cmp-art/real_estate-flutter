@@ -299,34 +299,33 @@ class PropertyRemoteDataSource {
   /// NOTE: Images should be compressed on client-side BEFORE upload
   /// Max size: 15MB per image (enforced by storage bucket)
   Future<List<String>> uploadImages(String propertyId, List<XFile> images) async {
-    try {
-      final userId = supabaseClient.auth.currentUser?.id;
-      if (userId == null) {
-        throw ServerException('User not authenticated');
-      }
+    final userId = supabaseClient.auth.currentUser?.id;
+    if (userId == null) {
+      throw ServerException('User not authenticated');
+    }
 
-      final List<String> uploadedUrls = [];
+    final List<String> uploadedUrls = [];
+    int failed = 0;
 
-      for (int i = 0; i < images.length; i++) {
+    // Upload each image independently. A single bad photo (empty blob, oversize,
+    // network blip) must not abort the whole batch and sink the listing — we
+    // skip it and keep going, only failing hard if NONE succeed.
+    for (int i = 0; i < images.length; i++) {
+      try {
         final xfile = images[i];
 
         // Read bytes — works on both web (blob URL) and native (file path)
         final bytes = await xfile.readAsBytes();
 
-        // Guard against empty reads (can happen if blob URL expired on web).
         if (bytes.isEmpty) {
-          throw ServerException(
-            'Image ${i + 1} could not be read. '
-            'Please remove it and add it again.',
-          );
+          logger.w('uploadImages: image ${i + 1} read empty — skipping');
+          failed++;
+          continue;
         }
-
-        // Check file size against the app-wide limit (currently 15 MB).
         if (bytes.length > AppConstants.maxImageSize) {
-          throw ServerException(
-            'Image ${i + 1} exceeds ${AppConstants.maxImageSize ~/ (1024 * 1024)} MB limit. '
-            'Please choose a smaller file.',
-          );
+          logger.w('uploadImages: image ${i + 1} exceeds size limit — skipping');
+          failed++;
+          continue;
         }
 
         final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -350,18 +349,29 @@ class PropertyRemoteDataSource {
               ),
             );
 
-        final url = supabaseClient.storage
-            .from(SupabaseConfig.propertyImagesBucket)
-            .getPublicUrl(filePath);
-
-        uploadedUrls.add(url);
+        uploadedUrls.add(
+          supabaseClient.storage
+              .from(SupabaseConfig.propertyImagesBucket)
+              .getPublicUrl(filePath),
+        );
+      } catch (e) {
+        logger.e('uploadImages: image ${i + 1} failed — skipping', error: e);
+        failed++;
       }
-
-      return uploadedUrls;
-    } catch (e) {
-      logger.e('uploadImages failed', error: e);
-      throw ServerException('Failed to upload images: ${e.toString()}');
     }
+
+    if (failed > 0) {
+      logger.w('uploadImages: $failed of ${images.length} image(s) skipped');
+    }
+
+    // Only a hard failure if every single image failed to upload.
+    if (uploadedUrls.isEmpty && images.isNotEmpty) {
+      throw ServerException(
+        'Could not upload photos. Please check your connection and try again.',
+      );
+    }
+
+    return uploadedUrls;
   }
 
   // Delete image from Supabase Storage

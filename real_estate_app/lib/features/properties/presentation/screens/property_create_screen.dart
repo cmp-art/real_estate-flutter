@@ -376,8 +376,46 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           isError: true);
       return;
     }
+    final source = await _choosePhotoSource();
+    if (source == null || !mounted) return;
+    await _addPhotos(source, remaining);
+  }
+
+  // Bottom sheet: pick Gallery (one or more photos) or Camera (single shot).
+  Future<ImageSource?> _choosePhotoSource() {
+    final s = _s;
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: Text(s.pick('Choose from Gallery', 'Chagua kwenye Galari')),
+              subtitle: Text(
+                  s.pick('Select one or more photos', 'Chagua picha moja au zaidi')),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: Text(s.pick('Take a Photo', 'Piga Picha')),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: Text(s.cancel),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addPhotos(ImageSource source, int remaining) async {
     final picked = await _imageHelper.pickMultipleImages(
       maxImages: remaining,
+      source: source,
       onOversized: (skipped, maxMB) => _snack(
         '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
         'each must be under ${maxMB.toStringAsFixed(0)} MB',
@@ -387,11 +425,16 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (picked.isEmpty || !mounted) return;
 
     // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
+    // A crop failure is non-fatal — keep the original photo so it still uploads.
     final cropped = <XFile>[];
     for (final image in picked) {
       if (!mounted) break;
-      final result = await _imageHelper.cropToCard(context, image);
-      if (result != null) cropped.add(result);
+      try {
+        final result = await _imageHelper.cropToCard(context, image);
+        cropped.add(result ?? image);
+      } catch (_) {
+        cropped.add(image);
+      }
     }
 
     if (cropped.isNotEmpty && mounted) {

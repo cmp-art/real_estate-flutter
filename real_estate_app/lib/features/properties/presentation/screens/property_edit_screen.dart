@@ -156,8 +156,38 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
       return;
     }
 
+    final sw = currentLanguage == 'sw';
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: Text(sw ? 'Chagua kwenye Galari' : 'Choose from Gallery'),
+              subtitle: Text(
+                  sw ? 'Chagua picha moja au zaidi' : 'Select one or more photos'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: Text(sw ? 'Piga Picha' : 'Take a Photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: Text(sw ? 'Ghairi' : 'Cancel'),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
     final images = await _imageHelper.pickMultipleImages(
       maxImages: remainingSlots,
+      source: source,
       onOversized: (skipped, maxMB) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -174,11 +204,16 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
     if (images.isEmpty || !mounted) return;
 
     // ── Crop each photo to 4:3 so it fills the card perfectly ────────────
+    // A crop failure is non-fatal — keep the original photo so it still uploads.
     final cropped = <XFile>[];
     for (final image in images) {
       if (!mounted) break;
-      final result = await _imageHelper.cropToCard(context, image);
-      if (result != null) cropped.add(result);
+      try {
+        final result = await _imageHelper.cropToCard(context, image);
+        cropped.add(result ?? image);
+      } catch (_) {
+        cropped.add(image);
+      }
     }
 
     if (cropped.isNotEmpty && mounted) {

@@ -1,5 +1,6 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
@@ -98,6 +99,7 @@ class ImageHelper {
   // between picks and stays safely within the memory budget.
   Future<List<XFile>> pickMultipleImages({
     int maxImages = 10,
+    ImageSource source = ImageSource.gallery,
     void Function(int skippedCount, double maxMB)? onOversized,
   }) async {
     if (_isPickerActive) return [];     // already open — silently ignore
@@ -105,49 +107,56 @@ class ImageHelper {
     try {
       List<XFile> images;
 
-      if (kIsWeb) {
-        // Web: single-file pick to avoid parallel canvas decodes crashing mobile
-        // browsers. No maxWidth/maxHeight/imageQuality here — image_picker_for_web
-        // runs an internal canvas resize/encode when any of those are set, which
-        // fails silently on mobile Chrome/Safari and returns empty bytes. All
-        // resizing (→ 1 280 px) and quality (JPEG 88 %) is handled in one
-        // well-guarded canvas pass inside webCropToCard instead.
-        final XFile? single = await _picker.pickImage(
-          source: ImageSource.gallery,
-        );
-        images = single != null ? [single] : [];
-
-        // Immediately convert blob-URL XFiles to byte-backed XFile.fromData.
-        // image_picker_for_web returns XFiles whose path is a blob: URL.
-        // On mobile browsers (especially iOS Safari / PWA standalone), any
-        // subsequent fetch of that blob URL goes through the service worker,
-        // which can fail silently when returning without event.respondWith().
-        // Reading the bytes now — while still in the same JS context that
-        // created the blob — bypasses the service worker entirely.
-        final converted = <XFile>[];
-        for (final f in images) {
-          try {
-            final bytes = await f.readAsBytes();
-            if (bytes.isNotEmpty) {
-              converted.add(XFile.fromData(
-                bytes,
-                name: f.name.isNotEmpty ? f.name : 'photo.jpg',
-                mimeType: 'image/jpeg',
-              ));
-            } else {
-              converted.add(f); // bytes empty (rare) — keep blob URL as fallback
-            }
-          } catch (_) {
-            converted.add(f); // fallback: keep original on unexpected error
-          }
-        }
-        images = converted;
+      if (source == ImageSource.camera) {
+        // Single shot from the device camera (web & native). No quality params
+        // on web — image_picker_for_web would run an internal canvas encode that
+        // fails silently on mobile browsers. webCropToCard resizes afterwards.
+        final XFile? shot = kIsWeb
+            ? await _picker.pickImage(source: ImageSource.camera)
+            : await _picker.pickImage(
+                source: ImageSource.camera,
+                maxWidth: 1920,
+                maxHeight: 1920,
+                imageQuality: 85,
+              );
+        images = shot != null ? [shot] : [];
+      } else if (kIsWeb) {
+        // Gallery on web: true multi-select. No maxWidth/maxHeight/imageQuality —
+        // those make image_picker_for_web decode every selected photo on the
+        // canvas in parallel (48–434 MB each), which crashes mobile tabs. Without
+        // them it returns lightweight blob: URLs that we decode one at a time
+        // below, and webCropToCard handles resizing (→ 1 280 px, JPEG 88 %).
+        images = await _picker.pickMultiImage();
       } else {
+        // Gallery on native: multi-select with fast native down-scaling.
         images = await _picker.pickMultiImage(
           maxWidth: 1920,
           maxHeight: 1920,
           imageQuality: 85,
         );
+      }
+
+      // Web: convert blob: URL XFiles to byte-backed XFiles, one at a time so
+      // peak memory stays bounded. Reading the bytes now — in the same JS
+      // context that created the blob — also bypasses the service worker, which
+      // can otherwise intercept blob: fetches and return the offline page.
+      if (kIsWeb && images.isNotEmpty) {
+        final converted = <XFile>[];
+        for (final f in images) {
+          try {
+            final bytes = await f.readAsBytes();
+            converted.add(bytes.isNotEmpty
+                ? XFile.fromData(
+                    bytes,
+                    name: f.name.isNotEmpty ? f.name : 'photo.jpg',
+                    mimeType: 'image/jpeg',
+                  )
+                : f); // bytes empty (rare) — keep blob URL as fallback
+          } catch (_) {
+            converted.add(f); // keep original on unexpected error
+          }
+        }
+        images = converted;
       }
 
       if (images.isEmpty) return [];
@@ -252,38 +261,21 @@ class ImageHelper {
     }
 
     // ── Android / iOS ──────────────────────────────────────────────────────
+    // Decode/crop/encode runs on a background isolate via compute() so a batch
+    // of large photos can't block the UI thread and trigger an ANR ("app not
+    // responding") on low-end devices. Crop is best-effort — fall back to the
+    // original picked image (already down-scaled by image_picker) on any error.
     try {
       final bytes = await image.readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return image; // fallback: return original
-
-      // image package applies EXIF orientation on decode — no manual rotate needed
-      final srcW = decoded.width;
-      final srcH = decoded.height;
-
-      // Target 4:3: pick the largest 4:3 rect that fits inside the source
-      int cropW, cropH;
-      if (srcW * 3 >= srcH * 4) {
-        cropH = srcH;
-        cropW = (srcH * 4 / 3).round();
-      } else {
-        cropW = srcW;
-        cropH = (srcW * 3 / 4).round();
-      }
-      final offsetX = (srcW - cropW) ~/ 2;
-      final offsetY = (srcH - cropH) ~/ 2;
-
-      final cropped = img.copyCrop(decoded,
-          x: offsetX, y: offsetY, width: cropW, height: cropH);
-      final resized = img.copyResize(cropped, width: 1280);
-      final outBytes = img.encodeJpg(resized, quality: 88);
+      final outBytes = await compute(_cropToCardJpg, bytes);
+      if (outBytes == null || outBytes.isEmpty) return image;
 
       final tmpDir = await getTemporaryDirectory();
       final outPath = '${tmpDir.path}/crop_$tag.jpg';
       await File(outPath).writeAsBytes(outBytes);
       return XFile(outPath);
-    } catch (e) {
-      throw ValidationException(e.toString());
+    } catch (_) {
+      return image;
     }
   }
 
@@ -346,4 +338,31 @@ class ImageHelper {
     final extension = getImageExtension(path);
     return AppConstants.allowedImageFormats.contains(extension);
   }
+}
+
+// Runs on a background isolate (via compute) so the UI thread never blocks.
+// Center-crops [bytes] to the largest 4:3 rect, resizes to 1 280 px wide, and
+// JPEG-encodes at 88 %. Returns null if the bytes can't be decoded.
+Uint8List? _cropToCardJpg(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes); // applies EXIF orientation on decode
+  if (decoded == null) return null;
+
+  final srcW = decoded.width;
+  final srcH = decoded.height;
+
+  int cropW, cropH;
+  if (srcW * 3 >= srcH * 4) {
+    cropH = srcH;
+    cropW = (srcH * 4 / 3).round();
+  } else {
+    cropW = srcW;
+    cropH = (srcW * 3 / 4).round();
+  }
+  final offsetX = (srcW - cropW) ~/ 2;
+  final offsetY = (srcH - cropH) ~/ 2;
+
+  final cropped =
+      img.copyCrop(decoded, x: offsetX, y: offsetY, width: cropW, height: cropH);
+  final resized = img.copyResize(cropped, width: 1280);
+  return img.encodeJpg(resized, quality: 88);
 }
