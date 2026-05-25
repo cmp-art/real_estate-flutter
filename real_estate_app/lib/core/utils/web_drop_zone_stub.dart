@@ -8,17 +8,13 @@ import 'package:image_picker/image_picker.dart';
 class WebDropZone extends StatelessWidget {
   final Widget child;
   final int maxFiles;
-  final int maxBytesPerFile;
   final void Function(List<XFile> files) onFilesDropped;
-  final void Function(int skipped, double maxMB)? onOversized;
 
   const WebDropZone({
     super.key,
     required this.child,
     required this.onFilesDropped,
     this.maxFiles = 10,
-    this.maxBytesPerFile = 15 * 1024 * 1024,
-    this.onOversized,
   });
 
   @override

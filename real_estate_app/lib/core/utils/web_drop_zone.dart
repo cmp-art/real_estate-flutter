@@ -13,17 +13,13 @@ import 'package:image_picker/image_picker.dart';
 class WebDropZone extends StatefulWidget {
   final Widget child;
   final int maxFiles;
-  final int maxBytesPerFile;
   final void Function(List<XFile> files) onFilesDropped;
-  final void Function(int skipped, double maxMB)? onOversized;
 
   const WebDropZone({
     super.key,
     required this.child,
     required this.onFilesDropped,
     this.maxFiles = 10,
-    this.maxBytesPerFile = 15 * 1024 * 1024,
-    this.onOversized,
   });
 
   @override
@@ -90,11 +86,10 @@ class _WebDropZoneState extends State<WebDropZone> {
 
   Future<void> _processFiles(html.FileList files) async {
     final validImages = <XFile>[];
-    int skipped = 0;
 
     const imageTypes = <String>[
       'image/jpeg', 'image/jpg', 'image/png',
-      'image/webp', 'image/heic', 'image/heif',
+      'image/webp', 'image/gif', 'image/heic', 'image/heif',
     ];
 
     for (int i = 0; i < files.length; i++) {
@@ -118,23 +113,26 @@ class _WebDropZoneState extends State<WebDropZone> {
 
       if (!imageTypes.contains(fileType)) continue;
       if (validImages.length >= widget.maxFiles) continue;
-      if (file.size > widget.maxBytesPerFile) { skipped++; continue; }
+      // Any size is accepted — the upload pipeline downscales before storing.
 
-      // Read file as bytes and expose as XFile via blob URL.
+      // Read the dropped File directly into bytes and keep them in memory via
+      // XFile.fromData. We deliberately do NOT wrap them in a blob: URL: the
+      // upload would then have to re-fetch that URL, and in an installed PWA the
+      // service worker can answer that fetch with its offline HTML page,
+      // corrupting the image. Holding the bytes means there is no re-fetch.
       final reader = html.FileReader();
       reader.readAsArrayBuffer(file);
       await reader.onLoad.first;
 
       final bytes = (reader.result as ByteBuffer).asUint8List();
-      final blob  = html.Blob([bytes], fileType);
-      final url   = html.Url.createObjectUrl(blob);
-      final xfile = XFile(url, name: file.name, length: file.size, mimeType: fileType);
-      validImages.add(xfile);
+      validImages.add(XFile.fromData(
+        bytes,
+        name: file.name,
+        length: bytes.length,
+        mimeType: fileType,
+      ));
     }
 
-    if (skipped > 0) {
-      widget.onOversized?.call(skipped, widget.maxBytesPerFile / (1024 * 1024));
-    }
     if (validImages.isNotEmpty) widget.onFilesDropped(validImages);
   }
 

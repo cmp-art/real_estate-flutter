@@ -448,7 +448,6 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
       ),
       body: WebDropZone(
         maxFiles: AppConstants.maxImagesPerProperty,
-        maxBytesPerFile: AppConstants.maxImageSize,
         onFilesDropped: (dropped) async {
           final remaining = AppConstants.maxImagesPerProperty -
               _existingImages.length -
@@ -458,17 +457,6 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           await _cacheWebBytes(toAdd);
           if (mounted) {
             setState(() => _selectedImages.addAll(toAdd));
-          }
-        },
-        onOversized: (skipped, maxMB) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(
-                  '$skipped file${skipped > 1 ? 's' : ''} skipped — '
-                  'images must be under ${maxMB.toStringAsFixed(0)} MB'),
-              backgroundColor: Colors.orange,
-              behavior: SnackBarBehavior.floating,
-            ));
           }
         },
         child: Form(

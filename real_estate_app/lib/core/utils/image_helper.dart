@@ -108,66 +108,48 @@ class ImageHelper {
     if (_isPickerActive) return [];     // already open — silently ignore
     _isPickerActive = true;
     try {
-      List<XFile> images;
+      // Web/PWA (gallery + camera): pick via a native <input type="file"> and
+      // read each File's bytes directly with FileReader (pickImagesAsBytesWeb).
+      // This avoids image_picker's blob: URLs entirely — a blob URL must be
+      // re-fetched to read it, and in an installed PWA that fetch can be
+      // intercepted by the service worker and answered with the offline HTML
+      // page (the "photo could not be loaded" failure). Reading the File object
+      // directly leaves nothing for the service worker to poison; capture opens
+      // the device camera on mobile.
+      if (kIsWeb) {
+        final result = await pickImagesAsBytesWeb(
+          multiple: source != ImageSource.camera,
+          capture: source == ImageSource.camera,
+        );
+        if (result.failed > 0) onUnreadable?.call(result.failed);
+        final stamp = DateTime.now().millisecondsSinceEpoch;
+        final picked = <XFile>[];
+        for (var i = 0; i < result.bytes.length && i < maxImages; i++) {
+          picked.add(XFile.fromData(
+            result.bytes[i],
+            name: 'photo_${stamp}_$i.jpg',
+            mimeType: 'image/jpeg',
+          ));
+        }
+        return picked;
+      }
 
+      // ── Android / iOS (native) ──────────────────────────────────────────
+      final List<XFile> images;
       if (source == ImageSource.camera) {
-        // Single shot from the device camera (web & native). No quality params
-        // on web — image_picker_for_web would run an internal canvas encode that
-        // fails silently on mobile browsers. webCropToCard resizes afterwards.
-        final XFile? shot = kIsWeb
-            ? await _picker.pickImage(source: ImageSource.camera)
-            : await _picker.pickImage(
-                source: ImageSource.camera,
-                maxWidth: 1920,
-                maxHeight: 1920,
-                imageQuality: 85,
-              );
+        final XFile? shot = await _picker.pickImage(
+          source: ImageSource.camera,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85,
+        );
         images = shot != null ? [shot] : [];
-      } else if (kIsWeb) {
-        // Gallery on web: true multi-select. No maxWidth/maxHeight/imageQuality —
-        // those make image_picker_for_web decode every selected photo on the
-        // canvas in parallel (48–434 MB each), which crashes mobile tabs. Without
-        // them it returns lightweight blob: URLs that we decode one at a time
-        // below, and webCropToCard handles resizing (→ 1 280 px, JPEG 88 %).
-        images = await _picker.pickMultiImage();
       } else {
-        // Gallery on native: multi-select with fast native down-scaling.
         images = await _picker.pickMultiImage(
           maxWidth: 1920,
           maxHeight: 1920,
           imageQuality: 85,
         );
-      }
-
-      // Web: convert blob: URL XFiles to byte-backed XFiles, one at a time so
-      // peak memory stays bounded. Reading the bytes now — in the same JS
-      // context that created the blob — bypasses the service worker, which can
-      // otherwise intercept blob: fetches and return the offline HTML page.
-      //
-      // If readAsBytes() returns empty bytes or an HTML page (service worker
-      // poison), the image is EXCLUDED rather than kept as a broken blob URL.
-      // The caller is notified via onUnreadable so it can show a snackbar.
-      if (kIsWeb && images.isNotEmpty) {
-        final converted = <XFile>[];
-        int unreadable = 0;
-        for (final f in images) {
-          try {
-            final bytes = await f.readAsBytes();
-            if (bytes.isNotEmpty && !_isHtmlBytes(bytes)) {
-              converted.add(XFile.fromData(
-                bytes,
-                name: f.name.isNotEmpty ? f.name : 'photo.jpg',
-                mimeType: 'image/jpeg',
-              ));
-            } else {
-              unreadable++; // empty or HTML — truly unreadable, drop it
-            }
-          } catch (_) {
-            unreadable++; // unexpected read error — drop it
-          }
-        }
-        images = converted;
-        if (unreadable > 0) onUnreadable?.call(unreadable);
       }
 
       if (images.isEmpty) return [];
@@ -366,26 +348,28 @@ class ImageHelper {
     if (_isPickerActive) return null;
     _isPickerActive = true;
     try {
-      final XFile? shot = kIsWeb
-          ? await _picker.pickImage(source: source)
-          : await _picker.pickImage(
-              source: source,
-              maxWidth: 1920,
-              maxHeight: 1920,
-              imageQuality: 85,
-            );
-      if (shot == null) return null;
-
+      // Web/PWA (gallery + camera): read the File directly via FileReader
+      // (pickImagesAsBytesWeb) so there is no blob: URL for the service worker
+      // to poison. capture opens the device camera on mobile.
       if (kIsWeb) {
-        final bytes = await shot.readAsBytes();
-        if (bytes.isNotEmpty) {
-          return XFile.fromData(
-            bytes,
-            name: shot.name.isNotEmpty ? shot.name : 'photo.jpg',
-            mimeType: 'image/jpeg',
-          );
-        }
+        final result = await pickImagesAsBytesWeb(
+          multiple: false,
+          capture: source == ImageSource.camera,
+        );
+        if (result.bytes.isEmpty) return null;
+        return XFile.fromData(
+          result.bytes.first,
+          name: 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          mimeType: 'image/jpeg',
+        );
       }
+
+      final XFile? shot = await _picker.pickImage(
+        source: source,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
       return shot;
     } catch (e) {
       if (e.toString().contains('already_active')) return null;
@@ -530,23 +514,4 @@ Uint8List? _resizeToServable(_ResizeRequest req) {
   return image.hasAlpha
       ? img.encodePng(image)
       : img.encodeJpg(image, quality: 82);
-}
-
-// Returns true when bytes are an HTML page — the PWA service worker's offline
-// fallback page substituted in place of an image blob or file.
-bool _isHtmlBytes(Uint8List b) {
-  if (b.length < 5) return false;
-  var i = 0;
-  // Skip BOM and leading whitespace
-  while (i < b.length && i < 8 &&
-      (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0A || b[i] == 0x0D ||
-          b[i] == 0xEF || b[i] == 0xBB || b[i] == 0xBF)) {
-    i++;
-  }
-  if (i >= b.length || b[i] != 0x3C) return false; // must start with '<'
-  final head =
-      String.fromCharCodes(b.sublist(i, (i + 14).clamp(0, b.length))).toLowerCase();
-  return head.startsWith('<!doc') ||
-      head.startsWith('<html') ||
-      head.startsWith('<?xml');
 }

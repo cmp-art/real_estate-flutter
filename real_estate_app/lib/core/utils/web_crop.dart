@@ -228,3 +228,85 @@ Future<Uint8List?> webResizeToMaxEdge(Uint8List bytes,
     html.Url.revokeObjectUrl(url);
   }
 }
+
+/// Picks image(s) on web using a native `<input type="file">` and reads each
+/// selected File's bytes directly via FileReader.
+///
+/// Why not image_picker here: image_picker hands back `blob:` URLs, and getting
+/// the bytes out of a blob URL requires re-fetching it. In an installed PWA
+/// that fetch can be intercepted by the Flutter service worker and answered
+/// with the cached offline index.html — which the app then sees as an
+/// unreadable image ("photo could not be loaded, try picking it again").
+/// Reading the in-memory File with FileReader involves no URL and no fetch, so
+/// the service worker has nothing to intercept and the read can't be poisoned.
+///
+/// Returns the bytes of every file read successfully, plus a count of any that
+/// failed (so the caller can warn the user).
+Future<({List<Uint8List> bytes, int failed})> pickImagesAsBytesWeb({
+  bool multiple = true,
+  bool capture = false,
+}) async {
+  final input = html.FileUploadInputElement()
+    ..accept = 'image/*'
+    ..multiple = multiple;
+  // On mobile, capture opens the camera directly; desktop browsers ignore it.
+  if (capture) input.setAttribute('capture', 'environment');
+  // Must be attached to the DOM for the chooser to open on some browsers;
+  // keep it off-screen.
+  input.style
+    ..position = 'fixed'
+    ..left = '-10000px'
+    ..top = '0';
+  html.document.body?.append(input);
+
+  final picked = Completer<List<html.File>>();
+  void done(List<html.File> files) {
+    if (!picked.isCompleted) picked.complete(files);
+  }
+
+  input.onChange.listen((_) => done(input.files ?? const <html.File>[]));
+  // Modern browsers fire 'cancel' when the file chooser is dismissed.
+  input.on['cancel'].listen((_) => done(const <html.File>[]));
+
+  input.click();
+  final files = await picked.future;
+  input.remove();
+
+  final bytes = <Uint8List>[];
+  var failed = 0;
+  // Read sequentially so peak memory stays bounded on phones.
+  for (final file in files) {
+    final data = await _readFileBytes(file);
+    if (data != null && data.isNotEmpty) {
+      bytes.add(data);
+    } else {
+      failed++;
+    }
+  }
+  return (bytes: bytes, failed: failed);
+}
+
+/// Reads a browser [File] into bytes via FileReader (no blob: URL, no fetch).
+Future<Uint8List?> _readFileBytes(html.File file) {
+  final reader = html.FileReader();
+  final c = Completer<Uint8List?>();
+  reader.onLoadEnd.listen((_) {
+    final r = reader.result;
+    if (r is Uint8List) {
+      c.complete(r);
+    } else if (r is ByteBuffer) {
+      c.complete(r.asUint8List());
+    } else if (r is List<int>) {
+      c.complete(Uint8List.fromList(r));
+    } else {
+      c.complete(null);
+    }
+  });
+  reader.onError.listen((_) => c.complete(null));
+  try {
+    reader.readAsArrayBuffer(file);
+  } catch (_) {
+    if (!c.isCompleted) c.complete(null);
+  }
+  return c.future;
+}
