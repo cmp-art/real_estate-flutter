@@ -1,13 +1,12 @@
 // features/properties/presentation/widgets/optimized_property_image.dart
-// Optimized image widget with CDN support, caching, and auto-retry for images
-// that are still being processed by the backend Edge Function.
+// Optimized image widget with CDN support, caching, and a robust display chain.
 //
-// After a property is created, images are uploaded to staging_media and the
-// process-staged-image Edge Function creates the final JPEG in public_media
-// asynchronously (typically 1–3 seconds). The predicted public_media URL is
-// stored in the DB immediately so cards can display it, but the file may 404
-// during that short processing window. This widget retries on 404 (up to 5
-// times, 2 s apart) so the image appears automatically without user action.
+// Images are uploaded directly to a public bucket, so the stored URL is live
+// immediately. For bandwidth we first request Supabase's image-transform
+// endpoint (/render/image). If that endpoint errors — e.g. the project's plan
+// doesn't include transformations — we automatically fall back to the original
+// object URL so the image ALWAYS shows. A short retry then covers transient
+// network blips before any permanent placeholder is shown.
 
 import 'dart:async';
 
@@ -40,22 +39,30 @@ class OptimizedPropertyImage extends StatefulWidget {
 }
 
 class _OptimizedPropertyImageState extends State<OptimizedPropertyImage> {
-  // Retry up to 5 times (= 10 s total) before showing the permanent error state.
-  static const int _maxRetries = 5;
+  // Retry up to 3 times (= 6 s) for transient network errors before the
+  // permanent placeholder. (Uploads are synchronous now, so there is no
+  // processing window to wait out — these retries are purely for flaky links.)
+  static const int _maxRetries = 3;
   static const Duration _retryDelay = Duration(seconds: 2);
 
   int _retryCount = 0;
   Timer? _retryTimer;
   bool _retryScheduled = false;
 
+  // Once the transform endpoint errors we switch to the original object URL.
+  bool _useOriginal = false;
+  bool _fallbackScheduled = false;
+
   @override
   void didUpdateWidget(OptimizedPropertyImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.imageUrl != widget.imageUrl) {
-      // Parent gave us a new URL — reset retry state for the fresh image.
+      // Parent gave us a new URL — reset all display state for the fresh image.
       _retryTimer?.cancel();
       _retryCount = 0;
       _retryScheduled = false;
+      _useOriginal = false;
+      _fallbackScheduled = false;
     }
   }
 
@@ -65,9 +72,17 @@ class _OptimizedPropertyImageState extends State<OptimizedPropertyImage> {
     super.dispose();
   }
 
-  // Called from the errorWidget builder. Schedules one timer to bump
-  // _retryCount; the new count changes the CachedNetworkImage key, which
-  // forces a fresh widget (and therefore a fresh network request).
+  // Switch to the original (un-transformed) URL once, deferred out of build.
+  void _scheduleFallbackToOriginal() {
+    if (_useOriginal || _fallbackScheduled) return;
+    _fallbackScheduled = true;
+    Future.microtask(() {
+      if (mounted) setState(() => _useOriginal = true);
+    });
+  }
+
+  // Schedules one timer to bump _retryCount; the new count changes the
+  // CachedNetworkImage key, forcing a fresh widget and network request.
   void _scheduleRetry() {
     if (_retryCount >= _maxRetries || _retryScheduled) return;
     _retryScheduled = true;
@@ -80,31 +95,41 @@ class _OptimizedPropertyImageState extends State<OptimizedPropertyImage> {
 
   @override
   Widget build(BuildContext context) {
-    final optimizedUrl = widget.isThumbnail
+    final transformedUrl = widget.isThumbnail
         ? CdnService.getThumbnailUrl(widget.imageUrl)
         : CdnService.getMediumUrl(widget.imageUrl);
+    final originalUrl = CdnService.getOriginalUrl(widget.imageUrl);
+    final displayUrl = _useOriginal ? originalUrl : transformedUrl;
+    // We can still fall back if we're on the transformed URL and the original
+    // is a genuinely different URL to try.
+    final canFallback =
+        !_useOriginal && originalUrl.isNotEmpty && originalUrl != transformedUrl;
 
     return ClipRRect(
       borderRadius: widget.borderRadius ?? BorderRadius.circular(12),
       child: CachedNetworkImage(
-        // The key includes _retryCount so each retry creates a new widget
-        // instance, bypassing any in-memory error state and forcing a fresh
-        // network request without needing to evict the cache manually.
-        key: ValueKey('${optimizedUrl}_$_retryCount'),
-        imageUrl: optimizedUrl,
+        // The key includes _useOriginal + _retryCount so each transition creates
+        // a fresh widget instance, forcing a new network request without having
+        // to evict the cache manually.
+        key: ValueKey('${displayUrl}_${_useOriginal}_$_retryCount'),
+        imageUrl: displayUrl,
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
         cacheManager: CustomCacheManager.instance,
         placeholder: (context, url) => _buildShimmer(context),
         errorWidget: (context, url, error) {
+          // 1. Transform endpoint failed → drop to the original object URL.
+          if (canFallback) {
+            _scheduleFallbackToOriginal();
+            return _buildShimmer(context);
+          }
+          // 2. Transient failure on the final URL → retry a few times.
           if (_retryCount < _maxRetries) {
-            // Image not accessible yet — likely still processing.
-            // Show shimmer and schedule a retry.
             _scheduleRetry();
             return _buildShimmer(context);
           }
-          // All retries exhausted — show a permanent placeholder.
+          // 3. All options exhausted — permanent placeholder.
           return _buildFinalError(context);
         },
         fadeInDuration: const Duration(milliseconds: 300),

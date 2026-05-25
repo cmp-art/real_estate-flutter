@@ -647,13 +647,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         ref.invalidate(myPropertiesProvider);
         ref.invalidate(propertyListProvider);
 
-        // Photos are uploaded to staging and will appear within seconds as the
-        // backend processes them. The listing card shimmer covers this window.
-        final baseMsg = _isEditing ? s.updatedOk : s.createdOk;
-        final fullMsg = _images.isNotEmpty
-            ? '$baseMsg ${s.pick("Photos are being processed and will appear shortly.", "Picha zinashughulikiwa na zitaonekana hivi karibuni.")}'
-            : baseMsg;
-        _snack(fullMsg, isError: false);
+        // Photos are uploaded directly to a public bucket, so they are live
+        // immediately — no "processing" wait to message about.
+        _snack(_isEditing ? s.updatedOk : s.createdOk, isError: false);
         Navigator.pop(context, true);
       },
     );

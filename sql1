@@ -950,6 +950,7 @@ CREATE TABLE IF NOT EXISTS app_errors (
     error_type    TEXT        NOT NULL,
     error_message TEXT        NOT NULL,
     stack_trace   TEXT,
+    screen_name   TEXT,
     device_info   JSONB       DEFAULT '{}'::JSONB,
     app_version   TEXT,
     severity      TEXT        DEFAULT 'error'
@@ -957,6 +958,12 @@ CREATE TABLE IF NOT EXISTS app_errors (
     resolved      BOOLEAN     DEFAULT FALSE,
     created_at    TIMESTAMPTZ DEFAULT NOW()
 );
+-- screen_name was added after the initial release. CREATE TABLE IF NOT EXISTS
+-- does NOT alter an existing table, so this explicit ALTER backfills the column
+-- on databases created before it existed. Without it, every client error insert
+-- (which always includes screen_name) fails with PGRST204 and the admin error
+-- log stays permanently empty.
+ALTER TABLE app_errors ADD COLUMN IF NOT EXISTS screen_name TEXT;
 CREATE INDEX IF NOT EXISTS idx_app_errors_severity   ON app_errors(severity);
 CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON app_errors(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_errors_user_id    ON app_errors(user_id);

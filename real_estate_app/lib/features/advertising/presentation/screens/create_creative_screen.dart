@@ -556,7 +556,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
 
       // Web-only: read bytes now for Image.memory preview (CanvasKit can't use
       // File paths).  On native, Image.file works directly and readAsBytes() is
-      // deferred into uploadSingleRawToStaging where it acts as the Scoped
+      // deferred into uploadCreativeImage where it acts as the Scoped
       // Storage / service-worker bypass.
       if (kIsWeb) {
         final previewBytes = await normalized.readAsBytes();
@@ -578,9 +578,9 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
         setUploading(true);
       });
 
-      // Universal Upload Architecture: raw bytes → staging_media → Edge Function
-      // → public_media. No client-side transcoding — backend handles all formats.
-      final url = await ImageUploadService.uploadSingleRawToStaging(
+      // Direct upload to the public advertisements bucket — the returned URL is
+      // real and immediately usable (no async processing window).
+      final url = await ImageUploadService.uploadCreativeImage(
         file: normalized,
         userId: userId,
         folder: folder,

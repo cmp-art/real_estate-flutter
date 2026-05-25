@@ -77,6 +77,40 @@ class CdnService {
   static String getFullSizeUrl(String storageUrlOrPath) =>
       getOptimizedImageUrl(storageUrlOrPath, width: 1280, height: 960, quality: 80, format: _imageFormat);
 
+  /// The original, un-transformed object URL — the safe fallback when the image
+  /// transform endpoint (/render/image) is unavailable (e.g. the Supabase plan
+  /// doesn't include transformations) and returns an error. Images are already
+  /// resized to ~1280px at upload time, so serving the original is fine.
+  ///
+  /// Accepts a full Supabase storage URL (object OR render form) or a bare
+  /// bucket path, and always returns the plain `/object/public/` form.
+  static String getOriginalUrl(String storageUrlOrPath) {
+    if (storageUrlOrPath.isEmpty) return '';
+
+    // A render/transform URL → rewrite back to the plain object URL.
+    if (storageUrlOrPath.contains('/storage/v1/render/image/public/')) {
+      final base = storageUrlOrPath.replaceFirst(
+        '/storage/v1/render/image/public/',
+        '/storage/v1/object/public/',
+      );
+      // Drop any transform query params (?width=…&quality=…) cleanly.
+      final q = base.indexOf('?');
+      return q == -1 ? base : base.substring(0, q);
+    }
+
+    // Already a plain object URL.
+    if (storageUrlOrPath.contains('/storage/v1/object/public/')) {
+      return storageUrlOrPath;
+    }
+
+    // Bare path like "property-images/uuid/photo.jpg".
+    if (!storageUrlOrPath.startsWith('http') && _supabaseUrl.isNotEmpty) {
+      return '$_supabaseUrl/storage/v1/object/public/$storageUrlOrPath';
+    }
+
+    return storageUrlOrPath;
+  }
+
   // ── Internal helpers ─────────────────────────────────────────────────────
 
   static String _buildRenderBase(String input) {

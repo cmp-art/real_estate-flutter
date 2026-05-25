@@ -22,14 +22,10 @@ class SupabaseConfig {
       dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 
   // ── Storage bucket names ─────────────────────────────────────────────────
+  // All three are PUBLIC buckets — uploads return an immediately-usable URL.
   static const String propertyImagesBucket = 'property-images';
   static const String profileImagesBucket = 'profile-images';
-
-  // Universal Upload Architecture buckets:
-  //   staging_media — private; Flutter uploads raw bytes here (INSERT only)
-  //   public_media  — public;  process-staged-image Edge Function writes JPEGs here
-  static const String stagingMediaBucket = 'staging_media';
-  static const String publicMediaBucket = 'public_media';
+  static const String advertisementsBucket = 'advertisements';
 
   // ── Deep-link scheme for auth callbacks ──────────────────────────────────
   // Must match the <data android:scheme="patamjengo" /> intent-filter

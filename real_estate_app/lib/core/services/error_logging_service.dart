@@ -92,12 +92,16 @@ class ErrorLoggingService {
 
     if (kDebugMode) debugPrint('🔴 Error [$severity] $errorType: $errorMessage');
 
-    // 4. Critical → immediate write; others → batched
-    if (severity == 'critical') {
+    // 4. Errors and crashes → immediate write so they are never lost if the app
+    //    is closed before the next batch flush. Warnings/info → batched.
+    if (severity == 'critical' || severity == 'error') {
       try {
         await _supabase.from('app_errors').insert(row);
       } catch (e) {
-        if (kDebugMode) debugPrint('❌ Failed to log critical error: $e');
+        if (kDebugMode) debugPrint('❌ Failed to log $severity error: $e');
+        // A transient failure (offline, rate limit) must not lose the error —
+        // queue it so the next flush retries instead of dropping it silently.
+        _queue.add(row);
       }
     } else {
       _queue.add(row);

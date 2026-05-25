@@ -296,15 +296,14 @@ class PropertyRemoteDataSource {
     }
   }
 
-  /// Universal Upload Architecture: uploads raw bytes to the private
-  /// staging_media bucket. Returns the predicted final public_media URLs
-  /// so the property record can be updated immediately — the backend
-  /// process-staged-image Edge Function (triggered via webhook) processes
-  /// each file asynchronously and makes those URLs live.
+  /// Uploads each photo directly to the public property-images bucket and
+  /// returns the real public URLs. The URLs are live the instant this returns —
+  /// there is no async processing window — so the property record can be
+  /// updated with them and the images render immediately on every platform.
   ///
-  /// The Flutter client is a "dumb pipe": no format checks, no transcoding.
-  /// All heavy processing (HEIC→JPEG, EXIF stripping, format detection) runs
-  /// server-side, covering all platforms including PWA Scoped Storage edge cases.
+  /// Byte reading and format coercion (HEIC/AVIF → JPEG) happen inside
+  /// [ImageUploadService.uploadPropertyImage]; any failure is logged to the
+  /// admin error logs.
   Future<List<String>> uploadImages(String propertyId, List<XFile> images) async {
     final userId = supabaseClient.auth.currentUser?.id;
     if (userId == null) {
@@ -315,7 +314,7 @@ class PropertyRemoteDataSource {
     int failed = 0;
 
     for (int i = 0; i < images.length; i++) {
-      final url = await ImageUploadService.uploadRawToStaging(
+      final url = await ImageUploadService.uploadPropertyImage(
         file: images[i],
         userId: userId,
         propertyId: propertyId,

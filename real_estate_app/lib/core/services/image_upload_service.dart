@@ -1,25 +1,29 @@
 // lib/core/services/image_upload_service.dart
 //
-// Universal Upload Architecture — "dumb pipe" client implementation.
+// Direct-upload client. Every image is uploaded synchronously to its PUBLIC
+// bucket and the real, immediately-usable public URL is returned. There is no
+// staging bucket, no Edge Function, no predicted URL and no async processing
+// window — the URL works the instant this method returns, on every platform
+// (Android, iOS, Web, PWA).
 //
-// For property photo batches: uploadRawToStaging() pushes raw bytes to the
-// private staging_media bucket and returns the deterministic final URL that
-// the process-staged-image Edge Function will create in public_media.
-// No client-side format detection or transcoding — the backend handles all of it.
+//   • Property photos    → property-images   (uploadPropertyImage)
+//   • Ad creatives/logos → advertisements    (uploadCreativeImage)
+//   • Avatars / pre-read → caller's bucket    (uploadImageBytes)
 //
-// For single-image uploads (avatars): use uploadImageBytes() → direct to the
-// public profile-images bucket.  The image is already a normalised JPEG after
-// ImageHelper.normalizeForUpload(), so no staging pipeline is needed and the
-// URL is immediately usable (no async processing window).
-//
-// For ad creatives / logos: uploadSingleRawToStaging() uses the same async
-// staging pipeline as property photos.
-//
-// All methods retry up to 3 times (read + upload separately) and log failures
-// to ErrorLoggingService so they appear in the admin error logs.
+// Robustness:
+//   • readAsBytes() retried up to 3× — forces the OS to resolve the file into
+//     raw bytes, bypassing Android Scoped Storage and the PWA service worker
+//     that otherwise turn screenshots / shared photos into empty or HTML bytes.
+//   • the Supabase upload is retried up to 3× for transient network blips.
+//   • the stored object is guaranteed to be a format the public buckets serve
+//     (JPEG/PNG/WebP/GIF). HEIC/AVIF/unknown bytes are re-encoded to JPEG when
+//     decodable; truly unservable bytes are refused.
+//   • EVERY failure is logged to ErrorLoggingService so it surfaces in the
+//     admin error logs instead of failing silently.
 
 import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -29,233 +33,111 @@ import '../utils/logger.dart';
 import 'error_logging_service.dart';
 
 class ImageUploadService {
-  // ── Property-photo batch upload (staging pipeline) ─────────────────────────
+  // ── Property photo → public property-images bucket ─────────────────────────
 
-  /// Upload a raw image [file] to the private staging bucket.
-  ///
-  /// Uses `readAsBytes()` as the critical cross-platform fix: it forces the OS
-  /// to resolve the file stream into raw bytes immediately, bypassing Android
-  /// Scoped Storage and iOS sandbox path restrictions that cause screenshots
-  /// and WhatsApp photos to silently fail on mobile browsers / PWA.
-  ///
-  /// Retries both `readAsBytes()` and the Supabase upload up to 3 times each
-  /// so that transient OS / network blips don't surface as user-visible errors.
-  ///
-  /// Returns the predicted final public URL on success, null on failure.
-  static Future<String?> uploadRawToStaging({
+  /// Upload one property photo and return its real public URL (null on failure).
+  static Future<String?> uploadPropertyImage({
     required XFile file,
     required String userId,
     required String propertyId,
     required int index,
   }) async {
-    // ── Step 1: read bytes (retry up to 3× for mobile file-access blips) ────
-    Uint8List? rawBytes;
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        final bytes = await file.readAsBytes();
-        if (bytes.isNotEmpty) {
-          rawBytes = bytes;
-          break;
-        }
-        logger.w('uploadRawToStaging[$index]: empty bytes on attempt $attempt');
-      } catch (e) {
-        logger.w('uploadRawToStaging[$index]: readAsBytes attempt $attempt failed: $e');
-      }
-      if (attempt < 3) await Future.delayed(Duration(milliseconds: 500 * attempt));
-    }
-
-    if (rawBytes == null || rawBytes.isEmpty) {
-      const msg = 'readAsBytes returned empty bytes after 3 attempts';
-      logger.e('uploadRawToStaging[$index]: $msg');
-      ErrorLoggingService.instance?.logError(
-        errorType: 'UploadReadFailure',
-        errorMessage: '$msg [index=$index, propertyId=$propertyId]',
-        screenName: 'ImageUploadService',
-        severity: 'error',
-      );
-      return null;
-    }
-
-    if (_isHtmlPage(rawBytes)) {
-      const msg = 'readAsBytes returned an HTML page (service-worker offline fallback)';
-      logger.w('uploadRawToStaging[$index]: $msg');
-      ErrorLoggingService.instance?.logError(
-        errorType: 'UploadHtmlPage',
-        errorMessage: '$msg [index=$index]',
-        screenName: 'ImageUploadService',
-        severity: 'warning',
-      );
-      return null;
-    }
-
-    // ── Step 2: upload to staging (retry up to 3×) ──────────────────────────
+    final bytes = await _readBytes(file, tag: 'property[$index] propertyId=$propertyId');
+    if (bytes == null) return null;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final stagingPath = '$userId/${propertyId}_${timestamp}_$index.raw';
-
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await Supabase.instance.client.storage
-            .from(SupabaseConfig.stagingMediaBucket)
-            .uploadBinary(
-              stagingPath,
-              rawBytes,
-              fileOptions: const FileOptions(upsert: true),
-            )
-            .timeout(const Duration(seconds: 30));
-
-        // The Edge Function will create the JPEG at this deterministic path.
-        // Return the predicted URL immediately — the shimmer covers the 1-3 s
-        // processing window.
-        final publicPath = '$userId/${propertyId}_${timestamp}_$index.jpg';
-        return '${SupabaseConfig.supabaseUrl}/storage/v1/object/public/'
-            '${SupabaseConfig.publicMediaBucket}/$publicPath';
-      } catch (e) {
-        logger.w('uploadRawToStaging[$index]: upload attempt $attempt failed: $e');
-        if (attempt < 3) {
-          await Future.delayed(Duration(seconds: attempt));
-        } else {
-          logger.e('uploadRawToStaging[$index] failed after 3 attempts', error: e);
-          ErrorLoggingService.instance?.logError(
-            errorType: 'UploadStorageFailure',
-            errorMessage: 'Staging upload failed after 3 attempts: $e',
-            screenName: 'ImageUploadService',
-            severity: 'error',
-          );
-        }
-      }
-    }
-    return null;
+    return _uploadServable(
+      bytes: bytes,
+      bucket: SupabaseConfig.propertyImagesBucket,
+      pathPrefix: '$userId/${propertyId}_${timestamp}_$index',
+      tag: 'property[$index]',
+    );
   }
 
-  // ── Single-image staging upload (ad creatives, logos) ─────────────────────
+  // ── Ad creative / logo → public advertisements bucket ──────────────────────
 
-  /// Upload a single raw image [file] to the private staging bucket for
-  /// non-property images (ad creatives, logos).
+  /// Upload one ad creative or logo and return its real public URL.
   ///
-  /// Same retry-protected "dumb pipe" pipeline as [uploadRawToStaging].
-  ///
-  /// [folder] namespaces the image type, e.g. `'ad_images'`, `'ad_logos'`.
-  /// [label] distinguishes uploads within the same folder, e.g. `'0'` or `'main'`.
-  ///
-  /// Returns the predicted final public URL in public_media, or null on failure.
-  static Future<String?> uploadSingleRawToStaging({
+  /// [folder] namespaces the image type (e.g. `'ad_images'`, `'ad_logos'`);
+  /// [label] distinguishes uploads within a folder (e.g. `'0'` or `'logo'`).
+  static Future<String?> uploadCreativeImage({
     required XFile file,
     required String userId,
     required String folder,
     required String label,
   }) async {
-    // ── Step 1: read bytes ────────────────────────────────────────────────────
-    Uint8List? rawBytes;
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        final bytes = await file.readAsBytes();
-        if (bytes.isNotEmpty) {
-          rawBytes = bytes;
-          break;
-        }
-        logger.w('uploadSingleRawToStaging[$folder/$label]: empty bytes on attempt $attempt');
-      } catch (e) {
-        logger.w('uploadSingleRawToStaging[$folder/$label]: readAsBytes attempt $attempt failed: $e');
-      }
-      if (attempt < 3) await Future.delayed(Duration(milliseconds: 500 * attempt));
-    }
-
-    if (rawBytes == null || rawBytes.isEmpty) {
-      const msg = 'readAsBytes returned empty bytes after 3 attempts';
-      logger.e('uploadSingleRawToStaging[$folder/$label]: $msg');
-      ErrorLoggingService.instance?.logError(
-        errorType: 'UploadReadFailure',
-        errorMessage: '$msg [folder=$folder, label=$label]',
-        screenName: 'ImageUploadService',
-        severity: 'error',
-      );
-      return null;
-    }
-
-    if (_isHtmlPage(rawBytes)) {
-      const msg = 'readAsBytes returned an HTML page (service-worker offline fallback)';
-      logger.w('uploadSingleRawToStaging[$folder/$label]: $msg');
-      ErrorLoggingService.instance?.logError(
-        errorType: 'UploadHtmlPage',
-        errorMessage: '$msg [folder=$folder, label=$label]',
-        screenName: 'ImageUploadService',
-        severity: 'warning',
-      );
-      return null;
-    }
-
-    // ── Step 2: upload to staging ─────────────────────────────────────────────
+    final bytes = await _readBytes(file, tag: 'creative[$folder/$label]');
+    if (bytes == null) return null;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final stagingPath = '$userId/${folder}_${timestamp}_$label.raw';
-
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await Supabase.instance.client.storage
-            .from(SupabaseConfig.stagingMediaBucket)
-            .uploadBinary(
-              stagingPath,
-              rawBytes,
-              fileOptions: const FileOptions(upsert: true),
-            )
-            .timeout(const Duration(seconds: 30));
-
-        final publicPath = '$userId/${folder}_${timestamp}_$label.jpg';
-        return '${SupabaseConfig.supabaseUrl}/storage/v1/object/public/'
-            '${SupabaseConfig.publicMediaBucket}/$publicPath';
-      } catch (e) {
-        logger.w('uploadSingleRawToStaging[$folder/$label]: upload attempt $attempt failed: $e');
-        if (attempt < 3) {
-          await Future.delayed(Duration(seconds: attempt));
-        } else {
-          logger.e('uploadSingleRawToStaging[$folder/$label] failed after 3 attempts', error: e);
-          ErrorLoggingService.instance?.logError(
-            errorType: 'UploadStorageFailure',
-            errorMessage: 'Staging upload failed after 3 attempts: $e',
-            screenName: 'ImageUploadService',
-            severity: 'error',
-          );
-        }
-      }
-    }
-    return null;
+    return _uploadServable(
+      bytes: bytes,
+      bucket: SupabaseConfig.advertisementsBucket,
+      pathPrefix: '$userId/${folder}_${timestamp}_$label',
+      tag: 'creative[$folder/$label]',
+    );
   }
 
-  // ── Direct upload (avatars and any pre-normalised bytes) ───────────────────
+  // ── Direct upload of already-read bytes (avatars) ──────────────────────────
 
-  /// Upload [bytes] directly to [bucket] (no staging pipeline).
-  ///
-  /// Use this for avatars and other images that are already normalised JPEGs
-  /// (e.g. after [ImageHelper.normalizeForUpload]).  The URL returned is real
-  /// and immediately accessible — there is no async processing window.
-  ///
-  /// Retries the Supabase upload up to 3 times for transient failures.
-  /// Returns the public URL, or null if all attempts fail.
+  /// Upload [bytes] directly to [bucket] under [pathPrefix] (no extension — it
+  /// is chosen from the detected format). Returns the real public URL.
   static Future<String?> uploadImageBytes({
     required String bucket,
     required String pathPrefix,
     required Uint8List bytes,
   }) async {
     if (bytes.isEmpty) return null;
+    return _uploadServable(
+      bytes: bytes,
+      bucket: bucket,
+      pathPrefix: pathPrefix,
+      tag: 'bucket=$bucket',
+    );
+  }
 
-    final fmt = detectImageFormat(bytes);
-    if (fmt == DetectedImageFormat.html) {
-      logger.w('uploadImageBytes: bytes are an HTML page — refusing');
-      ErrorLoggingService.instance?.logError(
-        errorType: 'UploadHtmlPage',
-        errorMessage: 'uploadImageBytes received an HTML page [bucket=$bucket]',
-        screenName: 'ImageUploadService',
-        severity: 'warning',
-      );
-      return null;
+  // ── Internals ──────────────────────────────────────────────────────────────
+
+  /// Read raw bytes, retrying for transient mobile file-access blips.
+  static Future<Uint8List?> _readBytes(XFile file, {required String tag}) async {
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final bytes = await file.readAsBytes();
+        if (bytes.isNotEmpty) return bytes;
+        logger.w('upload $tag: empty bytes on attempt $attempt');
+      } catch (e) {
+        logger.w('upload $tag: readAsBytes attempt $attempt failed: $e');
+      }
+      if (attempt < 3) {
+        await Future.delayed(Duration(milliseconds: 500 * attempt));
+      }
     }
+    _log('UploadReadFailure',
+        'readAsBytes returned empty bytes after 3 attempts [$tag]', 'error');
+    return null;
+  }
 
+  /// Coerce [bytes] into a bucket-servable format, then upload with up to 3
+  /// retries and return the real public URL (null on failure).
+  static Future<String?> _uploadServable({
+    required Uint8List bytes,
+    required String bucket,
+    required String pathPrefix,
+    required String tag,
+  }) async {
+    final servable = _toServableBytes(bytes, tag: tag);
+    if (servable == null) return null;
+
+    // After coercion the format is always one the public buckets accept, so
+    // re-detecting yields the correct extension + Content-Type.
+    final fmt = detectImageFormat(servable);
     final path = '$pathPrefix.${fmt.fileExtension}';
 
     for (int attempt = 1; attempt <= 3; attempt++) {
       try {
-        await Supabase.instance.client.storage.from(bucket).uploadBinary(
+        await Supabase.instance.client.storage
+            .from(bucket)
+            .uploadBinary(
               path,
-              bytes,
+              servable,
               fileOptions: FileOptions(
                 contentType: fmt.mimeType,
                 cacheControl: '31536000',
@@ -265,28 +147,61 @@ class ImageUploadService {
             .timeout(const Duration(seconds: 30));
         return Supabase.instance.client.storage.from(bucket).getPublicUrl(path);
       } catch (e) {
-        logger.w('uploadImageBytes: attempt $attempt failed for $bucket/$path: $e');
+        logger.w('upload $tag: attempt $attempt to $bucket/$path failed: $e');
         if (attempt < 3) {
           await Future.delayed(Duration(seconds: attempt));
         } else {
-          logger.e('uploadImageBytes failed after 3 attempts', error: e);
-          ErrorLoggingService.instance?.logError(
-            errorType: 'UploadStorageFailure',
-            errorMessage: 'Direct upload failed after 3 attempts: $e',
-            screenName: 'ImageUploadService',
-            severity: 'error',
-          );
+          _log('UploadStorageFailure',
+              'Upload to $bucket failed after 3 attempts [$tag]: $e', 'error');
         }
       }
     }
     return null;
   }
 
-  // ── Internal helpers ───────────────────────────────────────────────────────
+  /// Returns bytes in a format the public buckets serve (JPEG/PNG/WebP/GIF), or
+  /// null if the bytes can't be made servable.
+  ///
+  /// JPEG/PNG/WebP/GIF pass through untouched. HEIC/AVIF/unknown bytes are
+  /// re-encoded to JPEG via the `image` package when decodable (covers stray
+  /// formats like BMP/TIFF too). HTML service-worker poison and undecodable
+  /// bytes are refused and logged.
+  static Uint8List? _toServableBytes(Uint8List bytes, {required String tag}) {
+    final fmt = detectImageFormat(bytes);
+    switch (fmt) {
+      case DetectedImageFormat.jpeg:
+      case DetectedImageFormat.png:
+      case DetectedImageFormat.webp:
+      case DetectedImageFormat.gif:
+        return bytes;
+      case DetectedImageFormat.html:
+        _log('UploadHtmlPage',
+            'Refusing an HTML service-worker page as an image [$tag]', 'warning');
+        return null;
+      case DetectedImageFormat.heic:
+      case DetectedImageFormat.avif:
+      case DetectedImageFormat.unknown:
+        try {
+          final decoded = img.decodeImage(bytes);
+          if (decoded != null) {
+            return Uint8List.fromList(img.encodeJpg(decoded, quality: 88));
+          }
+        } catch (e) {
+          logger.w('upload $tag: re-encode to JPEG failed: $e');
+        }
+        _log('UploadUnsupportedFormat',
+            'Could not convert ${fmt.name} bytes to a servable image [$tag]',
+            'error');
+        return null;
+    }
+  }
 
-  static bool _isHtmlPage(Uint8List bytes) {
-    if (bytes.length < 5) return false;
-    final head = String.fromCharCodes(bytes.take(15)).toLowerCase();
-    return head.contains('<!doc') || head.contains('<html');
+  static void _log(String errorType, String errorMessage, String severity) {
+    ErrorLoggingService.instance?.logError(
+      errorType: errorType,
+      errorMessage: errorMessage,
+      screenName: 'ImageUploadService',
+      severity: severity,
+    );
   }
 }
