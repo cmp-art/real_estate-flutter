@@ -11,6 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/country_codes.dart';
+import '../../../../core/config/supabase_config.dart';
 import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../core/utils/snackbar_utils.dart';
@@ -325,14 +326,23 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
 
     String? imageUrl = user.avatarUrl;
     if (_selectedImage != null) {
-      // Universal Upload Architecture: raw bytes → staging_media → Edge Function
-      // → public_media.  readAsBytes() inside uploadSingleRawToStaging bypasses
-      // Android Scoped Storage / iOS sandbox / PWA service-worker interception.
-      final uploaded = await ImageUploadService.uploadSingleRawToStaging(
-        file: _selectedImage!,
-        userId: user.id,
-        folder: 'avatar',
-        label: '0',
+      // Direct upload to profile-images (public bucket) via uploadImageBytes().
+      // The bytes are already in _selectedImageBytes (set during _pickImage) and
+      // the image is already a normalised JPEG after normalizeForUpload(), so no
+      // staging pipeline is needed.  The URL is real and immediately accessible —
+      // there is no async processing window (unlike the staging pipeline for
+      // property photos).
+      if (_selectedImageBytes == null || _selectedImageBytes!.isEmpty) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          SnackbarUtils.showError(context, t('failed_to_update_profile'));
+        }
+        return;
+      }
+      final uploaded = await ImageUploadService.uploadImageBytes(
+        bucket: SupabaseConfig.profileImagesBucket,
+        pathPrefix: '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}',
+        bytes: _selectedImageBytes!,
       );
       if (uploaded == null) {
         if (mounted) {
@@ -371,6 +381,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       setState(() => _isLoading = false);
 
       if (success) {
+        // Clear the local preview so _avatarProvider falls back to the
+        // freshly-stored URL from the auth provider (immediately accessible
+        // since we upload directly, not via the async staging pipeline).
+        setState(() {
+          _selectedImage = null;
+          _selectedImageBytes = null;
+        });
         SnackbarUtils.showSuccess(context, t('profile_updated_successfully'));
         // Screen stays open after successful save
       } else {
@@ -382,7 +399,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authNotifierProvider).value;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final currentLanguage = ref.watch(languageProvider).languageCode;
 
     String t(String key) => AppTranslations.translate(key, currentLanguage);

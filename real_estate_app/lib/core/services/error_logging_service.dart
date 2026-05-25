@@ -1,12 +1,14 @@
 // lib/core/services/error_logging_service.dart
 // Error logging using ONLY Supabase (replaces Sentry/Firebase Crashlytics)
 //
-// SCALE DESIGN (1M+ users):
-//   • Sampling rates prevent a single error from creating 1M DB rows:
-//       critical → 100 %  (always recorded)
-//       error    →  10 %  (1-in-10 devices sampled)
-//       warning  →   5 %  (1-in-20)
-//       info     →   1 %  (1-in-100)
+// SAMPLING RATES (tuned for early-stage deployment):
+//   • critical → 100 %  (always recorded — app crashes, data loss)
+//   • error    → 100 %  (always recorded — upload fails, DB errors)
+//   • warning  →  20 %  (1-in-5 — degraded behaviour)
+//   • info     →   1 %  (1-in-100 — informational only)
+//
+//   ↑ Raise warning/info thresholds once daily active users exceed ~50 k.
+//
 //   • Identical errors are de-duped within a 5-minute window.
 //   • Non-critical errors are batched (up to 50) and flushed every 60 s.
 
@@ -19,12 +21,20 @@ class ErrorLoggingService {
   final _supabase = Supabase.instance.client;
   final _random = Random();
 
+  // ── Global singleton — allows non-Riverpod code (services, static helpers)
+  //    to log errors without needing a BuildContext or WidgetRef. ────────────
+  static ErrorLoggingService? _singleton;
+  static void setInstance(ErrorLoggingService instance) =>
+      _singleton = instance;
+  /// Access the app-wide instance from anywhere (null before main() init).
+  static ErrorLoggingService? get instance => _singleton;
+
   // ── Sampling rates ─────────────────────────────────────────────────────────
   static const Map<String, double> _sampleRates = {
-    'critical': 1.00,
-    'error': 0.10,
-    'warning': 0.05,
-    'info': 0.01,
+    'critical': 1.00, // always — app crashes, data loss
+    'error':    1.00, // always — upload fails, DB errors, auth failures
+    'warning':  0.20, // 1-in-5  — degraded behaviour
+    'info':     0.01, // 1-in-100 — informational noise
   };
 
   // ── De-duplication ─────────────────────────────────────────────────────────

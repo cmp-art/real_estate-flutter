@@ -219,6 +219,9 @@ void main() async {
     
     analyticsService = AnalyticsSupabaseService();
     errorLoggingService = ErrorLoggingService();
+    // Expose the singleton so non-Riverpod code (ImageUploadService, etc.)
+    // can log errors without a BuildContext or WidgetRef.
+    ErrorLoggingService.setInstance(errorLoggingService);
     performanceMonitor = PerformanceMonitorService();
     
     // Log app open event
