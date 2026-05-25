@@ -156,6 +156,12 @@ class ImageUploadService {
     final fmt = detectImageFormat(servable);
     final path = '$pathPrefix.${fmt.fileExtension}';
 
+    // Timeout scales with payload so a large image on a slow connection isn't
+    // cut off mid-transfer: ~15 s base + 5 s/MB, clamped to [20 s, 120 s].
+    final sizeMb = servable.lengthInBytes / (1024 * 1024);
+    final uploadTimeout =
+        Duration(seconds: (15 + sizeMb * 5).round().clamp(20, 120));
+
     for (int attempt = 1; attempt <= 3; attempt++) {
       try {
         await Supabase.instance.client.storage
@@ -169,7 +175,7 @@ class ImageUploadService {
                 upsert: true,
               ),
             )
-            .timeout(const Duration(seconds: 30));
+            .timeout(uploadTimeout);
         return Supabase.instance.client.storage.from(bucket).getPublicUrl(path);
       } catch (e) {
         logger.w('upload $tag: attempt $attempt to $bucket/$path failed: $e');

@@ -432,11 +432,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     final picked = await _imageHelper.pickMultipleImages(
       maxImages: remaining,
       source: source,
-      onOversized: (skipped, maxMB) => _snack(
-        '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
-        'each must be under ${maxMB.toStringAsFixed(0)} MB',
-        isError: false,
-      ),
       // Fires when the service worker poisoned a blob URL with HTML bytes.
       // We surface this immediately so the user knows to re-pick that photo.
       onUnreadable: (count) => unreadableCount += count,

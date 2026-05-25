@@ -3,3 +3,7 @@
 import 'dart:typed_data';
 
 Future<Uint8List?> webCropToCard(Uint8List bytes) async => null;
+
+Future<Uint8List?> webResizeToMaxEdge(Uint8List bytes,
+        {int maxEdge = 1600}) async =>
+    null;

@@ -88,9 +88,8 @@ class ImageHelper {
   }
 
   // Pick multiple images from gallery — returns XFile (works on web + native).
-  // [onOversized] is called when one or more images are skipped because they
-  // exceed [AppConstants.maxImageSize].  The callback receives the number of
-  // skipped files and the limit in MB so the caller can show a snackbar.
+  // Any picked image is accepted regardless of size — the normalize/upload
+  // step downscales it to a small target, so large originals are never skipped.
   //
   // On web (PWA / mobile browser) we intentionally pick ONE image at a time
   // using pickImage() instead of pickMultiImage().  pickMultiImage decodes all
@@ -101,7 +100,6 @@ class ImageHelper {
   Future<List<XFile>> pickMultipleImages({
     int maxImages = 10,
     ImageSource source = ImageSource.gallery,
-    void Function(int skippedCount, double maxMB)? onOversized,
     // Called when one or more images could not be read at the browser level
     // (service-worker HTML poison or expired blob URL). The count is how many
     // were silently unreadable so the caller can show a user-facing warning.
@@ -174,26 +172,10 @@ class ImageHelper {
 
       if (images.isEmpty) return [];
 
-      // Limit number of images to remaining slots
-      final limitedImages = images.take(maxImages).toList();
-
-      final List<XFile> validImages = [];
-      int skipped = 0;
-      for (final image in limitedImages) {
-        final size = await image.length();
-        if (size <= AppConstants.maxImageSize) {
-          validImages.add(image);
-        } else {
-          skipped++;
-        }
-      }
-
-      // Notify caller about skipped images so it can show a snackbar
-      if (skipped > 0 && onOversized != null) {
-        onOversized(skipped, AppConstants.maxImageSize / (1024 * 1024));
-      }
-
-      return validImages;
+      // Accept any size: never reject a photo for being large. The normalize
+      // step downscales every image to a small target before upload, so big
+      // originals are handled rather than skipped. Only the count is capped.
+      return images.take(maxImages).toList();
     } catch (e) {
       if (e.toString().contains('already_active')) return [];
       throw ValidationException(e.toString());
@@ -275,24 +257,30 @@ class ImageHelper {
         // Service-worker offline page masquerading as an image — cannot recover.
         if (fmt == DetectedImageFormat.html) return null;
 
-        // Canvas crop: fast GPU path for JPEG/PNG/WebP/GIF.
-        // For card=true it also center-crops to 4:3 and outputs JPEG.
-        // Skipped for HEIC/AVIF/unknown — Canvas can't decode those; the
-        // backend handles format conversion via ImageMagick.
+        // Canvas: hardware-accelerated decode/resize that never touches the
+        // Dart heap, so even a 48 MP photo can't OOM the browser tab.
         if (card) {
+          // Property card: center-crop to 4:3 and downscale to 1 280 px JPEG.
           final cropped = await webCropToCard(bytes);
           if (cropped != null && cropped.isNotEmpty) {
             return XFile.fromData(cropped,
                 name: 'crop_$tag.jpg', mimeType: 'image/jpeg');
           }
-        } else if (fmt.isBrowserRenderable) {
-          return XFile.fromData(bytes,
-              name: 'photo_$tag.${fmt.fileExtension}', mimeType: fmt.mimeType);
+        } else {
+          // Ad creative: full-frame downscale to 1 600 px so the stored file is
+          // small (~300 KB), keeping PNG/WebP transparency for logos.
+          final resized = await webResizeToMaxEdge(bytes, maxEdge: 1600);
+          if (resized != null && resized.isNotEmpty) {
+            final outFmt = detectImageFormat(resized);
+            return XFile.fromData(resized,
+                name: 'ad_$tag.${outFmt.fileExtension}',
+                mimeType: outFmt.mimeType);
+          }
         }
 
-        // Canvas could not handle this format (HEIC, AVIF, very large image,
-        // or non-card path for non-renderable format). Upload the raw bytes —
-        // the process-staged-image Edge Function converts everything to JPEG.
+        // Canvas could not decode this (HEIC/AVIF on a desktop browser, or a
+        // decode failure). Upload the raw bytes — the upload service coerces
+        // them to a servable, right-sized JPEG on a background isolate.
         return XFile.fromData(bytes,
             name: 'photo_$tag.${fmt.fileExtension}', mimeType: fmt.mimeType);
       } catch (_) {
@@ -301,21 +289,20 @@ class ImageHelper {
     }
 
     // ── Android / iOS ──────────────────────────────────────────────────────
-    // image_picker already down-scaled the image and transcoded HEIC→JPEG at
-    // pick time, so for the no-crop case the original file is upload-ready.
-    if (!card) return image;
-
-    // Decode/crop/encode runs on a background isolate via compute() so a batch
-    // of large photos can't block the UI thread and trigger an ANR ("app not
-    // responding") on low-end devices. Crop is best-effort — fall back to the
+    // Decode/resize/encode runs on a background isolate via compute() so a
+    // batch of large photos can't block the UI thread and trigger an ANR ("app
+    // not responding") on low-end devices. Best-effort — fall back to the
     // original picked image on any error.
     try {
       final bytes = await image.readAsBytes();
-      final outBytes = await compute(_cropToCardJpg, bytes);
+      final outBytes = card
+          ? await compute(_cropToCardJpg, bytes)
+          : await compute(_resizeToServable, _ResizeRequest(bytes, 1600));
       if (outBytes == null || outBytes.isEmpty) return image;
 
+      final outFmt = detectImageFormat(outBytes);
       final tmpDir = await getTemporaryDirectory();
-      final outPath = '${tmpDir.path}/crop_$tag.jpg';
+      final outPath = '${tmpDir.path}/norm_$tag.${outFmt.fileExtension}';
       await File(outPath).writeAsBytes(outBytes);
       return XFile(outPath);
     } catch (_) {
@@ -514,6 +501,35 @@ Uint8List? _avatarToSquareJpg(Uint8List bytes) {
       ? img.copyResize(square, width: 512, height: 512)
       : square;
   return img.encodeJpg(sized, quality: 85);
+}
+
+// Argument bundle for the [_resizeToServable] isolate entry point.
+class _ResizeRequest {
+  final Uint8List bytes;
+  final int maxEdge;
+  const _ResizeRequest(this.bytes, this.maxEdge);
+}
+
+// Runs on a background isolate (via compute). Downscales [req.bytes] so the
+// longest edge is at most [req.maxEdge], applying EXIF orientation on decode.
+// Keeps an alpha channel as PNG (logos with transparency) and encodes
+// everything else as JPEG q82 so the stored file stays small (~300 KB).
+// Returns null if the bytes can't be decoded.
+Uint8List? _resizeToServable(_ResizeRequest req) {
+  final decoded = img.decodeImage(req.bytes);
+  if (decoded == null) return null;
+
+  var image = decoded;
+  final longest = image.width >= image.height ? image.width : image.height;
+  if (longest > req.maxEdge) {
+    image = image.width >= image.height
+        ? img.copyResize(image, width: req.maxEdge)
+        : img.copyResize(image, height: req.maxEdge);
+  }
+
+  return image.hasAlpha
+      ? img.encodePng(image)
+      : img.encodeJpg(image, quality: 82);
 }
 
 // Returns true when bytes are an HTML page — the PWA service worker's offline

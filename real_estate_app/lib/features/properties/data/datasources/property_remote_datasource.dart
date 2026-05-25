@@ -310,21 +310,42 @@ class PropertyRemoteDataSource {
       throw ServerException('User not authenticated');
     }
 
+    // Upload with bounded concurrency (up to 4 in flight) so a 10-photo listing
+    // doesn't pay 10 sequential round-trips, while capping parallelism to avoid
+    // memory pressure (each coerce may spawn an isolate) and swamping a weak
+    // mobile connection. Results are index-keyed so the output order matches the
+    // input order regardless of which upload finishes first.
+    const maxConcurrent = 4;
+    final results = List<String?>.filled(images.length, null);
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final i = nextIndex;
+        if (i >= images.length) break;
+        nextIndex++;
+        results[i] = await ImageUploadService.uploadPropertyImage(
+          file: images[i],
+          userId: userId,
+          propertyId: propertyId,
+          index: i,
+        );
+      }
+    }
+
+    final workerCount =
+        images.length < maxConcurrent ? images.length : maxConcurrent;
+    await Future.wait(List.generate(workerCount, (_) => worker()));
+
     final List<String> uploadedUrls = [];
     int failed = 0;
-
-    for (int i = 0; i < images.length; i++) {
-      final url = await ImageUploadService.uploadPropertyImage(
-        file: images[i],
-        userId: userId,
-        propertyId: propertyId,
-        index: i,
-      );
+    for (int i = 0; i < results.length; i++) {
+      final url = results[i];
       if (url != null) {
         uploadedUrls.add(url);
       } else {
         failed++;
-        logger.w('uploadImages: image ${i + 1} staging failed — skipping');
+        logger.w('uploadImages: image ${i + 1} upload failed — skipping');
       }
     }
 

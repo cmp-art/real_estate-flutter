@@ -188,17 +188,6 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
     final images = await _imageHelper.pickMultipleImages(
       maxImages: remainingSlots,
       source: source,
-      onOversized: (skipped, maxMB) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                '$skipped photo${skipped > 1 ? 's' : ''} skipped — '
-                'each must be under ${maxMB.toStringAsFixed(0)} MB'),
-            backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-          ));
-        }
-      },
     );
 
     if (images.isEmpty || !mounted) return;
