@@ -1,20 +1,30 @@
-// core/widgets/optimized_property_image.dart
-// Optimized image widget with CDN support and caching
+// features/properties/presentation/widgets/optimized_property_image.dart
+// Optimized image widget with CDN support, caching, and auto-retry for images
+// that are still being processed by the backend Edge Function.
+//
+// After a property is created, images are uploaded to staging_media and the
+// process-staged-image Edge Function creates the final JPEG in public_media
+// asynchronously (typically 1–3 seconds). The predicted public_media URL is
+// stored in the DB immediately so cards can display it, but the file may 404
+// during that short processing window. This widget retries on 404 (up to 5
+// times, 2 s apart) so the image appears automatically without user action.
 
-import 'package:flutter/material.dart';
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
+
 import '../../../../core/services/cdn_service.dart';
 
-
-class OptimizedPropertyImage extends StatelessWidget {
+class OptimizedPropertyImage extends StatefulWidget {
   final String imageUrl;
   final double? width;
   final double? height;
   final BoxFit fit;
   final bool isThumbnail;
   final BorderRadius? borderRadius;
-  
+
   const OptimizedPropertyImage({
     super.key,
     required this.imageUrl,
@@ -24,79 +34,126 @@ class OptimizedPropertyImage extends StatelessWidget {
     this.isThumbnail = true,
     this.borderRadius,
   });
-  
+
+  @override
+  State<OptimizedPropertyImage> createState() => _OptimizedPropertyImageState();
+}
+
+class _OptimizedPropertyImageState extends State<OptimizedPropertyImage> {
+  // Retry up to 5 times (= 10 s total) before showing the permanent error state.
+  static const int _maxRetries = 5;
+  static const Duration _retryDelay = Duration(seconds: 2);
+
+  int _retryCount = 0;
+  Timer? _retryTimer;
+  bool _retryScheduled = false;
+
+  @override
+  void didUpdateWidget(OptimizedPropertyImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl) {
+      // Parent gave us a new URL — reset retry state for the fresh image.
+      _retryTimer?.cancel();
+      _retryCount = 0;
+      _retryScheduled = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  // Called from the errorWidget builder. Schedules one timer to bump
+  // _retryCount; the new count changes the CachedNetworkImage key, which
+  // forces a fresh widget (and therefore a fresh network request).
+  void _scheduleRetry() {
+    if (_retryCount >= _maxRetries || _retryScheduled) return;
+    _retryScheduled = true;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(_retryDelay, () {
+      _retryScheduled = false;
+      if (mounted) setState(() => _retryCount++);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Get optimized URL based on size needed
-    final optimizedUrl = isThumbnail
-        ? CdnService.getThumbnailUrl(imageUrl)
-        : CdnService.getMediumUrl(imageUrl);
-    
+    final optimizedUrl = widget.isThumbnail
+        ? CdnService.getThumbnailUrl(widget.imageUrl)
+        : CdnService.getMediumUrl(widget.imageUrl);
+
     return ClipRRect(
-      borderRadius: borderRadius ?? BorderRadius.circular(12),
+      borderRadius: widget.borderRadius ?? BorderRadius.circular(12),
       child: CachedNetworkImage(
+        // The key includes _retryCount so each retry creates a new widget
+        // instance, bypassing any in-memory error state and forcing a fresh
+        // network request without needing to evict the cache manually.
+        key: ValueKey('${optimizedUrl}_$_retryCount'),
         imageUrl: optimizedUrl,
-        width: width,
-        height: height,
-        fit: fit,
-        cacheManager: CustomCacheManager.instance,  // Custom cache with 7-day TTL
-        placeholder: (context, url) => _buildPlaceholder(context),
-        errorWidget: (context, url, error) => _buildError(context),
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        cacheManager: CustomCacheManager.instance,
+        placeholder: (context, url) => _buildShimmer(context),
+        errorWidget: (context, url, error) {
+          if (_retryCount < _maxRetries) {
+            // Image not accessible yet — likely still processing.
+            // Show shimmer and schedule a retry.
+            _scheduleRetry();
+            return _buildShimmer(context);
+          }
+          // All retries exhausted — show a permanent placeholder.
+          return _buildFinalError(context);
+        },
         fadeInDuration: const Duration(milliseconds: 300),
         fadeOutDuration: const Duration(milliseconds: 100),
       ),
     );
   }
-  
-  Widget _buildPlaceholder(BuildContext context) {
+
+  Widget _buildShimmer(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
     return Shimmer.fromColors(
       baseColor: isDark ? Colors.grey[800]! : Colors.grey[300]!,
       highlightColor: isDark ? Colors.grey[700]! : Colors.grey[100]!,
       child: Container(
-        width: width,
-        height: height,
+        width: widget.width,
+        height: widget.height,
         color: Colors.white,
       ),
     );
   }
-  
-  Widget _buildError(BuildContext context) {
-    // Images in public_media may still be processing (backend converts raw
-    // uploads asynchronously). Show a shimmer so the user sees "loading" rather
-    // than "broken" during the brief processing window (typically 1–3 seconds).
+
+  Widget _buildFinalError(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Shimmer.fromColors(
-      baseColor: isDark ? Colors.grey[800]! : Colors.grey[300]!,
-      highlightColor: isDark ? Colors.grey[700]! : Colors.grey[100]!,
-      child: Container(
-        width: width,
-        height: height,
-        color: Colors.white,
-        child: Center(
-          child: Icon(
-            Icons.image_outlined,
-            size: 28,
-            color: isDark ? Colors.grey[600]! : Colors.grey[400]!,
-          ),
+    return Container(
+      width: widget.width,
+      height: widget.height,
+      color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+      child: Center(
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          size: 32,
+          color: isDark ? Colors.grey[600]! : Colors.grey[400]!,
         ),
       ),
     );
   }
 }
 
-/// Gallery widget for multiple images (used in detail screens)
+/// Gallery widget for multiple images (used in detail screens).
 class OptimizedImageGallery extends StatefulWidget {
   final List<String> imageUrls;
   final double height;
-  
+
   const OptimizedImageGallery({
     super.key,
     required this.imageUrls,
     this.height = 300,
   });
-  
+
   @override
   State<OptimizedImageGallery> createState() => _OptimizedImageGalleryState();
 }
@@ -104,13 +161,13 @@ class OptimizedImageGallery extends StatefulWidget {
 class _OptimizedImageGalleryState extends State<OptimizedImageGallery> {
   int _currentIndex = 0;
   final PageController _pageController = PageController();
-  
+
   @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
   }
-  
+
   @override
   Widget build(BuildContext context) {
     if (widget.imageUrls.isEmpty) {
@@ -124,7 +181,7 @@ class _OptimizedImageGalleryState extends State<OptimizedImageGallery> {
         ),
       );
     }
-    
+
     return Stack(
       children: [
         SizedBox(
@@ -141,20 +198,21 @@ class _OptimizedImageGalleryState extends State<OptimizedImageGallery> {
               return OptimizedPropertyImage(
                 imageUrl: widget.imageUrls[index],
                 height: widget.height,
-                isThumbnail: false,  // Use medium size for gallery
+                isThumbnail: false,
                 borderRadius: BorderRadius.zero,
               );
             },
           ),
         ),
-        
+
         // Image counter
         if (widget.imageUrls.length > 1)
           Positioned(
             top: 16,
             right: 16,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.black54,
                 borderRadius: BorderRadius.circular(20),
@@ -168,7 +226,7 @@ class _OptimizedImageGalleryState extends State<OptimizedImageGallery> {
               ),
             ),
           ),
-          
+
         // Navigation arrows (for desktop/tablet)
         if (widget.imageUrls.length > 1) ...[
           Positioned(
@@ -210,12 +268,12 @@ class _OptimizedImageGalleryState extends State<OptimizedImageGallery> {
 class _NavigationButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-  
+
   const _NavigationButton({
     required this.icon,
     required this.onTap,
   });
-  
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(

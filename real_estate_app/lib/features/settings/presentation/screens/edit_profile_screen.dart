@@ -152,12 +152,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   }
 
   ImageProvider? _avatarProvider(String? existingUrl) {
-    if (_selectedImage != null) {
-      if (kIsWeb) {
-        return _selectedImageBytes != null
-            ? MemoryImage(_selectedImageBytes!)
-            : null;
-      }
+    // In-memory bytes are always preferred: instant on pick and instant
+    // post-upload (no network round-trip / gray loading flash).
+    if (_selectedImageBytes != null) {
+      return MemoryImage(_selectedImageBytes!);
+    }
+    if (_selectedImage != null && !kIsWeb) {
       return FileImage(File(_selectedImage!.path));
     }
     if (existingUrl != null && existingUrl.isNotEmpty) {
@@ -381,12 +381,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       setState(() => _isLoading = false);
 
       if (success) {
-        // Clear the local preview so _avatarProvider falls back to the
-        // freshly-stored URL from the auth provider (immediately accessible
-        // since we upload directly, not via the async staging pipeline).
+        // Keep _selectedImageBytes so the circle shows the uploaded photo
+        // immediately via MemoryImage — no network round-trip needed.
+        // authNotifierProvider now holds the new avatarUrl; future screen
+        // loads will fetch from network. Bytes are freed on the next pick.
         setState(() {
           _selectedImage = null;
-          _selectedImageBytes = null;
+          // _selectedImageBytes intentionally kept
         });
         SnackbarUtils.showSuccess(context, t('profile_updated_successfully'));
         // Screen stays open after successful save
@@ -444,7 +445,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                       radius: 60,
                       backgroundColor: Colors.grey.shade200,
                       backgroundImage: _avatarProvider(user?.avatarUrl),
-                      child: _selectedImage == null && user?.avatarUrl == null
+                      child: _selectedImageBytes == null && _selectedImage == null && (user?.avatarUrl == null || user!.avatarUrl!.isEmpty)
                           ? Text(
                               user?.fullName[0].toUpperCase() ?? 'U',
                               style: TextStyle(

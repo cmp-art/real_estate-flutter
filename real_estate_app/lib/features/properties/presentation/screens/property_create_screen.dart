@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/middleware/feature_gate_middleware.dart';
+import '../../../../core/services/error_logging_service.dart';
 import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/logger.dart';
@@ -230,7 +231,13 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         _snack(reason, isError: true);
       }
       return false;
-    } catch (_) {
+    } catch (e) {
+      ErrorLoggingService.instance?.logError(
+        errorType: 'QuotaCheckFailed',
+        errorMessage: 'check_property_creation_allowed RPC failed: $e',
+        screenName: 'PropertyCreateScreen',
+        severity: 'warning',
+      );
       return true; // fail open — backend enforces anyway
     }
   }
@@ -279,7 +286,14 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         if (b.length > 100 && !_looksLikeHtml(b)) {
           _webBytes[f.path] = b;
         }
-      } catch (_) {}
+      } catch (e) {
+        ErrorLoggingService.instance?.logError(
+          errorType: 'WebByteCacheFailed',
+          errorMessage: 'Failed to cache web image bytes for "${f.name}": $e',
+          screenName: 'PropertyCreateScreen',
+          severity: 'warning',
+        );
+      }
     }
   }
 
@@ -521,6 +535,12 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
 
     await result.fold(
       (failure) async {
+        ErrorLoggingService.instance?.logError(
+          errorType: _isEditing ? 'PropertyUpdateFailed' : 'PropertyCreateFailed',
+          errorMessage: failure.message,
+          screenName: 'PropertyCreateScreen',
+          severity: 'error',
+        );
         setState(() => _isLoading = false);
         _snack(failure.message, isError: true);
       },
@@ -551,11 +571,38 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
               }
               final withImages = saved.copyWith(
                   images: [...saved.images, ...urls]);
-              final updateResult = await repo.updateProperty(withImages);
-              updateResult.fold(
-                (_) { finalSaved = withImages; },
-                (u)  { finalSaved = u; },
-              );
+
+              // Persist image URLs to DB — retry up to 3× for transient failures.
+              // On permanent failure the in-memory entity still has the URLs so
+              // the current screen stays correct; the provider invalidation below
+              // will refetch from DB where images may be missing until the next
+              // successful save.
+              bool imagesSaved = false;
+              for (int imgAttempt = 1; imgAttempt <= 3 && !imagesSaved; imgAttempt++) {
+                if (imgAttempt > 1) {
+                  await Future.delayed(Duration(seconds: imgAttempt - 1));
+                }
+                final updateResult = await repo.updateProperty(withImages);
+                updateResult.fold(
+                  (_) {
+                    if (imgAttempt >= 3) {
+                      finalSaved = withImages;
+                      ErrorLoggingService.instance?.logError(
+                        errorType: 'PropertyImageUrlUpdateFailed',
+                        errorMessage:
+                            'Failed to save image URLs to DB for property '
+                            '${saved.id} after 3 attempts',
+                        screenName: 'PropertyCreateScreen',
+                        severity: 'error',
+                      );
+                    }
+                  },
+                  (u) {
+                    finalSaved = u;
+                    imagesSaved = true;
+                  },
+                );
+              }
             },
           );
         }
@@ -567,6 +614,14 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
           // appear in listings without images. For edits the property already
           // exists, so leave it as-is (text changes were already saved).
           if (!_isEditing) {
+            ErrorLoggingService.instance?.logError(
+              errorType: 'PropertyPhotoUploadFailed',
+              errorMessage:
+                  'All photos failed to upload for property ${saved.id}; '
+                  'listing rolled back',
+              screenName: 'PropertyCreateScreen',
+              severity: 'error',
+            );
             try { await repo.deleteProperty(saved.id); } catch (_) {}
           }
           setState(() => _isLoading = false);

@@ -100,7 +100,8 @@ class ImageUploadService {
               stagingPath,
               rawBytes,
               fileOptions: const FileOptions(upsert: true),
-            );
+            )
+            .timeout(const Duration(seconds: 30));
 
         // The Edge Function will create the JPEG at this deterministic path.
         // Return the predicted URL immediately — the shimmer covers the 1-3 s
@@ -195,7 +196,8 @@ class ImageUploadService {
               stagingPath,
               rawBytes,
               fileOptions: const FileOptions(upsert: true),
-            );
+            )
+            .timeout(const Duration(seconds: 30));
 
         final publicPath = '$userId/${folder}_${timestamp}_$label.jpg';
         return '${SupabaseConfig.supabaseUrl}/storage/v1/object/public/'
@@ -259,7 +261,8 @@ class ImageUploadService {
                 cacheControl: '31536000',
                 upsert: true,
               ),
-            );
+            )
+            .timeout(const Duration(seconds: 30));
         return Supabase.instance.client.storage.from(bucket).getPublicUrl(path);
       } catch (e) {
         logger.w('uploadImageBytes: attempt $attempt failed for $bucket/$path: $e');
