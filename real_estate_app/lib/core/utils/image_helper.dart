@@ -327,6 +327,48 @@ class ImageHelper {
   Future<XFile?> cropToCard(BuildContext context, XFile image) =>
       normalizeForUpload(context, image, card: true);
 
+  // ── Avatar-ready bytes (small square JPEG) ────────────────────────────────
+  // The profile-images bucket only accepts image/jpeg|png|webp and caps files
+  // at 5 MB (see sql3). A full-resolution phone photo (3–8 MB), a GIF, or an
+  // octet-stream therefore gets rejected server-side — the source of the
+  // "upload failed, try again" errors. Re-encoding every avatar to a 512 px
+  // square JPEG makes the payload tiny (~40–120 KB) and always an accepted
+  // type, so the upload succeeds regardless of what the user picked.
+  //
+  // Decoding/cropping runs on a background isolate via compute() so a large
+  // photo can't jank the UI. Returns null ONLY when the bytes are unreadable
+  // (empty / service-worker HTML poison) or an undecodable format such as raw
+  // HEIC from a desktop browser (the pure-Dart `image` package can't decode
+  // HEIC; on phones image_picker has already transcoded it to JPEG).
+  Future<Uint8List?> normalizeAvatar(XFile image) async {
+    Uint8List bytes;
+    try {
+      bytes = await image.readAsBytes();
+    } catch (_) {
+      return null;
+    }
+    if (bytes.isEmpty) return null;
+
+    final fmt = detectImageFormat(bytes);
+    if (fmt == DetectedImageFormat.html) return null; // offline page, not an image
+
+    try {
+      final out = await compute(_avatarToSquareJpg, bytes);
+      if (out != null && out.isNotEmpty) return out;
+    } catch (_) {
+      // fall through to the passthrough fallback below
+    }
+
+    // Could not decode (e.g. HEIC/AVIF from a desktop browser). If the bytes
+    // are already a small, bucket-servable format, upload them as-is; otherwise
+    // refuse so the caller can ask the user for a JPEG/PNG.
+    final servable = fmt == DetectedImageFormat.jpeg ||
+        fmt == DetectedImageFormat.png ||
+        fmt == DetectedImageFormat.webp;
+    if (servable && bytes.lengthInBytes <= 5 * 1024 * 1024) return bytes;
+    return null;
+  }
+
   // ── Pick a single image as an XFile (web + native) ────────────────────────
   // Unlike [pickImageFromGallery]/[pickImageFromCamera] (which return a
   // dart:io File and so only work on native), this returns an XFile usable on
@@ -452,6 +494,26 @@ Uint8List? _cropToCardJpg(Uint8List bytes) {
       img.copyCrop(decoded, x: offsetX, y: offsetY, width: cropW, height: cropH);
   final resized = img.copyResize(cropped, width: 1280);
   return img.encodeJpg(resized, quality: 88);
+}
+
+// Runs on a background isolate (via compute) so the UI thread never blocks.
+// Decodes [bytes] (applying EXIF orientation), center-crops to the largest
+// square, downsizes to 512 px and JPEG-encodes at 85 %. Returns null if the
+// bytes can't be decoded.
+Uint8List? _avatarToSquareJpg(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+
+  final side = decoded.width < decoded.height ? decoded.width : decoded.height;
+  final offsetX = (decoded.width - side) ~/ 2;
+  final offsetY = (decoded.height - side) ~/ 2;
+
+  final square =
+      img.copyCrop(decoded, x: offsetX, y: offsetY, width: side, height: side);
+  final sized = side > 512
+      ? img.copyResize(square, width: 512, height: 512)
+      : square;
+  return img.encodeJpg(sized, quality: 85);
 }
 
 // Returns true when bytes are an HTML page — the PWA service worker's offline

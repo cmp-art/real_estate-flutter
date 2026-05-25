@@ -1,13 +1,17 @@
 // features/authentication/presentation/screens/profile_screen.dart
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../settings/presentation/providers/app_providers.dart';
 import '../../../../core/config/theme_config.dart';
+import '../../../../core/config/supabase_config.dart';
+import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/dialog_utils.dart';
 import '../../../../core/utils/snackbar_utils.dart';
 import '../../../../core/utils/image_helper.dart';
+import '../../../../shared/widgets/user_avatar.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../presentation/screens/login_screen.dart';
 import '../../../properties/presentation/providers/property_providers.dart';
@@ -30,10 +34,12 @@ class ProfileScreen extends ConsumerStatefulWidget {
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen>
     with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-  static const String _tag = 'ProfileScreen';
-
   final ImageHelper _imageHelper = ImageHelper();
   late TabController _tabController;
+
+  // Bytes of a just-uploaded avatar, shown instantly via UserAvatar's preview
+  // so the new photo appears the moment it's saved (no network round-trip).
+  Uint8List? _localAvatarBytes;
 
   @override
   bool get wantKeepAlive => true;
@@ -117,15 +123,82 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
     );
   }
 
+  Future<ImageSource?> _pickAvatarSource() {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Take a Photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: const Text('Cancel'),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleProfilePictureUpdate() async {
-    final image = await _imageHelper.showImageSourceDialog(context);
-    if (image != null && mounted) {
-      DialogUtils.showLoadingDialog(context, message: 'Updating profile picture...');
-      await Future.delayed(const Duration(seconds: 2));
-      if (mounted) {
-        DialogUtils.hideLoadingDialog(context);
-        SnackbarUtils.showSuccess(context, 'Profile picture updated successfully!');
-      }
+    final user = ref.read(authNotifierProvider).value;
+    if (user == null) return;
+
+    final source = await _pickAvatarSource();
+    if (source == null || !mounted) return;
+
+    final picked = await _imageHelper.pickSingleImage(source: source);
+    if (picked == null || !mounted) return;
+
+    // Re-encode to a small square JPEG so the upload always fits the
+    // profile-images bucket's 5 MB / jpeg-png-webp limits, whatever was picked.
+    final bytes = await _imageHelper.normalizeAvatar(picked);
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      SnackbarUtils.showError(context,
+          'That photo could not be processed. Try another, or use a JPEG/PNG.');
+      return;
+    }
+
+    DialogUtils.showLoadingDialog(context, message: 'Updating profile picture...');
+
+    final url = await ImageUploadService.uploadImageBytes(
+      bucket: SupabaseConfig.profileImagesBucket,
+      pathPrefix: '${user.id}/avatar_${DateTime.now().millisecondsSinceEpoch}',
+      bytes: bytes,
+    );
+
+    if (!mounted) return;
+
+    if (url == null) {
+      DialogUtils.hideLoadingDialog(context);
+      SnackbarUtils.showError(context,
+          'Upload failed. Check your connection and try again.');
+      return;
+    }
+
+    final success = await ref
+        .read(authNotifierProvider.notifier)
+        .updateProfile(user.copyWith(avatarUrl: url));
+
+    if (!mounted) return;
+    DialogUtils.hideLoadingDialog(context);
+
+    if (success) {
+      setState(() => _localAvatarBytes = bytes);
+      SnackbarUtils.showSuccess(context, 'Profile picture updated successfully!');
+    } else {
+      SnackbarUtils.showError(context, 'Failed to save profile picture.');
     }
   }
 
@@ -319,26 +392,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen>
                                     width: 4,
                                   ),
                                 ),
-                                child: CircleAvatar(
+                                child: UserAvatar(
+                                  avatarUrl: user.avatarUrl,
+                                  fullName: user.fullName,
                                   radius: 50,
+                                  previewBytes: _localAvatarBytes,
                                   backgroundColor: ThemeConfig.getColor(context,
                                       lightColor: Colors.white,
                                       darkColor: Colors.grey.shade800),
-                                  backgroundImage: user.avatarUrl != null
-                                      ? CachedNetworkImageProvider(user.avatarUrl!)
-                                      : null,
-                                  child: user.avatarUrl == null
-                                      ? Text(
-                                          user.fullName.isNotEmpty
-                                              ? user.fullName[0].toUpperCase()
-                                              : '?',
-                                          style: TextStyle(
-                                            fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 40),
-                                            fontWeight: FontWeight.bold,
-                                            color: Theme.of(context).primaryColor,
-                                          ),
-                                        )
-                                      : null,
+                                  letterColor: Theme.of(context).primaryColor,
+                                  letterFontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 40),
+                                  heroTag: 'profile_avatar_self',
+                                  onTap: () => FullScreenAvatarViewer.open(
+                                    context,
+                                    imageUrl: user.avatarUrl,
+                                    imageBytes: _localAvatarBytes,
+                                    heroTag: 'profile_avatar_self',
+                                  ),
                                 ),
                               ),
                               Positioned(

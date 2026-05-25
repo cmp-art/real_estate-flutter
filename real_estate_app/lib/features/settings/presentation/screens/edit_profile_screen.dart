@@ -1,13 +1,11 @@
 // features/settings/presentation/screens/edit_profile_screen.dart
 // COMPLETE VERSION with Country Code Selector and Number-Only Phone Input
 
-import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../../shared/widgets/user_avatar.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/country_codes.dart';
@@ -127,43 +125,25 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     final picked = await _imageHelper.pickSingleImage(source: source);
     if (picked == null || !mounted) return;
 
-    // Normalise: transcodes iPhone HEIC to JPEG and validates the format, so a
-    // broken/unrenderable avatar is never stored.
-    final normalized =
-        await _imageHelper.normalizeForUpload(context, picked, card: false);
-    if (normalized == null) {
-      if (mounted) {
-        SnackbarUtils.showError(
-            context,
-            sw
-                ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
-                : 'That photo could not be processed. Try the app or a JPEG.');
-      }
+    // Re-encode to a small square JPEG. This guarantees the avatar fits the
+    // profile-images bucket's 5 MB / jpeg-png-webp limits whatever was picked
+    // (large phone photo, PNG, WebP, GIF, HEIC) — the cause of the uploads
+    // that "sometimes" failed before.
+    final bytes = await _imageHelper.normalizeAvatar(picked);
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      SnackbarUtils.showError(
+          context,
+          sw
+              ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
+              : 'That photo could not be processed. Try another, or use a JPEG/PNG.');
       return;
     }
 
-    final bytes = await normalized.readAsBytes();
-    if (bytes.isEmpty || !mounted) return;
-
     setState(() {
-      _selectedImage = normalized;
+      _selectedImage = picked;
       _selectedImageBytes = bytes;
     });
-  }
-
-  ImageProvider? _avatarProvider(String? existingUrl) {
-    // In-memory bytes are always preferred: instant on pick and instant
-    // post-upload (no network round-trip / gray loading flash).
-    if (_selectedImageBytes != null) {
-      return MemoryImage(_selectedImageBytes!);
-    }
-    if (_selectedImage != null && !kIsWeb) {
-      return FileImage(File(_selectedImage!.path));
-    }
-    if (existingUrl != null && existingUrl.isNotEmpty) {
-      return CachedNetworkImageProvider(existingUrl);
-    }
-    return null;
   }
 
   void _showCountryCodePicker() {
@@ -327,11 +307,9 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     String? imageUrl = user.avatarUrl;
     if (_selectedImage != null) {
       // Direct upload to profile-images (public bucket) via uploadImageBytes().
-      // The bytes are already in _selectedImageBytes (set during _pickImage) and
-      // the image is already a normalised JPEG after normalizeForUpload(), so no
-      // staging pipeline is needed.  The URL is real and immediately accessible —
-      // there is no async processing window (unlike the staging pipeline for
-      // property photos).
+      // _selectedImageBytes is a small square JPEG produced by normalizeAvatar()
+      // during _pickImage, so it always fits the bucket limits and no staging
+      // pipeline is needed. The URL is real and immediately accessible.
       if (_selectedImageBytes == null || _selectedImageBytes!.isEmpty) {
         if (mounted) {
           setState(() => _isLoading = false);
@@ -441,20 +419,21 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                         width: 3,
                       ),
                     ),
-                    child: CircleAvatar(
+                    child: UserAvatar(
+                      avatarUrl: user?.avatarUrl,
+                      fullName: user?.fullName ?? 'U',
                       radius: 60,
+                      previewBytes: _selectedImageBytes,
                       backgroundColor: Colors.grey.shade200,
-                      backgroundImage: _avatarProvider(user?.avatarUrl),
-                      child: _selectedImageBytes == null && _selectedImage == null && (user?.avatarUrl == null || user!.avatarUrl!.isEmpty)
-                          ? Text(
-                              user?.fullName[0].toUpperCase() ?? 'U',
-                              style: TextStyle(
-                                fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 48),
-                                fontWeight: FontWeight.bold,
-                                color: ThemeConfig.primaryColor,
-                              ),
-                            )
-                          : null,
+                      letterColor: ThemeConfig.primaryColor,
+                      letterFontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 48),
+                      heroTag: 'edit_profile_avatar',
+                      onTap: () => FullScreenAvatarViewer.open(
+                        context,
+                        imageUrl: user?.avatarUrl,
+                        imageBytes: _selectedImageBytes,
+                        heroTag: 'edit_profile_avatar',
+                      ),
                     ),
                   ),
                   Positioned(

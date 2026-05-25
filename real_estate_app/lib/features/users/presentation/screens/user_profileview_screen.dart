@@ -1,7 +1,6 @@
 // features/users/presentation/screens/user_profileview_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/formatters.dart';
@@ -9,6 +8,7 @@ import '../../../../core/utils/snackbar_utils.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/error_widget.dart';
+import '../../../../shared/widgets/user_avatar.dart';
 import '../../../properties/presentation/widgets/property_grid_card.dart';
 import '../../../properties/presentation/screens/property_detail_screen.dart';
 import '../../../chat/presentation/screens/chat_helper.dart';
@@ -134,22 +134,18 @@ class UserProfileViewScreen extends ConsumerWidget {
                                 ),
                               ],
                             ),
-                            child: CircleAvatar(
+                            child: UserAvatar(
+                              avatarUrl: user.avatarUrl,
+                              fullName: user.fullName,
                               radius: 50,
                               backgroundColor: Colors.white,
-                              backgroundImage: user.avatarUrl != null
-                                  ? CachedNetworkImageProvider(user.avatarUrl!)
-                                  : null,
-                              child: user.avatarUrl == null
-                                  ? Text(
-                                      user.fullName[0].toUpperCase(),
-                                      style: TextStyle(
-                                        fontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 40),
-                                        fontWeight: FontWeight.bold,
-                                        color: ThemeConfig.primaryColor,
-                                      ),
-                                    )
-                                  : null,
+                              letterColor: ThemeConfig.primaryColor,
+                              letterFontSize: ResponsiveHelper.getResponsiveFontSize(context, mobile: 40),
+                              onTap: () => FullScreenAvatarViewer.open(
+                                context,
+                                imageUrl: user.avatarUrl,
+                                heroTag: 'user_avatar_${user.id}',
+                              ),
                             ),
                           ),
                         ),
