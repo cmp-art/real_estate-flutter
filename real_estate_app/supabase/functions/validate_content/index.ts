@@ -13,6 +13,16 @@
 // The Gemini API key NEVER reaches the client — it lives only here as the
 // GEMINI_API_KEY Edge Function secret.
 //
+// ── Model ─────────────────────────────────────────────────────────────────────
+//   Primary model: gemini-3.1-flash-lite. If a key/region can't use it, the
+//   function automatically falls back to 2.5-flash-lite then 2.0-flash-lite, and
+//   caches the first one that works. Override the whole chain with the
+//   GEMINI_MODEL secret (then ONLY that model is used).
+//   Request format is kept version-portable: responseMimeType=application/json
+//   (no strict responseSchema, whose field name changed in Gemini 3) + a strict
+//   prompt + lenient JSON parsing; temperature is left at the model default
+//   (Gemini 3 recommends not lowering it).
+//
 // ── Request (POST, JSON) ─────────────────────────────────────────────────────
 //   {
 //     "contentType": "property" | "ad",
@@ -21,17 +31,19 @@
 //
 // ── Response (always HTTP 200 so the client can branch, never hard-fails) ─────
 //   { "ok": true,  "stage": "ai", "approved": bool, "category": str,
-//     "confidence": int, "reason": str }
+//     "confidence": int, "reason": str, "model": str }
 //   { "ok": false, "stage": "not_configured" | "bad_request" | "gemini_error",
 //     "detail": str }
-//   On any ok:false the Flutter client falls back to its rule-based text check,
-//   so submissions keep working even before this function is deployed.
+//   On any ok:false the Flutter client allows the submission through (it never
+//   judges by text), so uploads keep working even before this is deployed.
+//
+//   GET this function (health check) to see exactly which models YOUR key can
+//   use and which one would be picked — handy for diagnosing "not working".
 //
 // ── Deploy ────────────────────────────────────────────────────────────────────
 //   supabase secrets set GEMINI_API_KEY=<your key from aistudio.google.com>
 //   supabase functions deploy validate_content --no-verify-jwt
-// Optional: override the model with
-//   supabase secrets set GEMINI_MODEL=gemini-2.0-flash-lite
+//   (Optional) pin the model:  supabase secrets set GEMINI_MODEL=gemini-3.1-flash-lite
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 
@@ -41,8 +53,17 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
 }
 
-const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.0-flash-lite'
+const ENV_MODEL = Deno.env.get('GEMINI_MODEL')?.trim()
+// Newest first. If GEMINI_MODEL is set, ONLY that model is tried.
+const MODEL_CANDIDATES = ENV_MODEL && ENV_MODEL.length > 0
+  ? [ENV_MODEL]
+  : ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.0-flash-lite']
+
+// Cached across warm invocations so we don't re-probe unavailable models.
+let resolvedModel: string | null = null
+
 const MAX_IMAGES = 6
+const API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -65,12 +86,7 @@ people or selfies, food or drink, vehicles, animals or pets, electronics or
 other products, clothing, documents or ID cards, screenshots of apps or chats,
 memes, or images that are mostly text.
 
-ALWAYS REJECT sexual, nude, sexually-suggestive, violent or gory content.
-
-Respond with: approved (boolean), category (a short label for the dominant
-subject, e.g. "bedroom","house exterior","land","vehicle","food","person",
-"document","screenshot","sexual","violent"), confidence (integer 0-100), and
-reason (one short user-facing sentence).`
+ALWAYS REJECT sexual, nude, sexually-suggestive, violent or gory content.`
 
 const AD_PROMPT = `You are a content-SAFETY moderator for advertising images on a
 real-estate app. Advertisements from ANY legitimate business category are
@@ -82,10 +98,165 @@ sexually-suggestive content, OR violent, gory, graphic-injury or weapon-threat
 content.
 
 APPROVE (approved=true) everything else, including ordinary product photos,
-company logos, text or graphic banners, and people in non-sexual contexts.
+company logos, text or graphic banners, and people in non-sexual contexts.`
 
-Respond with: approved (boolean), category (e.g. "safe","sexual","violent"),
-confidence (integer 0-100), reason (one short user-facing sentence).`
+const OUTPUT_RULES = `
+
+Respond with ONLY a single JSON object — no markdown, no code fences, no extra
+text — with EXACTLY these keys:
+{"approved": boolean, "category": string, "confidence": integer 0-100, "reason": string}
+"category" is a short label for the dominant subject (e.g. "bedroom","house
+exterior","land","vehicle","food","person","document","screenshot","sexual",
+"violent","safe"). "reason" is one short user-facing sentence.`
+
+// Standard v1beta safety settings — ask Gemini to RETURN a verdict on unsafe
+// images instead of refusing, so we can classify them ourselves.
+const SAFETY_SETTINGS = [
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+]
+
+// deno-lint-ignore no-explicit-any
+function buildRequest(prompt: string, images: Array<{ mimeType: string; data: string }>): any {
+  // deno-lint-ignore no-explicit-any
+  const parts: any[] = [{ text: prompt }]
+  for (const im of images) {
+    parts.push({ inlineData: { mimeType: im.mimeType, data: im.data } })
+  }
+  return {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { responseMimeType: 'application/json' },
+    safetySettings: SAFETY_SETTINGS,
+  }
+}
+
+// Try each candidate model until one succeeds (or a non-model error occurs).
+// deno-lint-ignore no-explicit-any
+async function generateWithFallback(
+  apiKey: string,
+  // deno-lint-ignore no-explicit-any
+  body: any,
+): Promise<{ model: string; payload: Record<string, unknown> } | { error: string }> {
+  const order = resolvedModel
+    ? [resolvedModel, ...MODEL_CANDIDATES.filter((m) => m !== resolvedModel)]
+    : [...MODEL_CANDIDATES]
+
+  let lastDetail = 'no models tried'
+  for (const model of order) {
+    let resp: Response
+    try {
+      resp = await fetch(`${API_BASE}/models/${model}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    } catch (e) {
+      lastDetail = `fetch failed for ${model}: ${e}`
+      continue
+    }
+
+    if (resp.ok) {
+      resolvedModel = model
+      try {
+        return { model, payload: await resp.json() }
+      } catch (e) {
+        return { error: `bad response JSON from ${model}: ${e}` }
+      }
+    }
+
+    const text = await resp.text().catch(() => '')
+    lastDetail = `HTTP ${resp.status} for ${model}: ${text.slice(0, 220)}`
+    // Only switching models helps when the MODEL is the problem.
+    const modelProblem =
+      resp.status === 404 ||
+      /not found|not_found|is not supported|does not exist|unsupported/i.test(text)
+    if (modelProblem) continue
+    // 400/403/429/5xx won't be fixed by another model — surface it.
+    return { error: lastDetail }
+  }
+  return { error: `no usable model — ${lastDetail}` }
+}
+
+// Pull the answer text out of the response (concatenate all text parts so a
+// thinking/answer split in Gemini 3 doesn't drop the JSON).
+function extractText(payload: Record<string, unknown>): string {
+  // deno-lint-ignore no-explicit-any
+  const cand = (payload as any)?.candidates?.[0]
+  // deno-lint-ignore no-explicit-any
+  const parts = cand?.content?.parts
+  if (!Array.isArray(parts)) return ''
+  // deno-lint-ignore no-explicit-any
+  return parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('').trim()
+}
+
+function parseVerdict(text: string):
+  | { approved: boolean; category: string; confidence: number; reason: string }
+  | null {
+  let t = text.trim()
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) t = fence[1].trim()
+  const start = t.indexOf('{')
+  const end = t.lastIndexOf('}')
+  if (start >= 0 && end > start) t = t.slice(start, end + 1)
+  try {
+    // deno-lint-ignore no-explicit-any
+    const v: any = JSON.parse(t)
+    const approved = v.approved === true
+    let confidence = Number(v.confidence)
+    if (!Number.isFinite(confidence)) confidence = approved ? 80 : 70
+    confidence = Math.max(0, Math.min(100, Math.round(confidence)))
+    return {
+      approved,
+      category: typeof v.category === 'string' ? v.category : '',
+      confidence,
+      reason: typeof v.reason === 'string' ? v.reason : '',
+    }
+  } catch (_) {
+    return null
+  }
+}
+
+// Health check: list the generateContent-capable models the key can use.
+async function healthCheck(apiKey: string): Promise<Response> {
+  let resp: Response
+  try {
+    resp = await fetch(`${API_BASE}/models?key=${apiKey}&pageSize=1000`)
+  } catch (e) {
+    return json({ ok: false, stage: 'gemini_error', detail: `fetch failed: ${e}` })
+  }
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    return json({
+      ok: false,
+      stage: 'gemini_error',
+      detail: `ListModels HTTP ${resp.status}: ${text.slice(0, 220)}`,
+    })
+  }
+  // deno-lint-ignore no-explicit-any
+  const data: any = await resp.json().catch(() => ({}))
+  const available: string[] = Array.isArray(data?.models)
+    ? data.models
+        // deno-lint-ignore no-explicit-any
+        .filter((m: any) => (m?.supportedGenerationMethods ?? []).includes('generateContent'))
+        // deno-lint-ignore no-explicit-any
+        .map((m: any) => String(m?.name ?? '').replace(/^models\//, ''))
+    : []
+  const picked = MODEL_CANDIDATES.find((m) => available.includes(m)) ??
+    available.find((m) => m.includes('flash-lite')) ??
+    available.find((m) => m.includes('flash')) ??
+    available[0] ??
+    null
+  return json({
+    ok: picked != null,
+    stage: picked != null ? 'all_good' : 'no_model',
+    preferredChain: MODEL_CANDIDATES,
+    picked,
+    availableCount: available.length,
+    available,
+  })
+}
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -94,16 +265,16 @@ serve(async (req: Request) => {
 
   const apiKey = Deno.env.get('GEMINI_API_KEY')
 
-  // Health check / readiness probe.
   if (req.method === 'GET') {
-    return json({
-      ok: !!apiKey,
-      stage: apiKey ? 'all_good' : 'not_configured',
-      model: MODEL,
-      detail: apiKey
-        ? 'Gemini moderation is ready.'
-        : 'GEMINI_API_KEY secret is not set on this function.',
-    })
+    if (!apiKey) {
+      return json({
+        ok: false,
+        stage: 'not_configured',
+        detail: 'GEMINI_API_KEY secret is not set on this function.',
+        preferredChain: MODEL_CANDIDATES,
+      })
+    }
+    return await healthCheck(apiKey)
   }
 
   if (!apiKey) {
@@ -136,104 +307,40 @@ serve(async (req: Request) => {
     return json({ ok: false, stage: 'bad_request', detail: 'No images supplied.' })
   }
 
-  const prompt = contentType === 'ad' ? AD_PROMPT : PROPERTY_PROMPT
+  const prompt = (contentType === 'ad' ? AD_PROMPT : PROPERTY_PROMPT) + OUTPUT_RULES
+  const result = await generateWithFallback(apiKey, buildRequest(prompt, images))
 
-  const parts: unknown[] = [{ text: prompt }]
-  for (const im of images) {
-    parts.push({ inline_data: { mime_type: im.mimeType, data: im.data } })
+  if ('error' in result) {
+    return json({ ok: false, stage: 'gemini_error', detail: result.error })
   }
 
-  const geminiRequest = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: {
-      temperature: 0,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
-        properties: {
-          approved: { type: 'BOOLEAN' },
-          category: { type: 'STRING' },
-          confidence: { type: 'INTEGER' },
-          reason: { type: 'STRING' },
-        },
-        required: ['approved', 'category', 'confidence', 'reason'],
-      },
-    },
-    // BLOCK_NONE so Gemini RETURNS a verdict on unsafe images instead of
-    // refusing — we want it to classify the content, not silently drop it.
-    safetySettings: [
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-    ],
-  }
-
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`
-
-  let resp: Response
-  try {
-    resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(geminiRequest),
-    })
-  } catch (e) {
-    return json({ ok: false, stage: 'gemini_error', detail: `fetch failed: ${e}` })
-  }
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '')
-    return json({
-      ok: false,
-      stage: 'gemini_error',
-      detail: `Gemini HTTP ${resp.status}: ${text.slice(0, 300)}`,
-    })
-  }
-
-  let payload: Record<string, unknown>
-  try {
-    payload = await resp.json()
-  } catch (e) {
-    return json({ ok: false, stage: 'gemini_error', detail: `bad response JSON: ${e}` })
-  }
-
-  // deno-lint-ignore no-explicit-any
-  const candidates = (payload as any)?.candidates
-  const textOut: string | undefined = candidates?.[0]?.content?.parts?.[0]?.text
+  const textOut = extractText(result.payload)
   if (!textOut) {
-    const finish = candidates?.[0]?.finishReason ?? 'unknown'
+    // deno-lint-ignore no-explicit-any
+    const finish = (result.payload as any)?.candidates?.[0]?.finishReason ?? 'unknown'
     return json({
       ok: false,
       stage: 'gemini_error',
-      detail: `Gemini returned no content (finishReason=${finish}).`,
+      detail: `Gemini returned no text (model=${result.model}, finishReason=${finish}).`,
     })
   }
 
-  // deno-lint-ignore no-explicit-any
-  let verdict: any
-  try {
-    verdict = JSON.parse(textOut)
-  } catch (_) {
+  const verdict = parseVerdict(textOut)
+  if (!verdict) {
     return json({
       ok: false,
       stage: 'gemini_error',
-      detail: 'Model did not return valid JSON.',
+      detail: `Could not parse JSON verdict (model=${result.model}): ${textOut.slice(0, 180)}`,
     })
   }
-
-  const approved = verdict?.approved === true
-  let confidence = Number(verdict?.confidence)
-  if (!Number.isFinite(confidence)) confidence = approved ? 80 : 70
-  confidence = Math.max(0, Math.min(100, Math.round(confidence)))
 
   return json({
     ok: true,
     stage: 'ai',
-    approved,
-    category: typeof verdict?.category === 'string' ? verdict.category : '',
-    confidence,
-    reason: typeof verdict?.reason === 'string' ? verdict.reason : '',
+    model: result.model,
+    approved: verdict.approved,
+    category: verdict.category,
+    confidence: verdict.confidence,
+    reason: verdict.reason,
   })
 })
