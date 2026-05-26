@@ -77,6 +77,15 @@ Complete this in Play Console → App content → Data safety.
 | Required or optional? | Required |
 | Purpose | Analytics, app functionality |
 
+### 9. Device or other IDs
+| Field | Value |
+|-------|-------|
+| Collected? | Yes (Firebase Cloud Messaging registration token) |
+| Shared? | Yes (with Google/Firebase, solely to deliver push notifications) |
+| Required or optional? | Optional (only when the user grants notification permission) |
+| Purpose | App functionality — push notifications (new matches, messages, alerts) |
+| Is it processed ephemerally? | No (stored in `device_push_tokens` to address the device) |
+
 ---
 
 ## Security Practices
@@ -90,7 +99,8 @@ Complete this in Play Console → App content → Data safety.
 
 ## Notes
 
-- The app uses **Supabase** as its backend. No data is sent to Firebase (google-services.json is only for Google Sign-In OAuth).
+- The app uses **Supabase** as its backend for all app data (accounts, listings, messages, payments).
+- **Firebase Cloud Messaging (FCM)** is used ONLY to deliver push notifications: the FCM device token is the sole data that reaches Google/Firebase. No listings, messages, location, or personal data are sent to Firebase.
 - Location data is **foreground-only** — no background location tracking.
 - Payment processing is handled **server-side** (Node.js backend + Selcom) — card numbers never touch the Flutter app.
 - All user-uploaded content (photos, videos) is stored in **Supabase Storage**.

@@ -82,8 +82,8 @@ Support: support@patamjengo.com
 
 | Asset | Size | Status |
 |-------|------|--------|
-| High-res icon | 512×512 PNG | ✅ assets/store/icon_512.png |
-| Feature graphic | 1024×500 PNG/JPG | ❌ MISSING — must create |
+| High-res icon | 512×512 PNG | ✅ playstore_assets/icon_512.png |
+| Feature graphic | 1024×500 PNG/JPG | ✅ playstore_assets/feature_graphic_1024x500.png |
 | Phone screenshots | 2–8, min 320px wide | ❌ MISSING — take from device/emulator |
 
 ### Feature Graphic Guidance (1024×500)
