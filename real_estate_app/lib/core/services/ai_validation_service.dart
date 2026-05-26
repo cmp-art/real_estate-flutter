@@ -327,7 +327,7 @@ class AiValidationService {
       );
     }
 
-    final media = [...(images ?? [])];
+    final media = images ?? const <XFile>[];
     // No photo ⇒ nothing to check (text is never judged) ⇒ allow.
     if (media.isEmpty) return _pass('No photos to review.');
 
