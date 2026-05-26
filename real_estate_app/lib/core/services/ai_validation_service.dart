@@ -3,41 +3,34 @@
 // AI Validation Service — Production Ready
 // =========================================
 //
-// 3-LAYER VALIDATION:
-//   LAYER 1 — Pre-flight (Dart, no network): size & screenshot detection
-//   LAYER 2 — MobileNet V3 TFLite (on-device, no API cost): image classification
-//   LAYER 3 — Rule-based (text-only submissions): keyword scoring
-//   LAYER 4 — Manual queue (last resort when rules crash, text-only only)
+// VALIDATION PIPELINE (images):
+//   LAYER 1 — Pre-flight (Dart, no network): tiny-file / poison detection
+//   LAYER 2 — Gemini Flash-Lite (server-side Edge Function): image moderation
+//             • property → photo must depict real estate (room/house/land/business)
+//             • ad       → image must be free of sexual / violent content
+//   LAYER 3 — Rule-based text scoring: graceful fallback when Gemini is
+//             unreachable / undeployed, so a submission never hard-fails
+//   LAYER 4 — Manual queue (last resort for text-only submissions)
+//
+// Gemini runs on EVERY platform (Android, iOS, Web, PWA) because it is a plain
+// HTTPS call to the `validate_content` Edge Function — there is no on-device
+// model. The Gemini API key lives ONLY as the GEMINI_API_KEY Edge Function
+// secret and never reaches the client.
 //
 // KEY PRODUCTION FEATURES:
-//   - On-device image classification — no API key, no cost per image
 //   - Per-user rate limiting: max 5 attempts per 60 seconds
-//   - Circuit-breaker health monitor (TFLite model state)
-//   - ALL photos checked by pre-flight (not just first 3)
-//   - Up to 4 photos classified by MobileNet V3
+//   - Circuit-breaker health monitor (Gemini Edge Function state)
+//   - ALL photos checked by pre-flight (not just the first few)
+//   - Up to 4 representative photos sent to Gemini per submission
 //   - Lost-log counter exposed for admin monitoring
-//   - HEIC, WebP, screenshot detection in pre-flight
-//   - Images path never falls back to text-only rules
 //   - _log() wrapper: silent in release builds, visible in debug
-//
-// DEPENDENCIES (pubspec.yaml):
-//   flutter_image_compress: ^2.1.0
-//   tflite_flutter: ^0.10.4
-//   image: ^4.1.7
-//   supabase_flutter: ^2.0.0
-//
-// MODEL ASSETS (place in assets/ml/):
-//   mobilenet_v3.tflite       — from TF Hub (MobileNet V3 Small/Large int8)
-//   imagenet_labels.txt       — from storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt
 
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
-import '../constants/app_constants.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
-// On-device image classifier (MobileNet V3 TFLite).
-import 'tflite_classifier.dart';
+// Server-side Gemini image moderation (replaces the on-device TFLite model).
+import 'gemini_moderation_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOGGING — silent in release builds
@@ -101,7 +94,7 @@ class ValidationResult {
 //
 // States:
 //   CLOSED   → normal operation; failures counted.
-//   OPEN     → breaker tripped; all image calls skip TFLite until cooldown elapses.
+//   OPEN     → breaker tripped; all image calls skip Gemini until cooldown elapses.
 //   HALF-OPEN→ cooldown elapsed; one probe call is allowed.
 //              If it succeeds → CLOSED; if it fails → OPEN (with doubled cooldown).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,7 +153,7 @@ class _AiHealthMonitor {
     _openedAt   = null;
     _cooldown   = const Duration(seconds: 30);
     _windowStart = null;
-    _log('Circuit breaker manually reset — TFLite classifier will be retried');
+    _log('Circuit breaker manually reset — Gemini will be retried');
   }
 
   bool get isHealthy {
@@ -173,7 +166,7 @@ class _AiHealthMonitor {
         if (_openedAt != null &&
             DateTime.now().difference(_openedAt!) >= _cooldown) {
           _state = _BreakerState.halfOpen;
-          _log('Circuit breaker half-open — sending one probe via TFLite');
+          _log('Circuit breaker half-open — sending one probe via Gemini');
           return true; // allow the probe call through
         }
         return false;  // still cooling down
@@ -216,7 +209,7 @@ class _AiHealthMonitor {
     _total    = 0;
     _cooldown = const Duration(seconds: 30); // reset backoff on clean recovery
     _openedAt = null;
-    _log('Circuit breaker CLOSED — TFLite classifier is healthy again');
+    _log('Circuit breaker CLOSED — Gemini is healthy again');
   }
 
   void _resetWindowIfExpired() {
@@ -268,8 +261,9 @@ class AiValidationService {
   final _health      = _AiHealthMonitor();
   final _rateLimiter = _RateLimiter();
 
-  // On-device MobileNet V3 TFLite classifier (replaces Claude Haiku for images).
-  final _classifier = TFLiteClassifier();
+  // Server-side Gemini image moderator (replaces the on-device TFLite model).
+  // Works on every platform; a null verdict ⇒ fall back to rule-based text check.
+  late final GeminiModerationService _gemini = GeminiModerationService(_supabase);
 
   static const Duration _timeout   = Duration(seconds: 60);
   static const int      _maxImages = 4; // up to 4 images classified per submission
@@ -280,9 +274,9 @@ class AiValidationService {
 
   AiValidationService(this._supabase);
 
-  /// Initialize the TFLite classifier. Call once at app startup (e.g. in main.dart
-  /// after WidgetsFlutterBinding.ensureInitialized()). Safe to call multiple times.
-  Future<void> initialize() => _classifier.initialize();
+  /// Kept for API compatibility. Gemini moderation is server-side, so there is
+  /// no on-device model to load — this is a no-op.
+  Future<void> initialize() async {}
 
   // ─────────────────────────────────────────────────────────────────────────
   // KEYWORDS
@@ -320,20 +314,8 @@ class AiValidationService {
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
-  // CLASSIFIER READINESS
+  // HEALTH
   // ─────────────────────────────────────────────────────────────────────────
-
-  /// Lazily initializes the TFLite classifier if not already done.
-  Future<void> _ensureClassifierReady() async {
-    if (!_classifier.isInitialized) {
-      await _classifier.initialize();
-      if (_classifier.isInitialized) {
-        _log('✅ TFLite classifier ready (MobileNet V3)');
-      } else {
-        _log('⚠️  TFLite classifier not ready: ${_classifier.initError}');
-      }
-    }
-  }
 
   // Expose health stats for the admin monitoring widget.
   Map<String, dynamic> get healthStats => _health.stats;
@@ -341,40 +323,24 @@ class AiValidationService {
   // ─────────────────────────────────────────────────────────────────────────
   // HEALTH CHECK
   //
-  // Returns a map with:
-  //   ok      → bool   — true if TFLite model is loaded and ready
-  //   stage   → String — 'all_good' | 'model_error' | 'web_unsupported'
-  //   model   → String — model identifier
-  //   detail  → String — human-readable message
+  // Gemini moderation is server-side, so the only client-visible state is the
+  // circuit breaker (which trips after repeated Edge Function failures, then
+  // backs off). Returns a map with:
+  //   ok     → bool   — breaker closed (Gemini calls are being attempted)
+  //   stage  → String — 'all_good' | 'circuit_open'
+  //   model  → String — model identifier
+  //   detail → String — human-readable message
   // ─────────────────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> checkAiHealth() async {
-    await _ensureClassifierReady();
-
-    if (kIsWeb) {
-      return {
-        'ok':     false,
-        'stage':  'web_unsupported',
-        'model':  'mobilenet_v3_tflite',
-        'detail': 'TFLite is not supported on web. Rule-based validation is active.',
-      };
-    }
-
-    if (_classifier.isInitialized) {
-      return {
-        'ok':     true,
-        'stage':  'all_good',
-        'model':  'mobilenet_v3_tflite',
-        'detail': 'MobileNet V3 TFLite model is loaded and ready for on-device classification.',
-      };
-    }
-
+    final healthy = _health.isHealthy;
     return {
-      'ok':     false,
-      'stage':  'model_error',
-      'model':  'mobilenet_v3_tflite',
-      'detail': _classifier.initError ??
-                'TFLite model not initialized. '
-                'Ensure mobilenet_v3.tflite is in assets/ml/ and listed in pubspec.yaml.',
+      'ok':     healthy,
+      'stage':  healthy ? 'all_good' : 'circuit_open',
+      'model':  'gemini-flash-lite',
+      'detail': healthy
+          ? 'Cloud image moderation (Gemini) is active on all platforms.'
+          : 'Image moderation is backing off after repeated errors; '
+            'rule-based text validation is active in the meantime.',
     };
   }
 
@@ -411,26 +377,16 @@ class AiValidationService {
       'bedrooms': bedrooms, 'bathrooms': bathrooms, 'area': area,
     };
 
-    await _ensureClassifierReady();
-
     List<XFile> allMedia = [...(images ?? [])];
 
     final hasImages = allMedia.isNotEmpty;
 
-    _log('validateProperty — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
-         'photos=${images?.length ?? 0}, total_media=${allMedia.length}, healthy=${_health.isHealthy}');
+    _log('validateProperty — photos=${images?.length ?? 0}, '
+         'total_media=${allMedia.length}, gemini_healthy=${_health.isHealthy}');
 
-    // ── IMAGE/VIDEO PATH ────────────────────────────────────────────────────
+    // ── IMAGE PATH ────────────────────────────────────────────────────────────
     if (hasImages) {
-      // TFLite unavailable → rule-based fallback on text fields (never hard-block)
-      if (!_classifier.isInitialized || !_health.isHealthy) {
-        _log('TFLite unavailable for property photos — using rule-based fallback on text fields');
-        final fallback = _ruleBasedPropertyCheck(data);
-        await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
-        return fallback;
-      }
-
-      // Pre-flight ALL media (photos + video thumbnails) before TFLite classification.
+      // Pre-flight ALL photos (cheap, local) before spending a Gemini call.
       for (int i = 0; i < allMedia.length; i++) {
         final reason = await _preflightImageCheck(allMedia[i], index: i + 1);
         if (reason != null) {
@@ -449,41 +405,28 @@ class AiValidationService {
         }
       }
 
-      // All media passed pre-flight — classify with TFLite.
-      try {
-        final result = await _validateWithImages(
-          data: data, images: allMedia,
-        ).timeout(_timeout);
-        _health.recordSuccess();
-        await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-        return result;
-      } catch (e) {
-        // Server-side rate limit hit — hard-reject with countdown.
-        if (e.toString().contains('rate_limited:')) {
-          final secs = int.tryParse(e.toString().split(':').last) ?? 60;
-          return _hardReject(
-            type: 'property', submittedBy: submittedBy,
-            reason: 'Too many submissions. Please wait $secs seconds before trying again.',
-            suggestions: ['Wait $secs seconds, then resubmit.'],
-          );
+      // Gemini image moderation (all platforms). If the breaker is open or the
+      // call fails/undeployed, fall back to the rule-based text check so the
+      // submission still goes through instead of hard-failing.
+      if (_health.isHealthy) {
+        try {
+          final result = await _validateWithImages(
+            data: data, images: allMedia,
+          ).timeout(_timeout);
+          _health.recordSuccess();
+          await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
+          return result;
+        } catch (e) {
+          _health.recordFailure();
+          _log('Property Gemini validation unavailable: $e — using rule-based fallback');
         }
-        _health.recordFailure();
-        _log('Property TFLite image validation failed: $e');
-        // IMPORTANT: DO NOT fall back to rule-based text check when images were
-        // provided.  The rule-based check only looks at keywords in the title/
-        // description — it would approve a car photo captioned "house for rent".
-        // Instead: hard-reject so the user retries (transient error) or the admin
-        // can manually approve (persistent error).
-        return _hardReject(
-          type: 'property', submittedBy: submittedBy,
-          reason: 'Image validation encountered an error. Please try again.',
-          suggestions: [
-            'Wait a few seconds and tap Submit again.',
-            'Make sure each photo is under ${AppConstants.maxImageSize ~/ (1024 * 1024)} MB.',
-            'Use JPEG or PNG format for best results.',
-          ],
-        );
+      } else {
+        _log('Gemini circuit open — using rule-based fallback for property photos');
       }
+
+      final fallback = _ruleBasedPropertyCheck(data);
+      await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
+      return fallback;
     }
 
     // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
@@ -522,27 +465,17 @@ class AiValidationService {
       'campaign_objective': campaignObjective, 'landing_url': landingUrl,
     };
 
-    await _ensureClassifierReady();
-
     List<XFile> allAdMedia = [];
     if (image != null) allAdMedia.add(image);
 
     final hasMedia = allAdMedia.isNotEmpty;
 
-    _log('validateAd — classifier=${_classifier.isInitialized ? "ready" : "not ready"}, '
-         'image=${image != null}, total_media=${allAdMedia.length}, healthy=${_health.isHealthy}');
+    _log('validateAd — image=${image != null}, '
+         'total_media=${allAdMedia.length}, gemini_healthy=${_health.isHealthy}');
 
     // ── MEDIA PATH ──────────────────────────────────────────────────────────
     if (hasMedia) {
-      // TFLite unavailable → rule-based fallback on text fields
-      if (!_classifier.isInitialized || !_health.isHealthy) {
-        _log('TFLite unavailable for media ad — using rule-based fallback on text fields');
-        final fallback = _ruleBasedAdCheck(data);
-        await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
-        return fallback;
-      }
-
-      // Pre-flight every media file before TFLite classification.
+      // Pre-flight every media file (cheap, local) before spending a Gemini call.
       for (int i = 0; i < allAdMedia.length; i++) {
         final preflightReason = await _preflightImageCheck(allAdMedia[i], index: i + 1);
         if (preflightReason != null) {
@@ -557,50 +490,33 @@ class AiValidationService {
             ],
           );
           await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-            return result;
+          return result;
         }
       }
 
-      // All media passed pre-flight — classify with TFLite.
-      try {
-        final result = await _validateWithImages(
-          data: data,
-          images: allAdMedia,       // image + video thumbnail together
-          isAd: true,
-        ).timeout(_timeout);
-        _health.recordSuccess();
-        await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-        return result;
-      } catch (e) {
-        if (e.toString().contains('rate_limited:')) {
-          final secs = int.tryParse(e.toString().split(':').last) ?? 60;
-          return _hardReject(
-            type: 'ad', submittedBy: submittedBy,
-            reason: 'Too many submissions. Please wait $secs seconds before trying again.',
-            suggestions: ['Wait $secs seconds, then resubmit.'],
-          );
-        }
-        _health.recordFailure();
-        _log('Ad TFLite media validation failed: $e — falling back to rule-based on text fields');
-        // FALLBACK: rule-based check on text fields so the user is not hard-blocked
+      // Gemini safety moderation (all platforms). Fall back to the rule-based
+      // text check when the breaker is open or the call fails/undeployed.
+      if (_health.isHealthy) {
         try {
-          final fallback = _ruleBasedAdCheck(data);
-          await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
-          _log('Rule-based fallback result: ${fallback.status}');
-          return fallback;
-        } catch (re) {
-          _log('Rule-based fallback also crashed: $re — hard rejecting');
+          final result = await _validateWithImages(
+            data: data,
+            images: allAdMedia,
+            isAd: true,
+          ).timeout(_timeout);
+          _health.recordSuccess();
+          await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
+          return result;
+        } catch (e) {
+          _health.recordFailure();
+          _log('Ad Gemini validation unavailable: $e — using rule-based fallback');
         }
-        return _hardReject(
-          type: 'ad', submittedBy: submittedBy,
-          reason: 'Validation is temporarily unavailable. Please check your content meets real estate guidelines and try again.',
-          suggestions: [
-            'Ensure your headline and description are clearly about real estate.',
-            'Use a clear JPEG or PNG image under 10 MB.',
-            'Try again in a few seconds.',
-          ],
-        );
+      } else {
+        _log('Gemini circuit open — using rule-based fallback for ad media');
       }
+
+      final fallback = _ruleBasedAdCheck(data);
+      await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
+      return fallback;
     }
 
     // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
@@ -613,90 +529,66 @@ class AiValidationService {
   // CORE ENGINES
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Classify [images] with MobileNet V3 TFLite and return a [ValidationResult].
+  /// Moderate [images] with Gemini (server-side) and return a [ValidationResult].
   ///
-  /// [isAd] = true uses the looser ad-moderation rules (only block clearly prohibited
-  /// content); false uses the stricter property rules.
+  /// [isAd] = true uses the ad safety prompt (block only sexual/violent content);
+  /// false uses the stricter property prompt (photo must depict real estate).
+  ///
+  /// Throws when Gemini is unreachable / undeployed / errored, so the caller can
+  /// fall back to the rule-based text check.
   Future<ValidationResult> _validateWithImages({
     required Map<String, dynamic> data,
     required List<XFile>          images,
     bool                          isAd = false,
   }) async {
     final picked = _pickRepresentative(images, _maxImages);
-    _log('Classifying ${picked.length} image(s) with MobileNet V3 TFLite');
+    _log('Sending ${picked.length} image(s) to Gemini (isAd=$isAd)');
 
-    int    rejected         = 0;
-    int    realEstate       = 0;
-    int    neutral          = 0;
-    String rejectReason     = '';
-    int    rejectConfidence = 0;
-
-    for (int i = 0; i < picked.length; i++) {
-      final cr = await _classifier.classify(picked[i]);
-      if (cr == null) {
-        _log('Image ${i + 1}: classifier returned null — skipping');
-        continue;
-      }
-      _log('Image ${i + 1}: ${cr.category.name} (${cr.confidence}%) — ${cr.reason}');
-
-      if (cr.isRejected) {
-        // Ads have a higher rejection threshold — only block explicit prohibited content.
-        final threshold = isAd ? 0.55 : 0.30;
-        final topScore  = cr.topPredictions.isNotEmpty
-            ? cr.topPredictions.first.score
-            : 0.0;
-        if (topScore > threshold) {
-          rejected++;
-          if (cr.confidence > rejectConfidence) {
-            rejectConfidence = cr.confidence;
-            rejectReason     = cr.reason;
-          }
-        } else {
-          neutral++;
-        }
-      } else if (cr.isRealEstate) {
-        realEstate++;
-      } else {
-        neutral++;
-      }
+    final verdict = await _gemini.moderate(images: picked, isAd: isAd);
+    if (verdict == null) {
+      // Null ⇒ function undeployed / network / decode failure. Signal the
+      // caller so it falls back to the rule-based text check.
+      throw StateError('gemini_unavailable');
     }
 
-    _log('Classification summary: rejected=$rejected realEstate=$realEstate neutral=$neutral');
+    _log('Gemini verdict: approved=${verdict.approved} (${verdict.confidence}%) '
+         'category=${verdict.category} — ${verdict.reason}');
 
-    if (rejected > 0) {
+    if (!verdict.approved) {
       return ValidationResult(
-        status:      ValidationStatus.rejected,
-        method:      ValidationMethod.ai,
-        approved:    false,
-        confidence:  rejectConfidence,
-        reason:      rejectReason.isNotEmpty
-            ? rejectReason
+        status:           ValidationStatus.rejected,
+        method:           ValidationMethod.ai,
+        approved:         false,
+        confidence:       verdict.confidence,
+        detectedCategory: verdict.category.isNotEmpty ? verdict.category : null,
+        reason:           verdict.reason.isNotEmpty
+            ? verdict.reason
             : isAd
-                ? 'Ad image contains prohibited content.'
+                ? 'Ad image contains prohibited (sexual or violent) content.'
                 : 'One or more photos do not appear to show a real estate property.',
         suggestions: isAd
-            ? ['Use a professional business image — product, logo, property, or service photo.']
+            ? ['Use a safe business image — no sexual or violent content.']
             : [
                 'Upload photos of the property: bedroom, living room, exterior, or land.',
-                'Do not upload vehicles, food, animals, or unrelated items.',
+                'Do not upload people, vehicles, food, documents, or screenshots.',
               ],
       );
     }
 
-    final confidence = realEstate > 0 ? 85 : 70;
     return ValidationResult(
-      status:     ValidationStatus.approved,
-      method:     ValidationMethod.ai,
-      approved:   true,
-      confidence: confidence,
-      reason:     isAd
-          ? 'Ad media passed content review.'
+      status:           ValidationStatus.approved,
+      method:           ValidationMethod.ai,
+      approved:         true,
+      confidence:       verdict.confidence > 0 ? verdict.confidence : 85,
+      detectedCategory: verdict.category.isNotEmpty ? verdict.category : null,
+      reason:           isAd
+          ? 'Ad image passed content-safety review.'
           : 'Photos appear to show a real estate property.',
     );
   }
 
   /// Text-only validation using rule-based checks (Layer 1) and manual queue (Layer 2).
-  /// Claude is no longer used for text — on-device TFLite handles images.
+  /// Images are moderated by Gemini; this handles text-only submissions.
   Future<ValidationResult> _validateTextOnly({
     required String               type,
     required Map<String, dynamic> data,
@@ -757,13 +649,13 @@ class AiValidationService {
     return result;
   }
 
-  // Pre-flight: catches bad images before TFLite classification.
+  // Pre-flight: catches bad images before the Gemini call.
   // Checks file size, and screenshot dimensions for:
   //   - PNG/JPEG portrait phone screenshots
   //   - PNG/JPEG portrait tablet screenshots
   //   - PNG/JPEG landscape screenshots
-  //   - HEIC/HEIF: passed through to TFLite classifier (no dimension data available in header)
-  //   - WebP: passed through to TFLite classifier
+  //   - HEIC/HEIF: passed through to Gemini (no dimension data available in header)
+  //   - WebP: passed through to Gemini
   // Returns rejection reason string, or null if the image looks OK.
   Future<String?> _preflightImageCheck(XFile file, {int index = 1}) async {
     try {
@@ -803,15 +695,15 @@ class AiValidationService {
           bytes[2] == 0x46 && bytes[3] == 0x46 &&
           bytes[8] == 0x57 && bytes[9] == 0x45 &&
           bytes[10] == 0x42 && bytes[11] == 0x50) {
-        // WebP — no dimension check, pass to TFLite classifier.
-        _log('Photo $index is WebP — sending to TFLite classifier');
+        // WebP — no dimension check, pass to Gemini.
+        _log('Photo $index is WebP — sending to Gemini');
         return null;
 
       } else if (bytes.length > 8 &&
           bytes[4] == 0x66 && bytes[5] == 0x74 &&
           bytes[6] == 0x79 && bytes[7] == 0x70) {
-        // HEIC/HEIF (ftyp box) — no dimension check, pass to TFLite classifier.
-        _log('Photo $index is HEIC/HEIF — sending to TFLite classifier');
+        // HEIC/HEIF (ftyp box) — no dimension check, pass to Gemini.
+        _log('Photo $index is HEIC/HEIF — sending to Gemini');
         return null;
       }
 
@@ -821,15 +713,15 @@ class AiValidationService {
       // Gallery photos and camera photos on modern phones are often
       // processed to standard dimensions (1080px, 1284px etc.) that
       // are indistinguishable from screenshots by size alone.
-      // TFLite classifier handles visual content moderation — it can reliably
+      // Gemini handles visual content moderation — it can reliably
       // tell a property photo from a screenshot by looking at it.
       if (imgWidth > 0 && imgHeight > 0) {
-        _log('Photo $index: ${imgWidth}x${imgHeight}px — passing to TFLite classifier');
+        _log('Photo $index: ${imgWidth}x${imgHeight}px — passing to Gemini');
       }
 
       return null; // Passed all checks.
     } catch (e) {
-      _log('Pre-flight error on photo $index: $e — letting TFLite classifier decide');
+      _log('Pre-flight error on photo $index: $e — letting Gemini decide');
       return null;
     }
   }
@@ -1183,8 +1075,8 @@ class AiValidationService {
         'last_hour':      lastHourCount,
         'lost_logs':      _lostLogCount,
         'health':         _health.stats,
-        'model_ready':    _classifier.isInitialized,
-        'model':          'mobilenet_v3_tflite',
+        'model_ready':    _health.isHealthy,
+        'model':          'gemini-flash-lite',
       };
     } catch (e) {
       _log('getFullStats error: $e');

@@ -1,6 +1,7 @@
 // features/properties/presentation/screens/property_create_screen.dart
 // Simplified property creation/editing form.
-// Photos only (no video), no NIDA verification, no AI validation.
+// Photos only (no video). Gemini AI moderates photos before the listing is
+// saved (server-side, with a rule-based fallback when it is unreachable).
 // Works on Android, iOS, Web, and PWA.
 
 import 'dart:io';
@@ -17,6 +18,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/middleware/feature_gate_middleware.dart';
+import '../../../../core/services/ai_validation_service.dart';
 import '../../../../core/services/error_logging_service.dart';
 import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
@@ -28,6 +30,7 @@ import '../../../settings/presentation/providers/app_providers.dart'
     hide accessControlProvider;
 import '../../../subscriptions/presentation/screens/subscription_screen.dart';
 import '../../domain/entities/property_entity.dart';
+import '../providers/ai_providers.dart';
 import '../providers/property_providers.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -475,6 +478,60 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
+  // Shown when Gemini (or the rule-based fallback) rejects the photos.
+  Future<void> _showModerationRejected(ValidationResult v) async {
+    final s = _s;
+    final reason = v.reason.isNotEmpty
+        ? v.reason
+        : s.pick(
+            'These photos do not appear to show a real estate property.',
+            'Picha hizi hazionekani kuwa za mali isiyohamishika.',
+          );
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.report_gmailerrorred, color: Colors.red),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(s.pick('Photos not accepted', 'Picha hazikukubaliwa')),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(reason),
+            if (v.suggestions.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...v.suggestions.map(
+                (sug) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('•  '),
+                      Expanded(child: Text(sug)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(s.pick('OK', 'Sawa')),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submit() async {
     final s = _s;
     final user = ref.read(authNotifierProvider).value;
@@ -495,6 +552,34 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     }
 
     setState(() => _isLoading = true);
+
+    // ── AI image moderation — verify photos genuinely show real estate ──────
+    // Gemini runs server-side (works on Android, iOS, Web & PWA). If it is
+    // undeployed / unreachable the service falls back to a rule-based text
+    // check, so a legitimate listing is never blocked just because the Edge
+    // Function isn't live yet.
+    if (_images.isNotEmpty) {
+      final moderation =
+          await ref.read(aiValidationServiceProvider).validateProperty(
+        title:       _titleCtrl.text.trim(),
+        description: _descCtrl.text.trim(),
+        location:    _locationCtrl.text.trim(),
+        price:       double.tryParse(_priceCtrl.text) ?? 0,
+        category:    _category.name,
+        type:        _type.name,
+        bedrooms:    _needsRooms ? (int.tryParse(_bedroomsCtrl.text) ?? 0) : 0,
+        bathrooms:   _needsRooms ? (int.tryParse(_bathroomsCtrl.text) ?? 0) : 0,
+        area:        double.tryParse(_areaCtrl.text) ?? 0,
+        images:      _images,
+        submittedBy: user.id,
+      );
+      if (!mounted) return;
+      if (!moderation.isApproved) {
+        setState(() => _isLoading = false);
+        await _showModerationRejected(moderation);
+        return;
+      }
+    }
 
     final bedrooms  = _needsRooms ? (int.tryParse(_bedroomsCtrl.text)  ?? 0) : 0;
     final bathrooms = _needsRooms ? (int.tryParse(_bathroomsCtrl.text) ?? 0) : 0;

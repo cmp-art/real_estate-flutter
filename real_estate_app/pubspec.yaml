@@ -75,8 +75,7 @@ dependencies:
   # Network
   http: ^1.1.0
 
-  # On-device AI — MobileNet V3 TFLite image validation
-  tflite_flutter: ^0.12.1
+  # Image decode/resize — upload pipeline + Gemini moderation thumbnails
   image: ^4.1.7
 
   # EXIF GPS — reads GPS coordinates embedded in photo metadata
@@ -129,5 +128,4 @@ flutter:
     - assets/icons/
     - assets/.env
     - assets/docs/
-    - assets/ml/
     - assets/images/
