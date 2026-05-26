@@ -3,14 +3,14 @@
 // AI Validation Service — Production Ready
 // =========================================
 //
-// VALIDATION PIPELINE (images):
-//   LAYER 1 — Pre-flight (Dart, no network): tiny-file / poison detection
-//   LAYER 2 — Gemini Flash-Lite (server-side Edge Function): image moderation
-//             • property → photo must depict real estate (room/house/land/business)
+// IMAGE-ONLY moderation. The title / description / any other text is NEVER used
+// to accept or reject a submission — only the uploaded PHOTOS are judged:
+//   STEP 1 — Pre-flight (Dart, no network): reject tiny / broken / poison files
+//   STEP 2 — Gemini Flash-Lite (server-side Edge Function): the only content gate
+//             • property → every photo must depict real estate (room/house/land/business)
 //             • ad       → image must be free of sexual / violent content
-//   LAYER 3 — Rule-based text scoring: graceful fallback when Gemini is
-//             unreachable / undeployed, so a submission never hard-fails
-//   LAYER 4 — Manual queue (last resort for text-only submissions)
+//   If Gemini is unreachable / undeployed, the submission is ALLOWED through
+//   (we never judge it by its text); rejections come only from a real verdict.
 //
 // Gemini runs on EVERY platform (Android, iOS, Web, PWA) because it is a plain
 // HTTPS call to the `validate_content` Edge Function — there is no on-device
@@ -20,12 +20,10 @@
 // KEY PRODUCTION FEATURES:
 //   - Per-user rate limiting: max 5 attempts per 60 seconds
 //   - Circuit-breaker health monitor (Gemini Edge Function state)
-//   - ALL photos checked by pre-flight (not just the first few)
-//   - Up to 4 representative photos sent to Gemini per submission
+//   - ALL photos pre-flighted, then sent to Gemini (up to 4 of them)
 //   - Lost-log counter exposed for admin monitoring
 //   - _log() wrapper: silent in release builds, visible in debug
 
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -279,41 +277,6 @@ class AiValidationService {
   Future<void> initialize() async {}
 
   // ─────────────────────────────────────────────────────────────────────────
-  // KEYWORDS
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static const List<String> _reKeywords = [
-    'house', 'apartment', 'villa', 'condo', 'studio', 'flat', 'loft',
-    'duplex', 'property', 'bedroom', 'bathroom', 'kitchen', 'rent',
-    'sale', 'lease', 'sqm', 'sqft', 'floor', 'building', 'estate',
-    'land', 'plot', 'commercial', 'office', 'garage', 'compound',
-    'mortgage', 'agent', 'renovation', 'interior', 'moving', 'tenant',
-    'nyumba', 'chumba', 'pango', 'kodi', 'ardhi', 'ofisi', 'jengo',
-  ];
-
-  // Only keywords that are ALWAYS blocked regardless of context.
-  // Revenue rule: ads are open to ALL categories — only block the specific
-  // harmful categories: adult content, fear-based, political, illegal.
-  static const List<String> _adBannedKeywords = [
-    // Adult / sexual
-    'escort', 'prostitution', 'pornography', 'xxx', 'onlyfans',
-    // Gambling
-    'casino', 'gambling', 'sportpesa', 'betway', 'lottery',
-    // Illegal
-    'cocaine', 'heroin', 'weapons', 'counterfeit', 'piracy',
-  ];
-
-  // Property listing banned keywords (stricter — must be property-related)
-  static const List<String> _bannedKeywords = [
-    'food', 'restaurant', 'pizza', 'burger', 'grocery', 'chakula',
-    'clothing', 'fashion', 'shoes', 'dress', 'nguo',
-    'phone', 'laptop', 'electronics', 'gadget', 'simu',
-    'car', 'vehicle', 'motorcycle', 'truck', 'gari',
-    'casino', 'gambling', 'betting', 'crypto',
-    'dating', 'escort', 'adult',
-  ];
-
-  // ─────────────────────────────────────────────────────────────────────────
   // HEALTH
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -340,7 +303,7 @@ class AiValidationService {
       'detail': healthy
           ? 'Cloud image moderation (Gemini) is active on all platforms.'
           : 'Image moderation is backing off after repeated errors; '
-            'rule-based text validation is active in the meantime.',
+            'submissions are allowed through in the meantime.',
     };
   }
 
@@ -348,18 +311,11 @@ class AiValidationService {
   // PUBLIC API — PROPERTY
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Moderate a property's PHOTOS only. The title / description / any other
+  /// text is NEVER used to accept or reject — only the uploaded images.
   Future<ValidationResult> validateProperty({
-    required String     title,
-    required String     description,
-    required String     location,
-    required double     price,
-    required String     category,
-    required String     type,
-    required int        bedrooms,
-    required int        bathrooms,
-    required double     area,
-    List<XFile>?        images,
-    String?             submittedBy,
+    List<XFile>? images,
+    String?      submittedBy,
   }) async {
     // Rate limit.
     if (submittedBy != null && !_rateLimiter.allow(submittedBy)) {
@@ -371,67 +327,12 @@ class AiValidationService {
       );
     }
 
-    final data = {
-      'title': title, 'description': description, 'location': location,
-      'price': price, 'category': category, 'type': type,
-      'bedrooms': bedrooms, 'bathrooms': bathrooms, 'area': area,
-    };
+    final media = [...(images ?? [])];
+    // No photo ⇒ nothing to check (text is never judged) ⇒ allow.
+    if (media.isEmpty) return _pass('No photos to review.');
 
-    List<XFile> allMedia = [...(images ?? [])];
-
-    final hasImages = allMedia.isNotEmpty;
-
-    _log('validateProperty — photos=${images?.length ?? 0}, '
-         'total_media=${allMedia.length}, gemini_healthy=${_health.isHealthy}');
-
-    // ── IMAGE PATH ────────────────────────────────────────────────────────────
-    if (hasImages) {
-      // Pre-flight ALL photos (cheap, local) before spending a Gemini call.
-      for (int i = 0; i < allMedia.length; i++) {
-        final reason = await _preflightImageCheck(allMedia[i], index: i + 1);
-        if (reason != null) {
-          _log('Pre-flight rejected photo ${i + 1}: $reason');
-          final result = ValidationResult(
-            status: ValidationStatus.rejected, method: ValidationMethod.rules,
-            approved: false, confidence: 99,
-            reason: reason,
-            suggestions: [
-              'Upload a real property photo: bedroom, living room, exterior, or land.',
-              'Do not upload screenshots, documents, or WhatsApp messages.',
-            ],
-          );
-          await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-          return result;
-        }
-      }
-
-      // Gemini image moderation (all platforms). If the breaker is open or the
-      // call fails/undeployed, fall back to the rule-based text check so the
-      // submission still goes through instead of hard-failing.
-      if (_health.isHealthy) {
-        try {
-          final result = await _validateWithImages(
-            data: data, images: allMedia,
-          ).timeout(_timeout);
-          _health.recordSuccess();
-          await _logValidation(type: 'property', result: result, submittedBy: submittedBy);
-          return result;
-        } catch (e) {
-          _health.recordFailure();
-          _log('Property Gemini validation unavailable: $e — using rule-based fallback');
-        }
-      } else {
-        _log('Gemini circuit open — using rule-based fallback for property photos');
-      }
-
-      final fallback = _ruleBasedPropertyCheck(data);
-      await _logValidation(type: 'property', result: fallback, submittedBy: submittedBy);
-      return fallback;
-    }
-
-    // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
-    return _validateTextOnly(
-      type: 'property', data: data, submittedBy: submittedBy,
+    return _moderateImages(
+      type: 'property', images: media, isAd: false, submittedBy: submittedBy,
     );
   }
 
@@ -439,15 +340,11 @@ class AiValidationService {
   // PUBLIC API — AD
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Moderate an ad's IMAGE only — block sexual / violent content. The headline
+  /// and description text are NEVER used to accept or reject.
   Future<ValidationResult> validateAd({
-    required String headline,
-    required String description,
-    required String callToAction,
-    required String companyType,
-    required String campaignObjective,
-    required String landingUrl,
-    XFile?          image,
-    String?         submittedBy,
+    XFile?  image,
+    String? submittedBy,
   }) async {
     // Rate limit.
     if (submittedBy != null && !_rateLimiter.allow(submittedBy)) {
@@ -459,69 +356,11 @@ class AiValidationService {
       );
     }
 
-    final data = {
-      'headline': headline, 'description': description,
-      'call_to_action': callToAction, 'company_type': companyType,
-      'campaign_objective': campaignObjective, 'landing_url': landingUrl,
-    };
+    // No image ⇒ nothing to check (text is never judged) ⇒ allow.
+    if (image == null) return _pass('No image to review.');
 
-    List<XFile> allAdMedia = [];
-    if (image != null) allAdMedia.add(image);
-
-    final hasMedia = allAdMedia.isNotEmpty;
-
-    _log('validateAd — image=${image != null}, '
-         'total_media=${allAdMedia.length}, gemini_healthy=${_health.isHealthy}');
-
-    // ── MEDIA PATH ──────────────────────────────────────────────────────────
-    if (hasMedia) {
-      // Pre-flight every media file (cheap, local) before spending a Gemini call.
-      for (int i = 0; i < allAdMedia.length; i++) {
-        final preflightReason = await _preflightImageCheck(allAdMedia[i], index: i + 1);
-        if (preflightReason != null) {
-          _log('Ad pre-flight rejected media ${i + 1}: $preflightReason');
-          final result = ValidationResult(
-            status: ValidationStatus.rejected, method: ValidationMethod.rules,
-            approved: false, confidence: 99,
-            reason: preflightReason,
-            suggestions: [
-              'Upload a real ad image: property photo, company logo, or professional graphic.',
-              'Do not upload screenshots, documents, or text images.',
-            ],
-          );
-          await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-          return result;
-        }
-      }
-
-      // Gemini safety moderation (all platforms). Fall back to the rule-based
-      // text check when the breaker is open or the call fails/undeployed.
-      if (_health.isHealthy) {
-        try {
-          final result = await _validateWithImages(
-            data: data,
-            images: allAdMedia,
-            isAd: true,
-          ).timeout(_timeout);
-          _health.recordSuccess();
-          await _logValidation(type: 'ad', result: result, submittedBy: submittedBy);
-          return result;
-        } catch (e) {
-          _health.recordFailure();
-          _log('Ad Gemini validation unavailable: $e — using rule-based fallback');
-        }
-      } else {
-        _log('Gemini circuit open — using rule-based fallback for ad media');
-      }
-
-      final fallback = _ruleBasedAdCheck(data);
-      await _logValidation(type: 'ad', result: fallback, submittedBy: submittedBy);
-      return fallback;
-    }
-
-    // ── TEXT-ONLY PATH ──────────────────────────────────────────────────────
-    return _validateTextOnly(
-      type: 'ad', data: data, submittedBy: submittedBy,
+    return _moderateImages(
+      type: 'ad', images: [image], isAd: true, submittedBy: submittedBy,
     );
   }
 
@@ -529,27 +368,62 @@ class AiValidationService {
   // CORE ENGINES
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Moderate [images] with Gemini (server-side) and return a [ValidationResult].
-  ///
-  /// [isAd] = true uses the ad safety prompt (block only sexual/violent content);
-  /// false uses the stricter property prompt (photo must depict real estate).
-  ///
-  /// Throws when Gemini is unreachable / undeployed / errored, so the caller can
-  /// fall back to the rule-based text check.
-  Future<ValidationResult> _validateWithImages({
-    required Map<String, dynamic> data,
-    required List<XFile>          images,
-    bool                          isAd = false,
+  /// Image-only moderation. Pre-flights each photo locally, then asks Gemini.
+  /// If Gemini is unreachable we ALLOW the submission — we never fall back to
+  /// judging the title/description. Rejections come only from a real verdict.
+  Future<ValidationResult> _moderateImages({
+    required String      type,
+    required List<XFile> images,
+    required bool        isAd,
+    String?              submittedBy,
+  }) async {
+    _log('moderate $type — photos=${images.length}, gemini_healthy=${_health.isHealthy}');
+
+    // Pre-flight every photo (cheap, local, image-only).
+    for (int i = 0; i < images.length; i++) {
+      final reason = await _preflightImageCheck(images[i], index: i + 1);
+      if (reason != null) {
+        _log('Pre-flight rejected photo ${i + 1}: $reason');
+        final result = ValidationResult(
+          status: ValidationStatus.rejected, method: ValidationMethod.rules,
+          approved: false, confidence: 99, reason: reason,
+          suggestions: isAd
+              ? ['Upload a real, clear image — not a tiny or broken file.']
+              : ['Upload a real property photo: bedroom, living room, exterior, or land.'],
+        );
+        await _logValidation(type: type, result: result, submittedBy: submittedBy);
+        return result;
+      }
+    }
+
+    // Gemini is the ONLY content gate. If it can't run, allow the submission
+    // (we never judge it by its text).
+    if (!_health.isHealthy) {
+      _log('Gemini circuit open — allowing $type (image check skipped)');
+      return _pass('Image check temporarily unavailable — allowed.');
+    }
+    try {
+      final result = await _runGemini(images: images, isAd: isAd).timeout(_timeout);
+      _health.recordSuccess();
+      await _logValidation(type: type, result: result, submittedBy: submittedBy);
+      return result;
+    } catch (e) {
+      _health.recordFailure();
+      _log('$type Gemini moderation unavailable: $e — allowing (image check skipped)');
+      return _pass('Image check temporarily unavailable — allowed.');
+    }
+  }
+
+  /// Ask Gemini to moderate [images]. Throws when Gemini is unreachable.
+  Future<ValidationResult> _runGemini({
+    required List<XFile> images,
+    required bool        isAd,
   }) async {
     final picked = _pickRepresentative(images, _maxImages);
     _log('Sending ${picked.length} image(s) to Gemini (isAd=$isAd)');
 
     final verdict = await _gemini.moderate(images: picked, isAd: isAd);
-    if (verdict == null) {
-      // Null ⇒ function undeployed / network / decode failure. Signal the
-      // caller so it falls back to the rule-based text check.
-      throw StateError('gemini_unavailable');
-    }
+    if (verdict == null) throw StateError('gemini_unavailable');
 
     _log('Gemini verdict: approved=${verdict.approved} (${verdict.confidence}%) '
          'category=${verdict.category} — ${verdict.reason}');
@@ -587,34 +461,15 @@ class AiValidationService {
     );
   }
 
-  /// Text-only validation using rule-based checks (Layer 1) and manual queue (Layer 2).
-  /// Images are moderated by Gemini; this handles text-only submissions.
-  Future<ValidationResult> _validateTextOnly({
-    required String               type,
-    required Map<String, dynamic> data,
-    String?                       submittedBy,
-  }) async {
-    // Layer 1: Rule-based keyword scoring.
-    try {
-      final result = type == 'property'
-          ? _ruleBasedPropertyCheck(data)
-          : _ruleBasedAdCheck(data);
-      await _logValidation(type: type, result: result, submittedBy: submittedBy);
-      return result;
-    } catch (e) {
-      _log('Rule-based check crashed: $e — sending to manual queue');
-    }
-
-    // Layer 2: Manual queue.
-    await _addToManualQueue(type: type, data: data, submittedBy: submittedBy);
-    const result = ValidationResult(
-      status: ValidationStatus.pending, method: ValidationMethod.manual,
-      approved: false, confidence: 0,
-      reason: 'Under admin review — you will be notified within 24 hours.',
-    );
-    await _logValidation(type: type, result: result, submittedBy: submittedBy);
-    return result;
-  }
+  /// Approve with no findings — used when there are no photos to check or when
+  /// the image moderator can't run. Text / description is NEVER judged.
+  ValidationResult _pass(String reason) => ValidationResult(
+        status:     ValidationStatus.approved,
+        method:     ValidationMethod.ai,
+        approved:   true,
+        confidence: 100,
+        reason:     reason,
+      );
 
   Future<ValidationResult> _hardReject({
     required String       type,
@@ -732,133 +587,6 @@ class AiValidationService {
   int _readInt16(Uint8List b, int o) => (b[o] << 8) | b[o + 1];
 
   // ══════════════════════════════════════════════════════════════════════════
-  // RULE-BASED CHECKS
-  // ══════════════════════════════════════════════════════════════════════════
-
-  ValidationResult _ruleBasedPropertyCheck(Map<String, dynamic> data) {
-    final text = '${data['title']} ${data['description']} ${data['location']}'
-        .toLowerCase();
-
-    // Hard-block: listing contains a clearly non-real-estate product keyword.
-    final banned =
-        _bannedKeywords.firstWhere((k) => text.contains(k), orElse: () => '');
-    if (banned.isNotEmpty) {
-      return ValidationResult(
-        status: ValidationStatus.rejected, method: ValidationMethod.rules,
-        approved: false, confidence: 85,
-        reason: 'Content is not related to real estate (found: "$banned").',
-        suggestions: [
-          'Only property listings are allowed: houses, apartments, land, commercial.',
-          'Remove references to non-real-estate products.',
-        ],
-      );
-    }
-
-    // Score keyword matches.
-    int          score = 0;
-    final List<String> hits = [];
-    for (final kw in _reKeywords) {
-      if (text.contains(kw)) { score += 15; hits.add(kw); }
-    }
-
-    // GATE: at least one real-estate keyword is REQUIRED.
-    // Without this gate, any listing with a price and a long description
-    // would pass — making the fallback completely ineffective.
-    if (hits.isEmpty) {
-      return const ValidationResult(
-        status: ValidationStatus.rejected, method: ValidationMethod.rules,
-        approved: false, confidence: 80,
-        reason: 'Listing does not appear to be about real estate. '
-                'No property-related words found.',
-        suggestions: [
-          'Describe the property: house, apartment, land, commercial space, etc.',
-          'Use words like "bedroom", "bathroom", "rent", "sale", "plot".',
-          'Swahili: nyumba, chumba, pango, ardhi, ofisi are all valid.',
-        ],
-      );
-    }
-
-    final price = (data['price'] as num?)?.toDouble() ?? 0;
-    final area  = (data['area']  as num?)?.toDouble() ?? 0;
-    final title = (data['title'] as String?)?.trim() ?? '';
-    final desc  = (data['description'] as String?)?.trim() ?? '';
-
-    if (price >= 100 && price <= 500000000) score += 15;
-    if (area  >= 10)                         score += 10;
-    if (title.length >= 5)                   score += 5;
-    if (desc.length  >= 20)                  score += 5;
-
-    // Require score >= 30 (at least 2 keyword hits, OR 1 keyword + valid price/area).
-    final approved = score >= 30;
-    return ValidationResult(
-      status:      approved ? ValidationStatus.approved : ValidationStatus.rejected,
-      method:      ValidationMethod.rules,
-      approved:    approved,
-      confidence:  score.clamp(0, 100),
-      reason:      approved
-          ? 'Passed automated checks (matched: ${hits.take(3).join(", ")}).'
-          : 'Insufficient real-estate content (score $score/100).',
-      suggestions: approved ? [] : [
-        'Add more property-specific detail: describe the rooms, location, and features.',
-        'Include: number of bedrooms, type of property, and area size.',
-      ],
-    );
-  }
-
-  ValidationResult _ruleBasedAdCheck(Map<String, dynamic> data) {
-    // Rule: DEFAULT IS APPROVE for all business categories.
-    // Only reject explicitly prohibited content.
-    final text =
-        '${data['headline']} ${data['description']}'.toLowerCase();
-
-    // Block prohibited keywords (adult, gambling, illegal)
-    final banned =
-        _adBannedKeywords.firstWhere((k) => text.contains(k), orElse: () => '');
-    if (banned.isNotEmpty) {
-      return ValidationResult(
-        status: ValidationStatus.rejected, method: ValidationMethod.rules,
-        approved: false, confidence: 95,
-        reason: 'Ad contains prohibited content (keyword: "$banned").',
-        suggestions: [
-          'Ads must not promote adult services, gambling, or illegal products.',
-        ],
-      );
-    }
-
-    // Block political ads
-    final politicalKeywords = ['vote for', 'elect', 'campaign', 'chagua', 'kura', 'uchaguzi'];
-    if (politicalKeywords.any((k) => text.contains(k))) {
-      return const ValidationResult(
-        status: ValidationStatus.rejected, method: ValidationMethod.rules,
-        approved: false, confidence: 92,
-        reason: 'Political advertising is not permitted on this platform.',
-        suggestions: ['Political campaign ads are not accepted.'],
-      );
-    }
-
-    // Approve everything else — food, retail, tech, automotive, health, etc.
-    // Only basic sanity check: headline must exist
-    final headline = (data['headline'] as String?)?.trim() ?? '';
-    if (headline.length < 3) {
-      return const ValidationResult(
-        status: ValidationStatus.rejected, method: ValidationMethod.rules,
-        approved: false, confidence: 90,
-        reason: 'Headline is too short or missing.',
-        suggestions: ['Write a headline of at least 5 words describing your product or service.'],
-      );
-    }
-
-    return const ValidationResult(
-      status:     ValidationStatus.approved,
-      method:     ValidationMethod.rules,
-      approved:   true,
-      confidence: 80,
-      reason:     '',
-      suggestions: [],
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
   // SUPABASE HELPERS
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -880,24 +608,6 @@ class AiValidationService {
     } catch (e) {
       _lostLogCount++;
       _log('WARNING: validation log lost (total lost: $_lostLogCount) — $e');
-    }
-  }
-
-  Future<void> _addToManualQueue({
-    required String               type,
-    required Map<String, dynamic> data,
-    String?                       submittedBy,
-  }) async {
-    try {
-      await _supabase.from('manual_review_queue').insert({
-        'content_type': type,
-        'content_data': jsonEncode(data),
-        'submitted_by': submittedBy,
-        'status':       'pending',
-        'created_at':   DateTime.now().toIso8601String(),
-      });
-    } catch (e) {
-      _log('ERROR: could not add to manual queue — $e');
     }
   }
 

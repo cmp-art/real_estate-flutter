@@ -717,14 +717,8 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     final user = Supabase.instance.client.auth.currentUser;
     final aiService = ref.read(aiValidationServiceProvider);
     final validation = await aiService.validateAd(
-      headline:          _headlineController.text.trim(),
-      description:       _descriptionController.text.trim(),
-      callToAction:      _selectedCTA,
-      companyType:       'advertiser',  // generic — all business types are allowed
-      campaignObjective: widget.campaign.campaignObjective,
-      landingUrl:        landingUrl,
-      image:             _imageFile,
-      submittedBy:       user?.id,
+      image:       _imageFile,
+      submittedBy: user?.id,
     );
 
     if (!mounted) return;

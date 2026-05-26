@@ -561,15 +561,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (_images.isNotEmpty) {
       final moderation =
           await ref.read(aiValidationServiceProvider).validateProperty(
-        title:       _titleCtrl.text.trim(),
-        description: _descCtrl.text.trim(),
-        location:    _locationCtrl.text.trim(),
-        price:       double.tryParse(_priceCtrl.text) ?? 0,
-        category:    _category.name,
-        type:        _type.name,
-        bedrooms:    _needsRooms ? (int.tryParse(_bedroomsCtrl.text) ?? 0) : 0,
-        bathrooms:   _needsRooms ? (int.tryParse(_bathroomsCtrl.text) ?? 0) : 0,
-        area:        double.tryParse(_areaCtrl.text) ?? 0,
         images:      _images,
         submittedBy: user.id,
       );
