@@ -8,6 +8,8 @@ import 'app_translations.dart';
 import '../providers/app_providers.dart';
 import '../../../subscriptions/data/models/subscription_model.dart';
 import './notification_filter_screen.dart';
+import './price_drop_alerts_screen.dart';
+import '../../../subscriptions/presentation/screens/subscription_screen.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 class NotificationsSettingsScreen extends ConsumerWidget {
@@ -235,7 +237,9 @@ class _PriceDropAlertTile extends ConsumerWidget {
                     IconButton(
                       icon: const Icon(Icons.tune_rounded),
                       tooltip: AppTranslations.translate('manage_alerts', languageCode),
-                      onPressed: () => Navigator.of(context).pushNamed('/price-drop-alerts'),
+                      onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const PriceDropAlertsScreen())),
                     ),
                     Switch(
                       value: settings.priceDropAlerts,
@@ -325,7 +329,8 @@ class _PriceDropAlertTile extends ConsumerWidget {
                 backgroundColor: Colors.purple, foregroundColor: Colors.white),
             onPressed: () {
               Navigator.of(ctx).pop();
-              Navigator.of(context).pushNamed('/subscription');
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const SubscriptionScreen()));
             },
             child: Text(AppTranslations.translate('upgrade_now', languageCode)),
           ),

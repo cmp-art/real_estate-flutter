@@ -188,11 +188,16 @@ CREATE TABLE user_notifications (
     data       JSONB       DEFAULT '{}'::JSONB,
     is_read    BOOLEAN     DEFAULT FALSE,
     read_at    TIMESTAMPTZ,
+    -- NULL = not yet delivered to FCM. Stamped by the process_push_queue() cron
+    -- worker (PART: FCM PUSH). Push is decoupled from INSERT so writes never block.
+    pushed_at  TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 -- Composite index for the inbox query: user + unread + newest first
 CREATE INDEX idx_user_notifications_inbox ON user_notifications(user_id, is_read, created_at DESC);
 CREATE INDEX idx_user_notifications_type  ON user_notifications(type);
+-- Partial index that keeps the push drainer's "unpushed rows" scan fast
+CREATE INDEX idx_user_notifications_unpushed ON user_notifications(created_at) WHERE pushed_at IS NULL;
 
 CREATE TABLE message_notification_tracking (
     id                 UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -956,38 +961,90 @@ DROP POLICY IF EXISTS push_config_deny_all ON _push_config;
 CREATE POLICY push_config_deny_all ON _push_config
     AS RESTRICTIVE FOR ALL TO authenticated USING (false);
 
--- Trigger function: fires async HTTP POST to Edge Function after each INSERT
-CREATE OR REPLACE FUNCTION trigger_send_push_notification()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+-- ── Decoupled push delivery (NO synchronous trigger) ──────────────────────────
+-- WHY: an AFTER INSERT trigger on user_notifications that calls the Edge Function
+-- runs INSIDE the inserting transaction. Every messages INSERT cascades here
+-- (messages → notify_new_message → INSERT user_notifications), so that synchronous
+-- HTTP call stalled chat sends by ~10s on this project. A send must never wait on
+-- push delivery, so the HTTP call is moved OUT of the transaction into a pg_cron
+-- worker that drains unpushed rows every 10 seconds.
+--
+-- Flow: INSERT user_notifications → row has pushed_at = NULL (instant, no HTTP).
+--       process_push_queue() (cron) POSTs each unpushed row to the Edge Function
+--       via pg_net, then stamps pushed_at. A slow/failed push can never block or
+--       roll back the original insert. This is still the SINGLE push path, so the
+--       app must NOT call the Edge Function directly (that would double-deliver).
+CREATE OR REPLACE FUNCTION process_push_queue()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
 DECLARE
     _ref  TEXT;
     _key  TEXT;
     _url  TEXT;
+    _row  user_notifications%ROWTYPE;
 BEGIN
+    -- One worker at a time; the lock auto-releases when this transaction ends.
+    IF NOT pg_try_advisory_xact_lock(hashtext('process_push_queue')) THEN
+        RETURN;
+    END IF;
+
     SELECT value INTO _ref FROM _push_config WHERE key = 'project_ref';
     SELECT value INTO _key FROM _push_config WHERE key = 'service_role';
 
+    -- No real service_role key yet → skip delivery, but stamp rows so the queue
+    -- doesn't grow forever (the in-app notification is already delivered).
+    IF _key IS NULL OR _key = '' OR _key = 'YOUR_SERVICE_ROLE_KEY_HERE' THEN
+        UPDATE user_notifications SET pushed_at = NOW() WHERE pushed_at IS NULL;
+        RETURN;
+    END IF;
+
     _url := 'https://' || _ref || '.supabase.co/functions/v1/send-push-notification';
 
-    PERFORM net.http_post(
-        url     := _url,
-        body    := to_jsonb(NEW)::text,
-        headers := jsonb_build_object(
-            'Content-Type',  'application/json',
-            'Authorization', 'Bearer ' || _key
-        )
-    );
+    FOR _row IN
+        SELECT * FROM user_notifications
+        WHERE  pushed_at IS NULL
+          AND  created_at > NOW() - INTERVAL '15 minutes'   -- ignore stale backlog
+        ORDER  BY created_at
+        LIMIT  100
+    LOOP
+        BEGIN
+            PERFORM net.http_post(
+                url     := _url,
+                body    := to_jsonb(_row),
+                headers := jsonb_build_object(
+                    'Content-Type',  'application/json',
+                    'Authorization', 'Bearer ' || _key
+                )
+            );
+        EXCEPTION WHEN OTHERS THEN
+            NULL;   -- one bad row must not abort the whole batch
+        END;
+        UPDATE user_notifications SET pushed_at = NOW() WHERE id = _row.id;
+    END LOOP;
 
-    RETURN NEW;
+    -- Stamp anything older than the window so it never loops forever.
+    UPDATE user_notifications SET pushed_at = NOW()
+    WHERE pushed_at IS NULL AND created_at <= NOW() - INTERVAL '15 minutes';
 END $$;
 
--- Attach trigger to user_notifications
-DROP TRIGGER IF EXISTS on_user_notification_insert ON user_notifications;
+-- Remove the OLD synchronous trigger + function that blocked inserts.
+DROP TRIGGER  IF EXISTS on_user_notification_insert ON user_notifications;
+DROP FUNCTION IF EXISTS trigger_send_push_notification() CASCADE;
 
-CREATE TRIGGER on_user_notification_insert
-    AFTER INSERT ON user_notifications
-    FOR EACH ROW
-    EXECUTE FUNCTION trigger_send_push_notification();
+-- Drain the queue every 10 seconds (pg_cron >= 1.5 supports the seconds syntax).
+DO $$
+BEGIN
+    PERFORM cron.unschedule('process-push-queue')
+        WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'process-push-queue');
+EXCEPTION WHEN OTHERS THEN NULL;   -- pg_cron not installed yet
+END $$;
+
+DO $$
+BEGIN
+    PERFORM cron.schedule('process-push-queue', '10 seconds',
+        'SELECT process_push_queue()');
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron unavailable or no seconds-schedule support — push drainer not scheduled.';
+END $$;
 
 DO $$ BEGIN
     RAISE NOTICE '=========================================';
@@ -995,7 +1052,7 @@ DO $$ BEGIN
     RAISE NOTICE '  send_notification(), get_unread_notification_count(),';
     RAISE NOTICE '  mark_all_notifications_read() — DONE';
     RAISE NOTICE '  Realtime enabled on user_notifications';
-    RAISE NOTICE '  FCM push trigger installed (pg_net)';
+    RAISE NOTICE '  FCM push drainer scheduled (pg_cron + pg_net, every 10s)';
     RAISE NOTICE '=========================================';
     RAISE NOTICE '  ALL 5 SQL FILES COMPLETE';
     RAISE NOTICE '  Run order: sql1 -> sql2 -> sql3 -> sql4 -> sql5';
@@ -1160,6 +1217,10 @@ BEGIN
         )
     );
 
+    RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+    -- Notification bookkeeping must NEVER block or fail a message send.
+    -- If anything here errors, swallow it and let the message insert commit.
     RETURN NEW;
 END;
 $$;

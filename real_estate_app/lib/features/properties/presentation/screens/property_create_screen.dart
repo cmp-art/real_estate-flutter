@@ -774,9 +774,22 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
                 isError: true);
             return;
           }
-          final toAdd = dropped.take(remaining).toList();
-          await _cacheWebBytes(toAdd);
-          if (mounted) setState(() => _images.addAll(toAdd));
+          // Mirror the gallery-pick flow (_addPhotos): crop each dropped image
+          // to the 4:3 card ratio so dropped and picked photos look identical.
+          final ready = <XFile>[];
+          for (final image in dropped.take(remaining)) {
+            if (!mounted) break;
+            try {
+              final result = await _imageHelper.cropToCard(context, image);
+              ready.add(result ?? image);
+            } catch (_) {
+              ready.add(image);
+            }
+          }
+          if (ready.isNotEmpty && mounted) {
+            await _cacheWebBytes(ready);
+            setState(() => _images.addAll(ready));
+          }
         },
         child: Form(
           key: _formKey,

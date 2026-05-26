@@ -275,6 +275,15 @@ void main() async {
 
   // Catch unhandled async errors (Dart zone errors not caught by Flutter)
   PlatformDispatcher.instance.onError = (error, stack) {
+    // Image fetch failures from flutter_cache_manager (e.g. a 403/404 on a
+    // storage image) are already handled by the image widgets' errorWidget,
+    // which shows a placeholder. Don't log them as "critical" or spam the
+    // Supabase error table. Matched by string so this stays web-safe (no dart:io).
+    final msg = error.toString();
+    if (msg.contains('Invalid statusCode') && msg.contains('/storage/v1/')) {
+      return true; // handled — placeholder already shown
+    }
+
     logger.e('Unhandled async error', error: error, stackTrace: stack);
     errorLoggingService.logError(
       errorType: 'AsyncError:${error.runtimeType}',

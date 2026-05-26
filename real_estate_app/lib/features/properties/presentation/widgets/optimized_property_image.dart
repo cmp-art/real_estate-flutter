@@ -116,6 +116,10 @@ class _OptimizedPropertyImageState extends State<OptimizedPropertyImage> {
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
+        // Without server-side transforms the source image is full-size (~1280px).
+        // Cap the in-memory decode for list thumbnails so long lists don't bloat
+        // memory; detail/gallery views decode at full resolution.
+        memCacheWidth: widget.isThumbnail ? 600 : null,
         cacheManager: CustomCacheManager.instance,
         placeholder: (context, url) => _buildShimmer(context),
         errorWidget: (context, url, error) {

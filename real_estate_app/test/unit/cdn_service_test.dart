@@ -17,6 +17,12 @@ void main() {
     dotenv.testLoad(fileInput: 'SUPABASE_URL=$_fakeUrl\n');
   });
 
+  setUp(() {
+    // These suites verify transform-URL building, which only runs when
+    // transforms are enabled. Production defaults this to false (plan limit).
+    CdnService.transformsEnabled = true;
+  });
+
   group('CdnService.isCdnEnabled', () {
     test('is true when SUPABASE_URL is set', () {
       expect(CdnService.isCdnEnabled, isTrue);
@@ -104,6 +110,28 @@ void main() {
       ]) {
         expect(url, contains('/render/image/public/'),
             reason: '$url should use render endpoint');
+      }
+    });
+  });
+
+  group('CdnService.transformsEnabled = false (default in production)', () {
+    test('getOptimizedImageUrl serves the plain object URL', () {
+      CdnService.transformsEnabled = false;
+      final url = CdnService.getOptimizedImageUrl(_objectUrl, width: 300);
+      expect(url, contains('/storage/v1/object/public/'));
+      expect(url, isNot(contains('/render/image/')));
+      expect(url, isNot(contains('width=')));
+    });
+
+    test('presets serve object URLs (no transform, no 403 round-trip)', () {
+      CdnService.transformsEnabled = false;
+      for (final url in [
+        CdnService.getThumbnailUrl(_objectUrl),
+        CdnService.getMediumUrl(_objectUrl),
+        CdnService.getFullSizeUrl(_objectUrl),
+      ]) {
+        expect(url, contains('/storage/v1/object/public/'));
+        expect(url, isNot(contains('/render/image/')));
       }
     });
   });

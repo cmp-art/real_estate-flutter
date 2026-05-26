@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/theme_config.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/utils/responsive_helper.dart';
+import '../../../../core/utils/app_navigator.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA MODEL
@@ -428,117 +429,18 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen>
     );
   }
 
-  /// Navigate to the relevant screen based on notification type + embedded data
-  /// 🔧 FIXED: Added error handling for missing routes
+  /// Route to the relevant screen via the shared notification router, so taps
+  /// inside the inbox behave exactly like push / banner taps on native, web and
+  /// PWA. fallbackToInbox:false means a notification with no specific target
+  /// just stays here instead of re-opening the inbox on top of itself.
   void _handleTap(UserNotification notif) {
     if (!context.mounted) return;
-    final data = notif.data;
-
-    try {
-      switch (notif.type) {
-        case 'property_deleted':
-        case 'property_restored':
-        case 'property_featured':
-        case 'property_unfeatured':
-        case 'property_verified':
-        case 'property_unverified':
-        case 'property_media_removed':
-        case 'price_drop':
-          final pid = data?['property_id'] as String?;
-          if (pid != null) {
-            Navigator.of(context).pushNamed('/property/$pid').catchError((error) {
-              _showNavigationError('Property not available');
-              return null;
-            });
-          }
-          break;
-
-        case 'ad_approved':
-        case 'ad_rejected':
-        case 'ad_removed':
-        case 'ad_restored':
-          // 🔧 FIXED: Try to navigate to advertising, show message if route doesn't exist
-          _navigateToAdvertising();
-          break;
-
-        case 'new_message':
-          final cid = data?['conversation_id'] as String?;
-          if (cid != null) {
-            Navigator.of(context).pushNamed('/messages/$cid').catchError((error) {
-              _showNavigationError('Messages not available');
-              return null;
-            });
-          }
-          break;
-
-        case 'account_banned':
-        case 'account_unbanned':
-          // No navigation — informational only
-          break;
-
-        default:
-          break;
-      }
-    } catch (e) {
-      debugPrint('Navigation error: $e');
-      _showNavigationError('Unable to navigate to this content');
-    }
-  }
-
-  /// 🔧 NEW: Safe navigation to advertising screen with fallback
-  void _navigateToAdvertising() {
-    // Try multiple possible route names
-    final possibleRoutes = [
-      '/advertising',
-      '/ads',
-      '/my-ads',
-      '/advertisements',
-    ];
-
-    // Try each route until one works
-    bool navigated = false;
-    for (final route in possibleRoutes) {
-      try {
-        Navigator.of(context).pushNamed(route).then((_) {
-          navigated = true;
-        }).catchError((_) {
-          // Continue to next route
-        });
-        if (navigated) return;
-      } catch (e) {
-        // Continue to next route
-        continue;
-      }
-    }
-
-    
-  }
-
-  /// 🔧 NEW: Show user-friendly error message when navigation fails
-  void _showNavigationError(String message, {SnackBarAction? action}) {
-    if (!mounted) return;
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(Icons.info_outline, color: Colors.white, size: ResponsiveHelper.getResponsiveIconSize(context)),
-            SizedBox(width: ResponsiveHelper.getResponsiveSpacing(context, multiplier: 1.5)),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: Colors.orange.shade700,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-        action: action ?? SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {
-            // Dismiss the snackbar
-            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          },
-        ),
-      ),
+    navigateFromNotificationData(
+      <String, dynamic>{
+        'type': notif.type,
+        if (notif.data != null) ...notif.data!,
+      },
+      fallbackToInbox: false,
     );
   }
 }
@@ -655,6 +557,7 @@ class _NotificationTile extends StatelessWidget {
       case 'account_unbanned':       return Icons.check_circle_outline_rounded;
       case 'price_drop':             return Icons.trending_down_rounded;
       case 'payment_confirmed':      return Icons.payments_rounded;
+      case 'message':
       case 'new_message':            return Icons.chat_bubble_outline_rounded;
       default:                       return Icons.notifications_outlined;
     }
@@ -675,6 +578,7 @@ class _NotificationTile extends StatelessWidget {
       case 'payment_confirmed':       return Colors.green.shade500;
       case 'property_featured':       return Colors.amber.shade600;
       case 'price_drop':              return Colors.orange.shade500;
+      case 'message':
       case 'new_message':             return Colors.blue.shade500;
       default:                        return Colors.blueGrey.shade400;
     }

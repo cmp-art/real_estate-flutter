@@ -21,6 +21,8 @@ import '../../../settings/presentation/providers/app_providers.dart';
 import '../../../settings/presentation/screens/app_translations.dart';
 import '../../domain/entities/property_entity.dart';
 import '../providers/property_providers.dart';
+import '../providers/ai_providers.dart';
+import '../../../../core/services/ai_validation_service.dart';
 import '../../../../core/utils/responsive_helper.dart';
 
 class PropertyEditScreen extends ConsumerStatefulWidget {
@@ -62,6 +64,7 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
   void initState() {
     super.initState();
     _loadPropertyData();
+    _loadFullImages();
   }
 
   void _loadPropertyData() {
@@ -83,6 +86,30 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
     }
 
     _existingImages = List.from(property.images);
+  }
+
+  // The property list / grid cards carry only the FIRST image (thumbnail) to
+  // save bandwidth (see getProperties in the datasource), so widget.property.images
+  // is often incomplete. Fetch the full record by ID so editing always shows
+  // EVERY photo — exactly like opening edit from the detail screen. Runs once on
+  // open; on failure we keep whatever images we already have.
+  Future<void> _loadFullImages() async {
+    try {
+      final result = await ref
+          .read(propertyRepositoryProvider)
+          .getPropertyById(widget.property.id);
+      if (!mounted) return;
+      result.fold(
+        (_) {}, // keep the thumbnail we already have
+        (full) {
+          if (full.images.length > _existingImages.length) {
+            setState(() => _existingImages = List.from(full.images));
+          }
+        },
+      );
+    } catch (_) {
+      // Keep the existing image(s) if the fetch fails.
+    }
   }
 
   @override
@@ -274,6 +301,60 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
            _selectedCategory != PropertyCategory.commercial;
   }
 
+  // Explains why the AI rejected the newly added photos (real-estate check).
+  // Mirrors the create screen's dialog so edit and create behave identically.
+  Future<void> _showModerationRejected(ValidationResult v) async {
+    final sw = ref.read(languageProvider).languageCode == 'sw';
+    final reason = v.reason.isNotEmpty
+        ? v.reason
+        : (sw
+            ? 'Picha hizi hazionekani kuwa za mali isiyohamishika.'
+            : 'These photos do not appear to show a real estate property.');
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.report_gmailerrorred, color: Colors.red),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(sw ? 'Picha hazikukubaliwa' : 'Photos not accepted'),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(reason),
+            if (v.suggestions.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...v.suggestions.map(
+                (sug) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('•  '),
+                      Expanded(child: Text(sug)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(sw ? 'Sawa' : 'OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _handleSubmit() async {
     final currentLanguage = ref.read(languageProvider).languageCode;
     String t(String key) => AppTranslations.translate(key, currentLanguage);
@@ -311,6 +392,26 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           );
         }
         return;
+      }
+
+      // ── AI image moderation — verify newly added photos genuinely show real
+      // estate. Runs on EVERY "Update property" press (mirrors the create flow).
+      // Existing, already-approved photos are not re-downloaded. If Gemini cannot
+      // return a verdict the save is blocked, so pressing Update again re-checks.
+      final resolvedNewImages =
+          _selectedImages.isEmpty ? <XFile>[] : await _resolveUploadFiles();
+      if (resolvedNewImages.isNotEmpty) {
+        final moderation =
+            await ref.read(aiValidationServiceProvider).validateProperty(
+          images: resolvedNewImages,
+          submittedBy: user.id,
+        );
+        if (!mounted) return;
+        if (!moderation.isApproved) {
+          setState(() => _isLoading = false);
+          await _showModerationRejected(moderation);
+          return;
+        }
       }
 
       final repository = ref.read(propertyRepositoryProvider);
@@ -365,7 +466,8 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
           PropertyEntity finalProperty = savedProperty;
 
           if (_selectedImages.isNotEmpty) {
-            final toUpload = await _resolveUploadFiles();
+            // Reuse the byte-backed XFiles already resolved + AI-checked above.
+            final toUpload = resolvedNewImages;
             final uploadResult = await repository.uploadImages(
               savedProperty.id,
               toUpload,
@@ -453,10 +555,21 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
               _existingImages.length -
               _selectedImages.length;
           if (remaining <= 0) return;
-          final toAdd = dropped.take(remaining).toList();
-          await _cacheWebBytes(toAdd);
-          if (mounted) {
-            setState(() => _selectedImages.addAll(toAdd));
+          // Mirror the gallery-pick flow: crop each dropped image to the 4:3
+          // card ratio so dropped and picked photos look identical.
+          final ready = <XFile>[];
+          for (final image in dropped.take(remaining)) {
+            if (!mounted) break;
+            try {
+              final result = await _imageHelper.cropToCard(context, image);
+              ready.add(result ?? image);
+            } catch (_) {
+              ready.add(image);
+            }
+          }
+          if (ready.isNotEmpty && mounted) {
+            await _cacheWebBytes(ready);
+            setState(() => _selectedImages.addAll(ready));
           }
         },
         child: Form(

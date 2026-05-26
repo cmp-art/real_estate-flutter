@@ -25,6 +25,13 @@ class CdnService {
   /// Returns true when Supabase URL is available.
   static bool get isCdnEnabled => _supabaseUrl.isNotEmpty;
 
+  /// Supabase image transformations (the `/render/image` endpoint) require a
+  /// PAID plan. This project's plan returns HTTP 403 for every transform
+  /// request, so we serve the original object URLs instead (images are already
+  /// resized to ~1280px at upload time, so this is fine). Flip to `true` only
+  /// after moving to a Supabase plan that includes image transformations.
+  static bool transformsEnabled = false;
+
   /// Returns the best image format for the current platform.
   /// WebP is supported on Web, Android, and iOS 14+.
   /// Falls back to jpeg for iOS 13 (universally supported, still smaller than PNG/HEIC).
@@ -52,6 +59,10 @@ class CdnService {
     String format = 'origin', // 'origin' | 'avif' | 'webp'
   }) {
     if (storageUrlOrPath.isEmpty) return '';
+
+    // Transforms unavailable on this plan → serve the plain object URL so the
+    // image loads on the first request (no 403 round-trip to /render/image).
+    if (!transformsEnabled) return getOriginalUrl(storageUrlOrPath);
 
     final base = _buildRenderBase(storageUrlOrPath);
     if (base.isEmpty) return storageUrlOrPath;

@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../features/advertising/presentation/screens/advertiser_dashboard.dart';
 import '../../features/chat/presentation/screens/conversations_screen.dart';
 import '../../features/properties/presentation/screens/property_detail_screen.dart';
 import '../../features/settings/presentation/screens/notifications_screen.dart';
@@ -25,8 +26,11 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 ///
 /// On a cold start the navigator isn't mounted yet when the tap is delivered,
 /// so this retries briefly until it becomes available.
-Future<void> navigateFromNotificationData(Map<String, dynamic> data) async {
-  final destination = _destinationFor(data);
+Future<void> navigateFromNotificationData(
+  Map<String, dynamic> data, {
+  bool fallbackToInbox = true,
+}) async {
+  final destination = _destinationFor(data, fallbackToInbox: fallbackToInbox);
   if (destination == null) return;
 
   for (var attempt = 0; attempt < 20; attempt++) {
@@ -40,22 +44,34 @@ Future<void> navigateFromNotificationData(Map<String, dynamic> data) async {
   logger.w('navigateFromNotificationData: navigator never became available');
 }
 
-Widget? _destinationFor(Map<String, dynamic> data) {
+Widget? _destinationFor(
+  Map<String, dynamic> data, {
+  required bool fallbackToInbox,
+}) {
+  // Property detail is public — route there regardless of auth state.
   final propertyId = data['property_id']?.toString();
   if (propertyId != null && propertyId.isNotEmpty) {
     return PropertyDetailScreen(propertyId: propertyId);
   }
 
+  // Everything below is only meaningful for a signed-in user.
   final isSignedIn = Supabase.instance.client.auth.currentUser != null;
+  if (!isSignedIn) return null;
 
   // ChatScreen needs participant details the push payload doesn't carry, so a
-  // message tap lands on the conversation list (only meaningful when signed in).
+  // message tap lands on the conversation list.
   final conversationId = data['conversation_id']?.toString();
   if (conversationId != null && conversationId.isNotEmpty) {
-    return isSignedIn ? const ConversationsScreen() : null;
+    return const ConversationsScreen();
   }
 
-  // Any other type (system alerts, approvals without a property_id, etc.) →
-  // open the inbox so the tap always goes somewhere sensible.
-  return isSignedIn ? const NotificationsScreen() : null;
+  // Ad lifecycle notifications (ad_approved / ad_rejected / ad_removed / ad_restored).
+  final type = data['type']?.toString() ?? '';
+  if (type.startsWith('ad_')) {
+    return const AdvertiserDashboard();
+  }
+
+  // Anything else (system alerts, approvals without an id, etc.) → the inbox,
+  // unless the tap originated inside the inbox itself.
+  return fallbackToInbox ? const NotificationsScreen() : null;
 }

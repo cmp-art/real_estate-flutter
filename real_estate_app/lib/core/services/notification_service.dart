@@ -206,12 +206,13 @@ class NotificationService {
 
   /// Insert a single in-app notification.
   ///
-  /// Push delivery is handled SERVER-SIDE: the `on_user_notification_insert`
-  /// trigger (sql5) calls the send-push-notification Edge Function for every
-  /// inserted row. That trigger is the single push path — it also covers
-  /// server-generated notifications (price alerts, admin actions, cron) that
-  /// never pass through this client. We must NOT also invoke the function from
-  /// here, or every app-created notification would be delivered twice.
+  /// Push delivery is handled SERVER-SIDE and DECOUPLED from this INSERT: the
+  /// process_push_queue() pg_cron worker (sql5) POSTs every unpushed
+  /// user_notifications row to the send-push-notification Edge Function every
+  /// ~10s, then stamps pushed_at. That worker is the single push path — it also
+  /// covers server-generated notifications (price alerts, admin actions) that
+  /// never pass through this client. We must NOT invoke the function from here,
+  /// or every app-created notification would be delivered twice.
   Future<bool> createNotification({
     required String userId,
     required NotificationType type,
