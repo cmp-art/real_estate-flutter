@@ -31,9 +31,15 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
   PropertyFilterEntity? _activeFilter;
   Timer? _debounce;
 
+  // Location autocomplete state
+  String _typedText = '';
+  bool _suppressSuggestions = false;
+
   @override
   void initState() {
     super.initState();
+    // Rebuild so the suggestions panel follows the search field's focus.
+    _focusNode.addListener(_onFocusChanged);
     // Auto-focus keyboard when screen opens
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
@@ -43,23 +49,65 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _focusNode.removeListener(_onFocusChanged);
     _searchController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _performSearch() {
     final query = _searchController.text.trim();
+    setState(() => _suppressSuggestions = true);
     if (query.isNotEmpty) {
       ref.read(searchQueryProvider.notifier).state = query;
     }
   }
 
   void _onSearchChanged(String query) {
+    setState(() {
+      _typedText = query.trim();
+      // A fresh keystroke re-enables suggestions after a prior selection/submit.
+      _suppressSuggestions = false;
+    });
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
       ref.read(searchQueryProvider.notifier).state = query.trim();
     });
+  }
+
+  /// Top location matches for [text]; "starts-with" ranked above "contains".
+  List<String> _matchLocations(String text, List<String> locations) {
+    if (text.isEmpty) return const [];
+    final q = text.toLowerCase();
+    final starts = <String>[];
+    final contains = <String>[];
+    for (final loc in locations) {
+      final l = loc.toLowerCase();
+      if (l == q) continue; // already exactly in the field — nothing to add
+      if (l.startsWith(q)) {
+        starts.add(loc);
+      } else if (l.contains(q)) {
+        contains.add(loc);
+      }
+    }
+    return [...starts, ...contains].take(6).toList();
+  }
+
+  void _selectSuggestion(String location) {
+    _debounce?.cancel();
+    _searchController.text = location;
+    _searchController.selection =
+        TextSelection.collapsed(offset: location.length);
+    setState(() {
+      _typedText = location;
+      _suppressSuggestions = true;
+    });
+    ref.read(searchQueryProvider.notifier).state = location;
+    _focusNode.unfocus();
   }
 
   Future<void> _openFilterScreen() async {
@@ -101,8 +149,16 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
     final primaryColor = ThemeConfig.getPrimaryColor(context);
     
     // AppBar foreground color for icons
-    final appBarForegroundColor = theme.appBarTheme.foregroundColor ?? 
+    final appBarForegroundColor = theme.appBarTheme.foregroundColor ??
         (theme.brightness == Brightness.dark ? Colors.white : Colors.black);
+
+    // Location autocomplete: match the typed text against the cached set of
+    // distinct listing locations. Shown only while the field is focused.
+    final allLocations =
+        ref.watch(propertyLocationsProvider).value ?? const <String>[];
+    final suggestions = _matchLocations(_typedText, allLocations);
+    final showSuggestions =
+        _focusNode.hasFocus && !_suppressSuggestions && suggestions.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -127,6 +183,10 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
                     onPressed: () {
                       _searchController.clear();
                       ref.read(searchQueryProvider.notifier).state = '';
+                      setState(() {
+                        _typedText = '';
+                        _suppressSuggestions = true;
+                      });
                       _focusNode.requestFocus();
                     },
                   )
@@ -165,7 +225,9 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Column(
         children: [
           // Active Filters Display
           if (activeFilter != null && activeFilter.hasActiveFilters)
@@ -324,6 +386,11 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
                   ),
           ),
         ],
+          ),
+          if (showSuggestions)
+            _buildSuggestionsOverlay(context, suggestions, textPrimaryColor,
+                textSecondaryColor, primaryColor),
+        ],
       ),
     );
   }
@@ -334,6 +401,55 @@ class _PropertySearchScreenState extends ConsumerState<PropertySearchScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => PropertyDetailScreen(propertyId: property.id),
+      ),
+    );
+  }
+
+  /// Dropdown of matching listing locations, shown over the top of the body
+  /// while the user is typing. Tapping a row fills the search field and runs
+  /// the search for that location.
+  Widget _buildSuggestionsOverlay(
+    BuildContext context,
+    List<String> suggestions,
+    Color textPrimary,
+    Color textSecondary,
+    Color primary,
+  ) {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Material(
+        elevation: 4,
+        color: Theme.of(context).cardColor,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.45,
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            itemCount: suggestions.length,
+            separatorBuilder: (_, __) =>
+                Divider(height: 1, color: textSecondary.withOpacity(0.15)),
+            itemBuilder: (context, index) {
+              final location = suggestions[index];
+              return ListTile(
+                dense: true,
+                leading: Icon(Icons.location_on_outlined, color: primary),
+                title: Text(
+                  location,
+                  style: TextStyle(color: textPrimary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing:
+                    Icon(Icons.north_west, size: 16, color: textSecondary),
+                onTap: () => _selectSuggestion(location),
+              );
+            },
+          ),
+        ),
       ),
     );
   }

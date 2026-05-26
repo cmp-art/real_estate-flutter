@@ -415,6 +415,33 @@ class PropertyRemoteDataSource {
     }
   }
 
+  /// Distinct, non-empty `location` values across all non-deleted listings —
+  /// powers the location autocomplete on the search bar. Selects ONLY the
+  /// `location` column (tiny payload) and de-duplicates case-insensitively in
+  /// Dart, since PostgREST has no DISTINCT operator.
+  Future<List<String>> getPropertyLocations() async {
+    try {
+      final data = await supabaseClient
+          .from('property_list_view') // ✅ OPTIMIZED VIEW
+          .select('location')
+          .neq('status', 'deleted')
+          .limit(5000);
+
+      final seen = <String>{};
+      final result = <String>[];
+      for (final row in data as List) {
+        final loc = (row['location'] as String?)?.trim();
+        if (loc == null || loc.isEmpty) continue;
+        if (seen.add(loc.toLowerCase())) result.add(loc);
+      }
+      result.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      return result;
+    } catch (e) {
+      logger.e('getPropertyLocations failed', error: e);
+      throw ServerException('Failed to load locations: ${e.toString()}');
+    }
+  }
+
   /// Parse properties from property_list_view
   /// This view returns thumbnail_url instead of full images array
   /// FIXED: Added null checks and error handling

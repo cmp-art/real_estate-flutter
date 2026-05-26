@@ -50,4 +50,7 @@ abstract class PropertyRepository {
     int page = 1,
     int limit = 20,
   });
+
+  // Distinct listing locations (powers the search-bar location autocomplete)
+  Future<Either<Failure, List<String>>> getPropertyLocations();
 }

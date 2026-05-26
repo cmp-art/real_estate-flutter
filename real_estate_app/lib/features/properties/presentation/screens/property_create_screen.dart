@@ -24,6 +24,9 @@ import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/responsive_helper.dart';
+// Drag-and-drop file support on desktop web; a no-op stub on native (dart:io).
+import '../../../../core/utils/web_drop_zone.dart'
+    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../settings/presentation/providers/app_providers.dart'
@@ -554,15 +557,21 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
 
     setState(() => _isLoading = true);
 
+    // On web, image_picker returns blob:-URL XFiles whose readAsBytes() can be
+    // intercepted by the PWA service worker and yield HTML instead of the photo.
+    // Resolve them to byte-backed XFiles ONCE (a no-op on native) and reuse the
+    // same list for BOTH moderation and upload, so Gemini sees the real image
+    // bytes on web/PWA exactly like it does on native.
+    final resolvedImages = await _resolveUploadFiles();
+
     // ── AI image moderation — verify photos genuinely show real estate ──────
-    // Gemini runs server-side (works on Android, iOS, Web & PWA). If it is
-    // undeployed / unreachable the service falls back to a rule-based text
-    // check, so a legitimate listing is never blocked just because the Edge
-    // Function isn't live yet.
-    if (_images.isNotEmpty) {
+    // Gemini runs server-side as a plain HTTPS call (works on Android, iOS, Web
+    // & PWA). If it is undeployed / unreachable the submission is allowed
+    // through — photos are never judged by their text.
+    if (resolvedImages.isNotEmpty) {
       final moderation =
           await ref.read(aiValidationServiceProvider).validateProperty(
-        images:      _images,
+        images:      resolvedImages,
         submittedBy: user.id,
       );
       if (!mounted) return;
@@ -622,8 +631,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
 
         bool uploadFailed = false;
         if (_images.isNotEmpty) {
-          // On web: resolve blob-URL XFiles to byte-backed XFiles first
-          final toUpload = await _resolveUploadFiles();
+          // Reuse the byte-backed XFiles already resolved above (web blob/SW bypass).
+          final toUpload = resolvedImages;
           final uploadResult = await repo.uploadImages(saved.id, toUpload);
           await uploadResult.fold(
             (_) async { uploadFailed = true; },
@@ -754,7 +763,22 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         title: Text(_isEditing ? s.editProperty : s.addProperty),
         centerTitle: false,
       ),
-      body: Form(
+      // On desktop web the whole form is a drop target: photos dropped from the
+      // file explorer are added just like gallery picks. No-op on native.
+      body: WebDropZone(
+        maxFiles: AppConstants.maxImagesPerProperty,
+        onFilesDropped: (dropped) async {
+          final remaining = AppConstants.maxImagesPerProperty - _images.length;
+          if (remaining <= 0) {
+            _snack('Maximum ${AppConstants.maxImagesPerProperty} photos allowed',
+                isError: true);
+            return;
+          }
+          final toAdd = dropped.take(remaining).toList();
+          await _cacheWebBytes(toAdd);
+          if (mounted) setState(() => _images.addAll(toAdd));
+        },
+        child: Form(
           key: _formKey,
           child: ListView(
             padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 32),
@@ -995,6 +1019,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             ],
           ),
         ),
+      ),
     );
   }
 

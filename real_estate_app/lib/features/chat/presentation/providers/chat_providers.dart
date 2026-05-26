@@ -444,9 +444,15 @@ class ChatNotifier extends StateNotifier<AsyncValue<void>> {
   // Refreshes only the message-level providers for a conversation.
   // Does NOT touch conversationsProvider — that is handled by ChatScreen.dispose
   // to avoid the unread-badge race condition.
+  //
+  // With `messages` published to Supabase Realtime (see PART 6 in sql5), the
+  // open chat stream receives the INSERT/UPDATE/DELETE live, so the message
+  // appears on its own. A SINGLE invalidate re-subscribes and re-fetches the
+  // snapshot as a safety net. We deliberately do NOT also call refresh() right
+  // after: invalidate + refresh tore the realtime channel down and re-created
+  // it back-to-back, which could drop the very event carrying the new message.
   void _refreshMessageProviders(String conversationId) {
     _ref.invalidate(messagesStreamProvider(conversationId));
-    _ref.refresh(messagesStreamProvider(conversationId));
     _ref.invalidate(messagesProvider(conversationId));
   }
 }

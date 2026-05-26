@@ -605,6 +605,15 @@ final archivedPropertiesProvider = StateNotifierProvider<ArchivedPropertiesNotif
 
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
+/// Distinct listing locations used to power the search-bar location
+/// autocomplete. Loaded once and cached for the session; failures yield an
+/// empty list so the search bar simply shows no suggestions.
+final propertyLocationsProvider = FutureProvider<List<String>>((ref) async {
+  final repository = ref.read(propertyRepositoryProvider);
+  final result = await repository.getPropertyLocations();
+  return result.fold((_) => <String>[], (locations) => locations);
+});
+
 final searchResultsProvider = FutureProvider<List<PropertyEntity>>((ref) async {
   final query = ref.watch(searchQueryProvider);
   
