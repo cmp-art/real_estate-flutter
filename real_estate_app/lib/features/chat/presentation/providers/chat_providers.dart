@@ -1,4 +1,6 @@
 // features/chat/presentation/providers/chat_providers.dart
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../main.dart';
 import '../../../../presentation/providers/auth_provider.dart';
@@ -67,6 +69,147 @@ final messagesStreamProvider = StreamProvider.autoDispose.family<List<MessageEnt
       return <MessageEntity>[];
     });
   },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT MESSAGES — reliable display source (replaces watching the raw stream)
+//
+// The chat view used to render straight off the realtime .stream(). When
+// realtime is unavailable that stream errors and the datasource yields an empty
+// list, which made every sent message "disappear". Instead this notifier:
+//   1. fetches the messages once via getMessages() — reliable on native, web
+//      AND pwa,
+//   2. subscribes to realtime as a BEST-EFFORT live feed (errors are ignored,
+//      and a spurious empty emission never blanks a non-empty conversation),
+//   3. shows freshly-sent messages optimistically by their real DB id, so they
+//      appear instantly even when realtime is down.
+// ─────────────────────────────────────────────────────────────────────────────
+class ChatMessagesNotifier
+    extends StateNotifier<AsyncValue<List<MessageEntity>>> {
+  ChatMessagesNotifier(this._repository, this.conversationId)
+      : super(const AsyncValue.loading()) {
+    _init();
+  }
+
+  final ChatRepository _repository;
+  final String conversationId;
+
+  StreamSubscription<List<MessageEntity>>? _sub;
+  List<MessageEntity> _server = const [];
+  final List<MessageEntity> _pending = [];
+
+  Future<void> _init() async {
+    // 1) Reliable initial fetch.
+    final result = await _repository.getMessages(conversationId);
+    result.fold(
+      (failure) {
+        if (_server.isEmpty && _pending.isEmpty) {
+          state = AsyncValue.error(failure.message, StackTrace.current);
+        }
+      },
+      (messages) {
+        _server = messages;
+        _emit();
+      },
+    );
+
+    // 2) Best-effort realtime. Never let it blank an existing list or surface
+    //    an error — the fetched messages above are the source of truth.
+    _sub = _repository.subscribeToMessages(conversationId).listen(
+      (messages) {
+        if (messages.isEmpty && _server.isNotEmpty) return; // ignore error []
+        _server = messages;
+        _reconcilePending();
+        _emit();
+      },
+      onError: (_) {/* keep last known good state */},
+      cancelOnError: false,
+    );
+  }
+
+  /// Optimistically show a just-sent (already persisted, real-id) message.
+  void addLocal(MessageEntity message) {
+    final exists = _server.any((m) => m.id == message.id) ||
+        _pending.any((m) => m.id == message.id);
+    if (exists) return;
+    _pending.add(message);
+    _emit();
+  }
+
+  /// Send + optimistically display. Returns the saved message, or null on error.
+  Future<MessageEntity?> send({
+    required String senderId,
+    required String senderName,
+    required String content,
+    String type = 'text',
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSenderName,
+  }) async {
+    final result = await _repository.sendMessage(
+      conversationId: conversationId,
+      senderId: senderId,
+      senderName: senderName,
+      content: content,
+      type: type,
+      replyToId: replyToId,
+      replyToContent: replyToContent,
+      replyToSenderName: replyToSenderName,
+    );
+    return result.fold(
+      (failure) {
+        logger.e('sendMessage failed', error: failure.message);
+        return null;
+      },
+      (message) {
+        addLocal(message);
+        return message;
+      },
+    );
+  }
+
+  /// Re-fetch from the server (after an edit / delete).
+  Future<void> reload() async {
+    final result = await _repository.getMessages(conversationId);
+    result.fold((_) {}, (messages) {
+      _server = messages;
+      _reconcilePending();
+      _emit();
+    });
+  }
+
+  void _reconcilePending() {
+    if (_pending.isEmpty) return;
+    final serverIds = _server.map((m) => m.id).toSet();
+    _pending.removeWhere((m) => serverIds.contains(m.id));
+  }
+
+  void _emit() {
+    final byId = <String, MessageEntity>{};
+    for (final m in _server) {
+      byId[m.id] = m;
+    }
+    for (final m in _pending) {
+      byId.putIfAbsent(m.id, () => m);
+    }
+    // Newest first — the chat ListView is reverse:true, so index 0 sits at the
+    // bottom where the most recent message belongs.
+    final merged = byId.values.where((m) => !m.deletedForMe).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (mounted) state = AsyncValue.data(merged);
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+}
+
+final chatMessagesProvider = StateNotifierProvider.autoDispose
+    .family<ChatMessagesNotifier, AsyncValue<List<MessageEntity>>, String>(
+  (ref, conversationId) =>
+      ChatMessagesNotifier(ref.read(chatRepositoryProvider), conversationId),
 );
 
 // Chat Notifier for managing chat operations

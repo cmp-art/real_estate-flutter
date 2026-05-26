@@ -136,8 +136,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         setState(() => _showPropertyAttachment = false);
       }
 
-      final success = await ref.read(chatNotifierProvider.notifier).sendMessage(
-            conversationId: widget.conversationId,
+      // Sends AND optimistically shows the message immediately (by its real DB
+      // id), so it appears on screen even if realtime is unavailable.
+      final sent = await ref
+          .read(chatMessagesProvider(widget.conversationId).notifier)
+          .send(
             senderId: user.id,
             senderName: user.fullName ?? 'User',
             content: messageContent,
@@ -147,7 +150,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             replyToSenderName: _replyToMessage?.senderName,
           );
 
-      if (success) {
+      if (sent != null) {
         if (_replyToMessage != null) {
           setState(() => _replyToMessage = null);
         }
@@ -160,6 +163,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             );
           }
         });
+      } else if (mounted) {
+        SnackbarUtils.showError(context, 'Failed to send message');
       }
     } catch (e) {
       if (mounted) SnackbarUtils.showError(context, 'Error sending message');
@@ -224,8 +229,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (success && mounted) {
         _logger.i('✅ Delete successful');
 
-        ref.invalidate(messagesStreamProvider(widget.conversationId));
-        ref.refresh(messagesStreamProvider(widget.conversationId));
+        await ref
+            .read(chatMessagesProvider(widget.conversationId).notifier)
+            .reload();
         setState(() {});
 
         SnackbarUtils.showSuccess(
@@ -248,8 +254,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
 
     if (success && mounted) {
-      ref.invalidate(messagesStreamProvider(widget.conversationId));
-      ref.refresh(messagesStreamProvider(widget.conversationId));
+      await ref
+          .read(chatMessagesProvider(widget.conversationId).notifier)
+          .reload();
       setState(() => _tappedMessageId = null);
       SnackbarUtils.showSuccess(context, 'Message edited successfully');
     }
@@ -333,8 +340,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (success && mounted) {
         final count = _selectionManager.selectedCount;
         _selectionManager.exitSelectionMode();
-        ref.invalidate(messagesStreamProvider(widget.conversationId));
-        ref.refresh(messagesStreamProvider(widget.conversationId));
+        await ref
+            .read(chatMessagesProvider(widget.conversationId).notifier)
+            .reload();
         setState(() {});
         SnackbarUtils.showSuccess(context, '$count message(s) deleted');
       }
@@ -563,7 +571,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final messagesStream =
-        ref.watch(messagesStreamProvider(widget.conversationId));
+        ref.watch(chatMessagesProvider(widget.conversationId));
     final user = ref.watch(authNotifierProvider).value;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -589,7 +597,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     icon: const Icon(Icons.select_all),
                     onPressed: () {
                       final messages = ref
-                          .read(messagesStreamProvider(widget.conversationId))
+                          .read(chatMessagesProvider(widget.conversationId))
                           .value;
                       if (messages != null) _handleSelectAll(messages);
                     }),

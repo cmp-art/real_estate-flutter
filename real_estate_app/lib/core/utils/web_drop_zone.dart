@@ -28,56 +28,86 @@ class WebDropZone extends StatefulWidget {
 
 class _WebDropZoneState extends State<WebDropZone> {
   bool _isDragging = false;
+  // Tracks dragenter/dragleave nesting so the highlight doesn't flicker as the
+  // cursor crosses between child elements during a drag.
+  int _dragDepth = 0;
 
   // Use html.EventListener type alias (Function(Event)) — avoids DragEvent
   // which is not exported in all dart:html versions.
+  late final html.EventListener _enterListener;
   late final html.EventListener _overListener;
   late final html.EventListener _leaveListener;
   late final html.EventListener _dropListener;
+
+  void _setDragging(bool value) {
+    if (_isDragging != value && mounted) setState(() => _isDragging = value);
+  }
 
   @override
   void initState() {
     super.initState();
 
+    // dragenter: some browsers require preventDefault here (in addition to
+    // dragover) before they will deliver a `drop` event at all.
+    _enterListener = (html.Event e) {
+      e.preventDefault();
+      _dragDepth++;
+      _setDragging(true);
+    };
+
+    // dragover MUST preventDefault on EVERY event or the browser silently
+    // refuses to fire `drop`. We do not stopPropagation so Flutter's own
+    // handling is left intact.
     _overListener = (html.Event e) {
       e.preventDefault();
-      e.stopPropagation();
-      if (!_isDragging && mounted) setState(() => _isDragging = true);
+      _setDragging(true);
     };
 
     _leaveListener = (html.Event e) {
       e.preventDefault();
-      if (_isDragging && mounted) setState(() => _isDragging = false);
+      if (--_dragDepth <= 0) {
+        _dragDepth = 0;
+        _setDragging(false);
+      }
     };
 
     _dropListener = (html.Event e) {
       e.preventDefault();
       e.stopPropagation();
-      if (mounted) setState(() => _isDragging = false);
+      _dragDepth = 0;
+      _setDragging(false);
 
-      // Access dataTransfer dynamically — DragEvent may not be exported.
-      // ignore: avoid_dynamic_calls
-      final dynamic dt = (e as dynamic).dataTransfer;
-      if (dt == null) return;
-
-      // ignore: avoid_dynamic_calls
-      final html.FileList? files = dt.files as html.FileList?;
-      if (files == null || files.isEmpty) return;
-
-      _processFiles(files);
+      final files = _extractFiles(e);
+      if (files != null && files.isNotEmpty) _processFiles(files);
     };
 
     // Use window + capture=true so our listeners fire BEFORE Flutter's
     // CanvasKit canvas can call stopPropagation() on drag events.
     // Without capture mode, body listeners never receive the events and
     // the drop is silently ignored by the browser.
+    html.window.addEventListener('dragenter', _enterListener, true);
     html.window.addEventListener('dragover',  _overListener,  true);
     html.window.addEventListener('dragleave', _leaveListener, true);
     html.window.addEventListener('drop',      _dropListener,  true);
   }
 
+  // Pull the dropped FileList off the event's dataTransfer. DragEvent is not
+  // reliably exported by dart:html, so we read it dynamically and guard it.
+  html.FileList? _extractFiles(html.Event e) {
+    try {
+      // ignore: avoid_dynamic_calls
+      final dynamic dt = (e as dynamic).dataTransfer;
+      if (dt == null) return null;
+      // ignore: avoid_dynamic_calls
+      return dt.files as html.FileList?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   void dispose() {
+    html.window.removeEventListener('dragenter', _enterListener, true);
     html.window.removeEventListener('dragover',  _overListener,  true);
     html.window.removeEventListener('dragleave', _leaveListener, true);
     html.window.removeEventListener('drop',      _dropListener,  true);

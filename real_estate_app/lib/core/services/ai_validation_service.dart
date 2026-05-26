@@ -396,12 +396,10 @@ class AiValidationService {
       }
     }
 
-    // Gemini is the ONLY content gate. If it can't run, allow the submission
-    // (we never judge it by its text).
-    if (!_health.isHealthy) {
-      _log('Gemini circuit open — allowing $type (image check skipped)');
-      return _pass('Image check temporarily unavailable — allowed.');
-    }
+    // Gemini is the ONLY content gate and it runs on EVERY save. We never let
+    // an unverified image through: if Gemini cannot return a verdict (offline /
+    // unreachable / timeout) the submission is BLOCKED and the user is asked to
+    // try again, so pressing "save" a second time always re-checks the photos.
     try {
       final result = await _runGemini(images: images, isAd: isAd).timeout(_timeout);
       _health.recordSuccess();
@@ -409,8 +407,10 @@ class AiValidationService {
       return result;
     } catch (e) {
       _health.recordFailure();
-      _log('$type Gemini moderation unavailable: $e — allowing (image check skipped)');
-      return _pass('Image check temporarily unavailable — allowed.');
+      _log('$type Gemini moderation unavailable: $e — blocking (no verdict)');
+      final blocked = _unavailable();
+      await _logValidation(type: type, result: blocked, submittedBy: submittedBy);
+      return blocked;
     }
   }
 
@@ -461,14 +461,30 @@ class AiValidationService {
     );
   }
 
-  /// Approve with no findings — used when there are no photos to check or when
-  /// the image moderator can't run. Text / description is NEVER judged.
+  /// Approve with no findings — used only when there are NO photos to check
+  /// (text / description is never judged).
   ValidationResult _pass(String reason) => ValidationResult(
         status:     ValidationStatus.approved,
         method:     ValidationMethod.ai,
         approved:   true,
         confidence: 100,
         reason:     reason,
+      );
+
+  /// Returned when the AI moderator could not produce a verdict (offline /
+  /// unreachable / timeout). The submission is BLOCKED — every save must pass a
+  /// real image check — and the user is asked to retry.
+  ValidationResult _unavailable() => const ValidationResult(
+        status:     ValidationStatus.pending,
+        method:     ValidationMethod.failed,
+        approved:   false,
+        confidence: 0,
+        reason:
+            'We could not verify your photos just now. Check your connection '
+            'and tap save again to re-run the photo check.',
+        suggestions: [
+          'Make sure you are online, then save again so the AI can review your photos.',
+        ],
       );
 
   Future<ValidationResult> _hardReject({
