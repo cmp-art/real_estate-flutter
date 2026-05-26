@@ -18,3 +18,11 @@ verify_jwt = false
 # Called by Supabase internal webhook (not by the Flutter client), so no JWT.
 [functions.process-staged-image]
 verify_jwt = false
+
+# Image moderation (Gemini Flash-Lite). The Flutter client calls this with the
+# publishable (anon) apikey, which is NOT a JWT — so JWT verification must be
+# OFF (same reason as transcode-image) or the gateway 401s every call. With this
+# set, `supabase functions deploy validate_content` stays publicly callable
+# without needing the --no-verify-jwt flag each time.
+[functions.validate_content]
+verify_jwt = false
