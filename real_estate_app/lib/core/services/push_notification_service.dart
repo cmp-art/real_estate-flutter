@@ -18,11 +18,14 @@
 
 // ignore_for_file: avoid_print
 
+import 'dart:convert';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../utils/app_navigator.dart';
 import '../utils/logger.dart';
 
 // Conditional import: web_push_js.dart on Flutter web (dart:js_interop),
@@ -56,10 +59,23 @@ class PushNotificationService {
         onDidReceiveNotificationResponse: _onNotificationTap,
       );
       // Android 13+ explicit permission request
-      await _plugin
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
-          ?.requestNotificationsPermission();
+      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin?.requestNotificationsPermission();
+
+      // Create the high-importance channel up-front so OS-rendered background /
+      // killed FCM notifications use it (heads-up banner) instead of a
+      // default-importance fallback. Must match the id used in show() and the
+      // manifest's default_notification_channel_id meta-data.
+      await androidPlugin?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'patamjengo_main',
+          'Patamjengo Alerts',
+          description:
+              'Property price drops, new listings, messages, and system alerts',
+          importance: Importance.high,
+        ),
+      );
     }
 
     // ── FCM permission + foreground / tap handlers ──────────────────────────
@@ -81,7 +97,7 @@ class PushNotificationService {
     // User tapped a notification while the app was in the background (not killed)
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       debugPrint('[FCM] Notification tapped from background: ${message.data}');
-      // The app's router can listen to this stream for navigation.
+      navigateFromNotificationData(message.data);
     });
 
     // Check if app was launched by tapping a notification (killed state)
@@ -89,6 +105,7 @@ class PushNotificationService {
     if (initialMessage != null) {
       debugPrint(
           '[FCM] App launched from notification: ${initialMessage.data}');
+      navigateFromNotificationData(initialMessage.data);
     }
 
     _initialized = true;
@@ -115,7 +132,21 @@ class PushNotificationService {
             final title = row['title'] as String? ?? 'New Notification';
             final message = row['message'] as String? ?? '';
             final id = row['id'] as String? ?? '';
-            show(title: title, body: message, payload: id, id: id.hashCode);
+            // Encode routing data (type + the notification's data map) so a tap
+            // on this foreground banner deep-links the same way a background FCM
+            // tap does. _onNotificationTap decodes it.
+            final data = row['data'];
+            final routeData = <String, dynamic>{
+              'type': row['type'],
+              'notification_id': id,
+              if (data is Map) ...Map<String, dynamic>.from(data),
+            };
+            show(
+              title: title,
+              body: message,
+              payload: jsonEncode(routeData),
+              id: id.hashCode,
+            );
           },
         )
         .subscribe();
@@ -250,5 +281,15 @@ class PushNotificationService {
 
   void _onNotificationTap(NotificationResponse response) {
     debugPrint('Notification tapped: ${response.payload}');
+    final payload = response.payload;
+    if (payload == null || payload.isEmpty) return;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map<String, dynamic>) {
+        navigateFromNotificationData(decoded);
+      }
+    } catch (_) {
+      // Plain/legacy payload (not JSON) — nothing to route to.
+    }
   }
 }

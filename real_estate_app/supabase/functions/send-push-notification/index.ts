@@ -138,7 +138,14 @@ async function sendFcmMessage(
         data,
         android: {
           priority: 'high',
-          notification: { sound: 'default', click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+          // channel_id must match the high-importance channel the app creates at
+          // startup + the manifest default_notification_channel_id, so background
+          // banners show as heads-up instead of on a low-importance fallback.
+          notification: {
+            sound: 'default',
+            channel_id: 'patamjengo_main',
+            click_action: 'FLUTTER_NOTIFICATION_CLICK',
+          },
         },
         apns: {
           payload: { aps: { sound: 'default', 'content-available': 1 } },

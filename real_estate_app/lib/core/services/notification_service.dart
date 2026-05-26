@@ -204,11 +204,14 @@ class NotificationService {
   // WRITES — in-app notification creation
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Insert a single in-app notification, then fire a push notification.
+  /// Insert a single in-app notification.
   ///
-  /// Push delivery uses the send-push-notification Edge Function called
-  /// directly from the app — no Supabase Database Webhook needed.
-  /// The push call is fire-and-forget: a failure never blocks the in-app insert.
+  /// Push delivery is handled SERVER-SIDE: the `on_user_notification_insert`
+  /// trigger (sql5) calls the send-push-notification Edge Function for every
+  /// inserted row. That trigger is the single push path — it also covers
+  /// server-generated notifications (price alerts, admin actions, cron) that
+  /// never pass through this client. We must NOT also invoke the function from
+  /// here, or every app-created notification would be delivered twice.
   Future<bool> createNotification({
     required String userId,
     required NotificationType type,
@@ -218,67 +221,19 @@ class NotificationService {
   }) async {
     if (userId.isEmpty) return false;
     try {
-      // Insert and return the new row so we have its generated id for push.
-      final row = await _supabase
-          .from('user_notifications')
-          .insert({
-            'user_id': userId,
-            'type':    type.value,
-            'title':   title,
-            'message': message,
-            'data':    data,
-            'is_read': false,
-          })
-          .select()
-          .single();
-
-      // Fire-and-forget: send FCM push via the edge function.
-      // No webhook needed — we call it directly right after the INSERT.
-      _sendPushNotification(
-        userId:  userId,
-        id:      row['id'] as String? ?? '',
-        type:    type.value,
-        title:   title,
-        message: message,
-        data:    data,
-      );
-
+      await _supabase.from('user_notifications').insert({
+        'user_id': userId,
+        'type':    type.value,
+        'title':   title,
+        'message': message,
+        'data':    data,
+        'is_read': false,
+      });
       return true;
     } catch (e) {
       debugPrint('[NotificationService] createNotification: $e');
       return false;
     }
-  }
-
-  /// Calls send-push-notification Edge Function directly (no webhook required).
-  /// Errors are swallowed — push is best-effort; the in-app row already exists.
-  void _sendPushNotification({
-    required String userId,
-    required String id,
-    required String type,
-    required String title,
-    required String message,
-    Map<String, dynamic>? data,
-  }) {
-    Future.microtask(() async {
-      try {
-        await _supabase.functions.invoke(
-          'send-push-notification',
-          body: {
-            'user_id': userId,
-            'id':      id,
-            'type':    type,
-            'title':   title,
-            'message': message,
-            'data':    data ?? <String, dynamic>{},
-          },
-        );
-        debugPrint('[NotificationService] ✅ Push sent for notification $id');
-      } catch (e) {
-        // Push failure is non-fatal — in-app notification is already created.
-        debugPrint('[NotificationService] ⚠️ Push send failed (non-fatal): $e');
-      }
-    });
   }
 
   // ── Typed convenience methods — called from admin_service.dart / ai_validation_service.dart ──

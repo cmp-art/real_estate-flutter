@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/config/theme_config.dart';
 import 'core/constants/app_constants.dart';
+import 'core/utils/app_navigator.dart';
 import 'core/utils/logger.dart';
 import 'features/main_navigation/presentation/screens/main_screen.dart';
 import 'features/settings/presentation/providers/app_providers.dart';
@@ -29,8 +30,6 @@ class PatamjengoApp extends ConsumerStatefulWidget {
 }
 
 class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-
   @override
   void initState() {
     super.initState();
@@ -48,7 +47,7 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
         ref.read(isPasswordRecoveryProvider.notifier).state = true;
         
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          final navigator = _navigatorKey.currentState;
+          final navigator = rootNavigatorKey.currentState;
           if (navigator != null) {
             logger.d('🚀 Pushing ResetPasswordScreen to navigator');
             navigator.pushAndRemoveUntil(
@@ -119,7 +118,7 @@ class _PatamjengoAppState extends ConsumerState<PatamjengoApp> {
     });
 
     return MaterialApp(
-      navigatorKey: _navigatorKey,
+      navigatorKey: rootNavigatorKey,
       title: 'Patamjengo - Buy, Sell & Rent Property in Tanzania | Real Estate',
       debugShowCheckedModeBanner: false,
       theme: ThemeConfig.lightTheme,

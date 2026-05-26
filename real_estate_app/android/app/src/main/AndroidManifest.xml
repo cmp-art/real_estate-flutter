@@ -124,6 +124,15 @@
         <meta-data android:name="com.google.android.gms.version"
                    android:value="@integer/google_play_services_version" />
 
+        <!-- ── FCM: default channel for OS-displayed background/killed pushes ──
+             Background notification messages are rendered by the FCM SDK, not by
+             flutter_local_notifications. Without this, they land on a low-importance
+             fallback channel (no heads-up banner). Point them at the same
+             high-importance channel the app creates at startup (patamjengo_main). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="patamjengo_main" />
+
         <!-- ── Flutter v2 embedding declaration (required by Flutter 3.3+) ── -->
         <!-- Without this tag Flutter tools default to v1 and fail the build  -->
         <meta-data
