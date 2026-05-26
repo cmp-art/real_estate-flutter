@@ -3,26 +3,10 @@
 
 project_id = "qeddjlmexurmeiuslgqn"
 
-# The image transcoder must be reachable by the app using the publishable
-# (anon) API key, including unauthenticated/guest flows. Supabase's new API-key
-# format (sb_publishable_...) is NOT a JWT, so the gateway's JWT verification
-# rejected every call with UNAUTHORIZED_INVALID_JWT_FORMAT — which silently
-# dropped HEIC/AVIF photos on the web. Turning verification off lets the
-# function run with the apikey header alone. The function only transcodes image
-# bytes to JPEG (no database access, no secrets), so public access is safe.
-[functions.transcode-image]
-verify_jwt = false
-
-# Webhook-triggered background worker: processes raw uploads from staging_media,
-# transcodes via ImageMagick, and publishes clean JPEGs to public_media.
-# Called by Supabase internal webhook (not by the Flutter client), so no JWT.
-[functions.process-staged-image]
-verify_jwt = false
-
 # Image moderation (Gemini Flash-Lite). The Flutter client calls this with the
 # publishable (anon) apikey, which is NOT a JWT — so JWT verification must be
-# OFF (same reason as transcode-image) or the gateway 401s every call. With this
-# set, `supabase functions deploy validate-content` stays publicly callable
-# without needing the --no-verify-jwt flag each time.
+# OFF or the gateway rejects every call with UNAUTHORIZED_INVALID_JWT_FORMAT.
+# With this set, `supabase functions deploy validate-content` stays publicly
+# callable without needing the --no-verify-jwt flag each time.
 [functions.validate-content]
 verify_jwt = false

@@ -10,7 +10,6 @@ import '../../../../core/utils/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../../../core/providers/ip_country_provider.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../advertising/presentation/provider/ad_providers.dart';
@@ -180,13 +179,10 @@ class _PropertyListScreenDirectAdsState
     final user = ref.read(authNotifierProvider).value;
     final adService = ref.read(directAdServiceProvider);
 
-    // IP country for ad targeting — independent of the property browse filter
-    final String? ipCountry = await ref.read(ipCountryProvider.future).catchError((_) => null);
-
     // ── Guest path: always show ads (equivalent to free tier) ────────────────
     if (user == null) {
       final guestId = await _getOrCreateGuestId();
-      debugPrint('🔵 ADS: loading for guest $guestId (country: $ipCountry)');
+      debugPrint('🔵 ADS: loading for guest $guestId');
 
       // Try GPS for location-targeted ads; silently skip on failure
       String? guestRegion;
@@ -210,7 +206,7 @@ class _PropertyListScreenDirectAdsState
           userId: guestId,
           screenName: 'property_list',
           userRegion: guestRegion,
-          userCountry: ipCountry,
+          userCountry: null,
           limit: 10,
         );
         debugPrint('🟢 ADS: guest loaded ${ads.length} ads');
@@ -234,7 +230,7 @@ class _PropertyListScreenDirectAdsState
     }
 
     // ── Authenticated user path ───────────────────────────────────────────────
-    debugPrint('🔵 ADS: loading for user ${user.id} (country: $ipCountry)');
+    debugPrint('🔵 ADS: loading for user ${user.id}');
 
     final isAdmin = await ref.read(adminServiceProvider).isAdmin(user.id);
 
@@ -246,7 +242,7 @@ class _PropertyListScreenDirectAdsState
           userId: user.id,
           screenName: 'property_list',
           userRegion: null,
-          userCountry: ipCountry,
+          userCountry: null,
           limit: 10,
         );
       } catch (e) {
@@ -301,7 +297,7 @@ class _PropertyListScreenDirectAdsState
         userId: user.id,
         screenName: 'property_list',
         userRegion: userRegion,
-        userCountry: ipCountry,
+        userCountry: null,
         limit: 10,
       );
       debugPrint('🟢 ADS: RPC returned ${ads.length} ads');

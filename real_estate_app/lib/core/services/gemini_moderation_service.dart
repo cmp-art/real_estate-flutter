@@ -49,8 +49,8 @@ class GeminiModerationService {
   final SupabaseClient _supabase;
 
   /// Name of the deployed Edge Function. NOTE: the slug uses a HYPHEN to match
-  /// the deployed function and the project's other functions (transcode-image,
-  /// etc.) — an underscore here 404s ("Requested function was not found").
+  /// the deployed function and the project's other functions (e.g.
+  /// send-push-notification) — an underscore 404s ("function was not found").
   static const String _functionName = 'validate-content';
 
   /// Long-edge target for the thumbnail sent to Gemini — plenty for the model

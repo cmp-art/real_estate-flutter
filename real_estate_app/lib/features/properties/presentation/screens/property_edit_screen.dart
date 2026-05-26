@@ -194,8 +194,8 @@ class _PropertyEditScreenState extends ConsumerState<PropertyEditScreen> {
 
     // ── Crop each photo to 4:3 and normalise it to a renderable format ────
     // cropToCard returns null when an image can't be made browser-renderable
-    // (e.g. an iPhone HEIC the server couldn't transcode). Skip those instead
-    // of uploading a file that shows broken.
+    // (e.g. an iPhone HEIC the pure-Dart decoder can't read on desktop web).
+    // Skip those instead of uploading a file that shows broken.
     final cropped = <XFile>[];
     int skipped = 0;
     for (final image in images) {

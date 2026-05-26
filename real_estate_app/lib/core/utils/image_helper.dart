@@ -203,20 +203,18 @@ class ImageHelper {
   }
 
   // ── Normalise any picked image into a safe-to-upload file ─────────────────
-  // Universal Upload Architecture: the client is a "dumb pipe". All heavy
-  // processing (HEIC transcoding, EXIF stripping, format detection) happens
-  // asynchronously in the process-staged-image Edge Function after upload.
-  //
-  // This method still performs optional local optimisations for UX:
-  //   • Web: tries Canvas crop-to-4:3 for common formats (JPEG/PNG/WebP). Falls
-  //     back to raw bytes for HEIC/AVIF/unknown — the backend handles those.
+  // Optional local optimisation for UX before the direct upload:
+  //   • Web: tries Canvas crop-to-4:3 for common formats (JPEG/PNG/WebP); falls
+  //     back to raw bytes for HEIC/AVIF/unknown (ImageUploadService coerces
+  //     those to a servable JPEG at upload time).
   //   • Native: uses image_picker's built-in HEIC→JPEG transcoding + runs the
   //     crop in a background isolate for consistent card display.
   //
   // RETURN CONTRACT:
-  //   • non-null XFile → bytes ready for staging upload.
+  //   • non-null XFile → bytes ready to upload.
   //   • null ONLY for empty bytes or an HTML service-worker poison page.
-  //     HEIC / AVIF / unknown formats are NEVER dropped — they go to the backend.
+  //     HEIC / AVIF / unknown formats are NEVER dropped — ImageUploadService
+  //     coerces them to a servable JPEG at upload time.
   Future<XFile?> normalizeForUpload(
     BuildContext context,
     XFile image, {

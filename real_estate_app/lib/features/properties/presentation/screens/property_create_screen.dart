@@ -443,9 +443,10 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (!mounted) return;
 
     // cropToCard is best-effort: on web it canvas-crops JPEG/PNG/WebP; for
-    // HEIC/AVIF it returns null and we fall back to the raw bytes the backend
-    // will transcode. We only drop an image if it had NO readable bytes at all
-    // (already filtered by pickMultipleImages via onUnreadable above).
+    // HEIC/AVIF it returns null and we fall back to the raw bytes, which
+    // ImageUploadService coerces to a servable JPEG at upload time. We only
+    // drop an image if it had NO readable bytes at all (already filtered by
+    // pickMultipleImages via onUnreadable above).
     final ready = <XFile>[];
     for (final image in picked) {
       if (!mounted) break;
