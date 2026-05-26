@@ -13,7 +13,7 @@
 //   (we never judge it by its text); rejections come only from a real verdict.
 //
 // Gemini runs on EVERY platform (Android, iOS, Web, PWA) because it is a plain
-// HTTPS call to the `validate_content` Edge Function — there is no on-device
+// HTTPS call to the `validate-content` Edge Function — there is no on-device
 // model. The Gemini API key lives ONLY as the GEMINI_API_KEY Edge Function
 // secret and never reaches the client.
 //

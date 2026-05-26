@@ -1,6 +1,6 @@
 // lib/core/services/gemini_moderation_service.dart
 //
-// Cross-platform client for the `validate_content` Supabase Edge Function,
+// Cross-platform client for the `validate-content` Supabase Edge Function,
 // which runs Gemini Flash-Lite image moderation server-side. Works identically
 // on Android, iOS, Web and PWA because it is just an authenticated HTTPS call —
 // there is no on-device model and the Gemini API key never reaches the client.
@@ -48,8 +48,10 @@ class GeminiModerationService {
 
   final SupabaseClient _supabase;
 
-  /// Name of the deployed Edge Function (see supabase/functions/validate_content).
-  static const String _functionName = 'validate_content';
+  /// Name of the deployed Edge Function. NOTE: the slug uses a HYPHEN to match
+  /// the deployed function and the project's other functions (transcode-image,
+  /// etc.) — an underscore here 404s ("Requested function was not found").
+  static const String _functionName = 'validate-content';
 
   /// Long-edge target for the thumbnail sent to Gemini — plenty for the model
   /// to recognise the subject, while keeping each image tiny on the wire.

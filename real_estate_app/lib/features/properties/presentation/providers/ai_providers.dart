@@ -4,7 +4,7 @@
 //
 // The Anthropic API key is stored ONLY as a Supabase Edge Function secret.
 // It is NEVER fetched to the client device.
-// All AI calls go through the validate_content Edge Function (server-side proxy).
+// All AI calls go through the validate-content Edge Function (server-side proxy).
 //
 // To set/update the key:
 //   Supabase Dashboard → Edge Functions → Secrets → ANTHROPIC_API_KEY

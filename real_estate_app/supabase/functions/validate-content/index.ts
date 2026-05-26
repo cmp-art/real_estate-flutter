@@ -1,4 +1,4 @@
-// supabase/functions/validate_content/index.ts
+// supabase/functions/validate-content/index.ts
 //
 // Gemini content moderation for Patamjengo — runs on EVERY platform
 // (Android, iOS, Web, PWA) because it is a plain server-side HTTPS endpoint.
@@ -42,7 +42,7 @@
 //
 // ── Deploy ────────────────────────────────────────────────────────────────────
 //   supabase secrets set GEMINI_API_KEY=<your key from aistudio.google.com>
-//   supabase functions deploy validate_content --no-verify-jwt
+//   supabase functions deploy validate-content --no-verify-jwt
 //   (Optional) pin the model:  supabase secrets set GEMINI_MODEL=gemini-3.1-flash-lite
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
