@@ -1,10 +1,13 @@
 // lib/features/notifications/presentation/screens/notifications_screen.dart
 // User notification inbox — reads from user_notifications Supabase table
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/theme_config.dart';
+import '../../../../core/services/push_notification_service.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../../core/utils/responsive_helper.dart';
 import '../../../../core/utils/app_navigator.dart';
@@ -83,12 +86,17 @@ class NotificationsNotifier extends StateNotifier<NotificationsState> {
   final SupabaseClient _supabase;
   final String _userId;
   RealtimeChannel? _channel;
+  StreamSubscription<void>? _pushSub;
 
   NotificationsNotifier(this._supabase, this._userId)
       : super(const NotificationsState()) {
     if (_userId.isNotEmpty) {
       loadNotifications();
       _subscribeRealtime();
+      // Belt-and-braces: also reload when a push is shown, so the inbox updates
+      // even if the postgres-changes subscription above misses or lags the row.
+      _pushSub = PushNotificationService.instance.onNotificationReceived
+          .listen((_) => loadNotifications());
     }
   }
 
@@ -115,6 +123,7 @@ class NotificationsNotifier extends StateNotifier<NotificationsState> {
   @override
   void dispose() {
     _channel?.unsubscribe();
+    _pushSub?.cancel();
     super.dispose();
   }
 
@@ -249,6 +258,12 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    // The provider is kept alive app-wide (the nav badge watches it), so opening
+    // this screen does not re-run its constructor. Force a fresh load on open so
+    // notifications received while away are shown without waiting for an event.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(notificationsProvider.notifier).loadNotifications();
+    });
   }
 
   @override

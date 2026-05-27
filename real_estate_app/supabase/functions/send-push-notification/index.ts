@@ -148,7 +148,22 @@ async function sendFcmMessage(
           },
         },
         apns: {
-          payload: { aps: { sound: 'default', 'content-available': 1 } },
+          headers: {
+            // 10 = deliver immediately and show the alert; 'alert' push type is
+            // required on iOS 13+ for a user-visible banner.
+            'apns-priority': '10',
+            'apns-push-type': 'alert',
+          },
+          payload: {
+            aps: {
+              sound: 'default',
+              // NOTE: do NOT set 'content-available': 1 here. That flags the
+              // push as a silent/background content-refresh, and iOS then
+              // suppresses the banner — so the notification never reaches the
+              // notification panel. FCM populates aps.alert from the top-level
+              // `notification` field above, which is what makes it visible.
+            },
+          },
         },
         webpush: {
           headers: { TTL: '86400' },

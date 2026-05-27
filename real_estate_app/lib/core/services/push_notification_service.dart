@@ -18,6 +18,7 @@
 
 // ignore_for_file: avoid_print
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -41,6 +42,13 @@ class PushNotificationService {
   RealtimeChannel? _realtimeChannel;
   bool _initialized = false;
 
+  // Fires whenever a notification is shown (Supabase Realtime banner or FCM
+  // push). In-app screens — chiefly the notifications inbox — listen to this so
+  // they refresh live even when their own postgres-changes Realtime stream is
+  // slow or not delivering. Broadcast so multiple screens can subscribe.
+  final StreamController<void> _arrivals = StreamController<void>.broadcast();
+  Stream<void> get onNotificationReceived => _arrivals.stream;
+
   // ── Initialise ────────────────────────────────────────────────────────────
   Future<void> initialize() async {
     if (_initialized) return;
@@ -63,6 +71,12 @@ class PushNotificationService {
           AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin?.requestNotificationsPermission();
 
+      // Diagnostic: if this logs `false`, the OS is blocking ALL tray banners
+      // (foreground local + background FCM) — the app can't re-prompt once the
+      // user has denied, so they must enable it in system Settings.
+      final enabled = await androidPlugin?.areNotificationsEnabled();
+      debugPrint('🔔 Android notifications enabled: $enabled');
+
       // Create the high-importance channel up-front so OS-rendered background /
       // killed FCM notifications use it (heads-up banner) instead of a
       // default-importance fallback. Must match the id used in show() and the
@@ -78,38 +92,64 @@ class PushNotificationService {
       );
     }
 
-    // ── FCM permission + foreground / tap handlers ──────────────────────────
-    final messaging = FirebaseMessaging.instance;
-
-    await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-
-    // Foreground FCM message: Supabase Realtime already shows a banner faster,
-    // so we intentionally skip here to prevent duplicate notifications.
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      debugPrint(
-          '[FCM] Foreground message (handled by Realtime): ${message.notification?.title}');
-    });
-
-    // User tapped a notification while the app was in the background (not killed)
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      debugPrint('[FCM] Notification tapped from background: ${message.data}');
-      navigateFromNotificationData(message.data);
-    });
-
-    // Check if app was launched by tapping a notification (killed state)
-    final initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      debugPrint(
-          '[FCM] App launched from notification: ${initialMessage.data}');
-      navigateFromNotificationData(initialMessage.data);
-    }
-
+    // Local-notification setup above is the critical path for showing banners
+    // while the app is open. Mark the service ready NOW so show() can render
+    // even if the FCM block below throws (e.g. Firebase failed to init on this
+    // device). Previously a single FCM failure left _initialized = false, and
+    // every later show() call re-ran initialize(), re-threw, and rendered
+    // nothing — so no banner appeared in the tray on either platform.
     _initialized = true;
-    debugPrint('✅ PushNotificationService initialized (FCM + Realtime)');
+
+    // ── FCM permission + foreground / tap handlers (best-effort) ────────────
+    try {
+      final messaging = FirebaseMessaging.instance;
+
+      await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      // Foreground FCM message → render it ourselves via the local-notifications
+      // plugin so it lands in the system tray on BOTH Android and iOS (iOS does
+      // not display notification messages while the app is foregrounded). The
+      // Supabase Realtime banner may also fire for the same row; both use the
+      // notification's row id as the integer id, so the OS collapses them into a
+      // single tray entry (a same-id show() updates instead of duplicating).
+      FirebaseMessaging.onMessage.listen(_showFromRemote);
+
+      // User tapped a notification while the app was in the background (not killed)
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        debugPrint('[FCM] Notification tapped from background: ${message.data}');
+        navigateFromNotificationData(message.data);
+      });
+
+      // Check if app was launched by tapping a notification (killed state)
+      final initialMessage = await messaging.getInitialMessage();
+      if (initialMessage != null) {
+        debugPrint(
+            '[FCM] App launched from notification: ${initialMessage.data}');
+        navigateFromNotificationData(initialMessage.data);
+      }
+
+      debugPrint('✅ PushNotificationService initialized (FCM + Realtime)');
+    } catch (e) {
+      debugPrint('⚠️  FCM setup failed (local foreground banners still work): $e');
+    }
+  }
+
+  // Render a foreground FCM message as a real system-tray notification.
+  void _showFromRemote(RemoteMessage message) {
+    final n = message.notification;
+    final title = n?.title ?? message.data['title'] ?? 'Patamjengo';
+    final body = n?.body ?? message.data['message'] ?? '';
+    final notifId = message.data['notification_id'] ?? '';
+    show(
+      title: title,
+      body: body,
+      payload: jsonEncode(message.data),
+      id: notifId.isNotEmpty ? notifId.hashCode : title.hashCode,
+    );
   }
 
   // ── Subscribe to Supabase Realtime (foreground banners) ──────────────────
@@ -239,6 +279,10 @@ class PushNotificationService {
     String? payload,
     int id = 0,
   }) async {
+    // Tell any open in-app screen (e.g. the inbox) that a notification arrived,
+    // so it can reload immediately even if its Realtime stream missed the row.
+    _arrivals.add(null);
+
     if (kIsWeb) {
       // Web foreground: use browser Notification API via JS interop
       showWebNotification(title, body);
@@ -256,6 +300,10 @@ class PushNotificationService {
       icon: '@mipmap/ic_launcher',
       playSound: true,
       enableVibration: true,
+      // A foreground push can arrive twice (Supabase Realtime + FCM onMessage).
+      // Both use the same row-id-derived integer id, so the second show() just
+      // updates the first; onlyAlertOnce stops that update from buzzing again.
+      onlyAlertOnce: true,
     );
 
     await _plugin.show(
@@ -268,11 +316,19 @@ class PushNotificationService {
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
+          // iOS 14+: `alert` is split into banner + list. Without presentList,
+          // a foreground notification flashes as a banner but never lands in
+          // Notification Center, so it "doesn't stay" in the panel. presentList
+          // keeps it there; presentBanner ensures the heads-up still shows.
+          presentBanner: true,
+          presentList: true,
         ),
         macOS: DarwinNotificationDetails(
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
+          presentBanner: true,
+          presentList: true,
         ),
       ),
       payload: payload,

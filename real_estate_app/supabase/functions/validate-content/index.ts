@@ -1,4 +1,4 @@
-// supabase/functions/validate-content/index.ts
+/*// supabase/functions/validate-content/index.ts
 //
 // Gemini content moderation for Patamjengo — runs on EVERY platform
 // (Android, iOS, Web, PWA) because it is a plain server-side HTTPS endpoint.
@@ -344,3 +344,4 @@ serve(async (req: Request) => {
     reason: verdict.reason,
   })
 })
+*/

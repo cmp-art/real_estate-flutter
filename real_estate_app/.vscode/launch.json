@@ -1,0 +1,32 @@
+{
+  // Flutter/Dart debug configs. Pick one from the Run and Debug dropdown
+  // (Ctrl+Shift+D), then press F5. Requires the "Flutter" + "Dart" VS Code
+  // extensions. The app reads assets/.env at startup, so no --dart-define is
+  // needed for local debugging.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Patamjengo — Web (Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "deviceId": "chrome",
+      // Fixed port → stable http://localhost:5000 origin (handy for CORS/OAuth).
+      "args": ["--web-port", "5000"]
+    },
+    {
+      "name": "Patamjengo — Web (Edge)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "deviceId": "edge",
+      "args": ["--web-port", "5000"]
+    },
+    {
+      "name": "Patamjengo — Android (debug)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart"
+    }
+  ]
+}

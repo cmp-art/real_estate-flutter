@@ -1,0 +1,9 @@
+{
+  // Supabase Edge Functions run on Deno, not Node. Enable the Deno language
+  // server ONLY for the functions folder so it understands `https://` URL
+  // imports and the `Deno` global. Everything else (Dart/Flutter) keeps using
+  // its normal tooling — this does not affect the app build or analysis.
+  "deno.enablePaths": ["supabase/functions"],
+  "deno.lint": true,
+  "deno.unstable": false
+}
