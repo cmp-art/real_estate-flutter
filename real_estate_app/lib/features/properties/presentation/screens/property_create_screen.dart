@@ -1,11 +1,9 @@
 // features/properties/presentation/screens/property_create_screen.dart
 // Simplified property creation/editing form.
-// Photos only (no video). Gemini AI moderates photos before the listing is
-// saved (server-side, with a rule-based fallback when it is unreachable).
+// Photos only (no video), no NIDA verification, no AI validation.
 // Works on Android, iOS, Web, and PWA.
 
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -17,23 +15,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/config/theme_config.dart';
 import '../../../../core/constants/app_constants.dart';
-import '../../../../core/middleware/feature_gate_middleware.dart';
-import '../../../../core/services/ai_validation_service.dart';
 import '../../../../core/services/error_logging_service.dart';
 import '../../../../core/utils/currency_helper.dart';
 import '../../../../core/utils/image_helper.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/responsive_helper.dart';
-// Drag-and-drop file support on desktop web; a no-op stub on native (dart:io).
-import '../../../../core/utils/web_drop_zone.dart'
-    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 import '../../../../core/widgets/location_autocomplete_field.dart';
 import '../../../../presentation/providers/auth_provider.dart';
 import '../../../settings/presentation/providers/app_providers.dart'
     hide accessControlProvider;
 import '../../../subscriptions/presentation/screens/subscription_screen.dart';
 import '../../domain/entities/property_entity.dart';
-import '../providers/ai_providers.dart';
 import '../providers/property_providers.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -446,10 +438,9 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     if (!mounted) return;
 
     // cropToCard is best-effort: on web it canvas-crops JPEG/PNG/WebP; for
-    // HEIC/AVIF it returns null and we fall back to the raw bytes, which
-    // ImageUploadService coerces to a servable JPEG at upload time. We only
-    // drop an image if it had NO readable bytes at all (already filtered by
-    // pickMultipleImages via onUnreadable above).
+    // HEIC/AVIF it returns null and we fall back to the raw bytes the backend
+    // will transcode. We only drop an image if it had NO readable bytes at all
+    // (already filtered by pickMultipleImages via onUnreadable above).
     final ready = <XFile>[];
     for (final image in picked) {
       if (!mounted) break;
@@ -482,60 +473,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
-  // Shown when Gemini (or the rule-based fallback) rejects the photos.
-  Future<void> _showModerationRejected(ValidationResult v) async {
-    final s = _s;
-    final reason = v.reason.isNotEmpty
-        ? v.reason
-        : s.pick(
-            'These photos do not appear to show a real estate property.',
-            'Picha hizi hazionekani kuwa za mali isiyohamishika.',
-          );
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.report_gmailerrorred, color: Colors.red),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(s.pick('Photos not accepted', 'Picha hazikukubaliwa')),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(reason),
-            if (v.suggestions.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              ...v.suggestions.map(
-                (sug) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('•  '),
-                      Expanded(child: Text(sug)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(s.pick('OK', 'Sawa')),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _submit() async {
     final s = _s;
     final user = ref.read(authNotifierProvider).value;
@@ -556,31 +493,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
     }
 
     setState(() => _isLoading = true);
-
-    // On web, image_picker returns blob:-URL XFiles whose readAsBytes() can be
-    // intercepted by the PWA service worker and yield HTML instead of the photo.
-    // Resolve them to byte-backed XFiles ONCE (a no-op on native) and reuse the
-    // same list for BOTH moderation and upload, so Gemini sees the real image
-    // bytes on web/PWA exactly like it does on native.
-    final resolvedImages = await _resolveUploadFiles();
-
-    // ── AI image moderation — verify photos genuinely show real estate ──────
-    // Gemini runs server-side as a plain HTTPS call (works on Android, iOS, Web
-    // & PWA). If it is undeployed / unreachable the submission is allowed
-    // through — photos are never judged by their text.
-    if (resolvedImages.isNotEmpty) {
-      final moderation =
-          await ref.read(aiValidationServiceProvider).validateProperty(
-        images:      resolvedImages,
-        submittedBy: user.id,
-      );
-      if (!mounted) return;
-      if (!moderation.isApproved) {
-        setState(() => _isLoading = false);
-        await _showModerationRejected(moderation);
-        return;
-      }
-    }
 
     final bedrooms  = _needsRooms ? (int.tryParse(_bedroomsCtrl.text)  ?? 0) : 0;
     final bathrooms = _needsRooms ? (int.tryParse(_bathroomsCtrl.text) ?? 0) : 0;
@@ -631,8 +543,8 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
 
         bool uploadFailed = false;
         if (_images.isNotEmpty) {
-          // Reuse the byte-backed XFiles already resolved above (web blob/SW bypass).
-          final toUpload = resolvedImages;
+          // On web: resolve blob-URL XFiles to byte-backed XFiles first
+          final toUpload = await _resolveUploadFiles();
           final uploadResult = await repo.uploadImages(saved.id, toUpload);
           await uploadResult.fold(
             (_) async { uploadFailed = true; },
@@ -763,35 +675,7 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
         title: Text(_isEditing ? s.editProperty : s.addProperty),
         centerTitle: false,
       ),
-      // On desktop web the whole form is a drop target: photos dropped from the
-      // file explorer are added just like gallery picks. No-op on native.
-      body: WebDropZone(
-        maxFiles: AppConstants.maxImagesPerProperty,
-        onFilesDropped: (dropped) async {
-          final remaining = AppConstants.maxImagesPerProperty - _images.length;
-          if (remaining <= 0) {
-            _snack('Maximum ${AppConstants.maxImagesPerProperty} photos allowed',
-                isError: true);
-            return;
-          }
-          // Mirror the gallery-pick flow (_addPhotos): crop each dropped image
-          // to the 4:3 card ratio so dropped and picked photos look identical.
-          final ready = <XFile>[];
-          for (final image in dropped.take(remaining)) {
-            if (!mounted) break;
-            try {
-              final result = await _imageHelper.cropToCard(context, image);
-              ready.add(result ?? image);
-            } catch (_) {
-              ready.add(image);
-            }
-          }
-          if (ready.isNotEmpty && mounted) {
-            await _cacheWebBytes(ready);
-            setState(() => _images.addAll(ready));
-          }
-        },
-        child: Form(
+      body: Form(
           key: _formKey,
           child: ListView(
             padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 32),
@@ -1032,7 +916,6 @@ class _PropertyCreateScreenState extends ConsumerState<PropertyCreateScreen> {
             ],
           ),
         ),
-      ),
     );
   }
 

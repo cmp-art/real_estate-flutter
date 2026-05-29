@@ -14,9 +14,6 @@ import '../../../../core/config/theme_config.dart';
 import '../../../../core/services/direct_ad_models.dart';
 import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/utils/image_helper.dart';
-// Drag-and-drop file support on desktop web; a no-op stub on native (dart:io).
-import '../../../../core/utils/web_drop_zone.dart'
-    if (dart.library.io) '../../../../core/utils/web_drop_zone_stub.dart';
 
 import '../../../properties/domain/entities/property_entity.dart';
 import '../../../properties/presentation/providers/ai_providers.dart';
@@ -460,7 +457,7 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
   final Map<String, Uint8List> _previewBytes = {};
 
   // Form selections
-  String _selectedFormat    = 'native_medium';
+  final String _selectedFormat    = 'native_medium';
   String _selectedCTA       = 'Learn More';
 
   // Ad destination: 'phone' | 'whatsapp' | 'property' | 'profile' | 'website'
@@ -510,21 +507,6 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
             child: Icon(Icons.broken_image_rounded, color: Colors.grey)));
   }
 
-  // Image to hand to AI moderation. On web the picked XFile is a blob: URL whose
-  // readAsBytes() can be intercepted by the PWA service worker and return HTML
-  // instead of the photo — so we reuse the real bytes already cached at pick
-  // time. On native the file reads directly. Without this, moderation silently
-  // sees no usable image on web/PWA and lets every ad through.
-  XFile? _imageForModeration() {
-    final file = _imageFile;
-    if (file == null || !kIsWeb) return file;
-    final bytes = _previewBytes[file.path];
-    if (bytes == null || bytes.isEmpty) return file;
-    return XFile.fromData(bytes,
-        name: file.name.isNotEmpty ? file.name : 'ad.jpg',
-        mimeType: 'image/jpeg');
-  }
-
   void _showError(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -562,104 +544,70 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
       final picked =
           await _imageHelper.pickSingleImage(source: ImageSource.gallery);
       if (picked == null || !mounted) return;
-      await _normalizeAndUpload(
-        picked,
+
+      final normalized =
+          await _imageHelper.normalizeForUpload(context, picked, card: false);
+      if (normalized == null) {
+        _showError(_s.sw
+            ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
+            : 'That image could not be processed. Try the app or a JPEG.');
+        return;
+      }
+
+      // Web-only: read bytes now for Image.memory preview (CanvasKit can't use
+      // File paths).  On native, Image.file works directly and readAsBytes() is
+      // deferred into uploadCreativeImage where it acts as the Scoped
+      // Storage / service-worker bypass.
+      if (kIsWeb) {
+        final previewBytes = await normalized.readAsBytes();
+        if (previewBytes.isEmpty) {
+          _showError('That image could not be read. Please try another.');
+          return;
+        }
+        _previewBytes[normalized.path] = previewBytes;
+      }
+
+      final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
+      if (userId.isEmpty) {
+        _showError(_s.loginRequired);
+        return;
+      }
+
+      setState(() {
+        onPicked(normalized, null);
+        setUploading(true);
+      });
+
+      // Direct upload to the public advertisements bucket — the returned URL is
+      // real and immediately usable (no async processing window).
+      final url = await ImageUploadService.uploadCreativeImage(
+        file: normalized,
+        userId: userId,
         folder: folder,
         label: label,
-        onPicked: onPicked,
-        setUploading: setUploading,
       );
+
+      if (!mounted) return;
+      if (url != null) {
+        setState(() {
+          onPicked(normalized, url);
+          setUploading(false);
+        });
+        _showSuccess(label == 'logo'
+            ? 'Logo uploaded successfully'
+            : 'Image uploaded successfully');
+      } else {
+        setState(() {
+          onPicked(null, null);
+          setUploading(false);
+        });
+        _showError('${label == 'logo' ? 'Logo' : 'Image'} upload failed. '
+            'Please try again.');
+      }
     } catch (e) {
       if (mounted) setState(() => setUploading(false));
       _showError('Could not open gallery: $e');
     }
-  }
-
-  /// Shared pipeline for a chosen image — used by both the gallery picker and
-  /// desktop-web drag-and-drop: normalise (HEIC transcode + format check) →
-  /// cache preview bytes (web) → upload → report the public URL.
-  Future<void> _normalizeAndUpload(
-    XFile picked, {
-    required String folder,
-    required String label,
-    required void Function(XFile? file, String? url) onPicked,
-    required void Function(bool uploading) setUploading,
-  }) async {
-    final normalized =
-        await _imageHelper.normalizeForUpload(context, picked, card: false);
-    if (normalized == null) {
-      _showError(_s.sw
-          ? 'Picha hii haikuweza kushughulikiwa. Tumia programu au JPEG.'
-          : 'That image could not be processed. Try the app or a JPEG.');
-      return;
-    }
-
-    // Web-only: read bytes now for Image.memory preview (CanvasKit can't use
-    // File paths).  On native, Image.file works directly and readAsBytes() is
-    // deferred into uploadCreativeImage where it acts as the Scoped
-    // Storage / service-worker bypass.
-    if (kIsWeb) {
-      final previewBytes = await normalized.readAsBytes();
-      if (previewBytes.isEmpty) {
-        _showError('That image could not be read. Please try another.');
-        return;
-      }
-      _previewBytes[normalized.path] = previewBytes;
-    }
-
-    final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
-    if (userId.isEmpty) {
-      _showError(_s.loginRequired);
-      return;
-    }
-
-    setState(() {
-      onPicked(normalized, null);
-      setUploading(true);
-    });
-
-    // Direct upload to the public advertisements bucket — the returned URL is
-    // real and immediately usable (no async processing window).
-    final url = await ImageUploadService.uploadCreativeImage(
-      file: normalized,
-      userId: userId,
-      folder: folder,
-      label: label,
-    );
-
-    if (!mounted) return;
-    if (url != null) {
-      setState(() {
-        onPicked(normalized, url);
-        setUploading(false);
-      });
-      _showSuccess(label == 'logo'
-          ? 'Logo uploaded successfully'
-          : 'Image uploaded successfully');
-    } else {
-      setState(() {
-        onPicked(null, null);
-        setUploading(false);
-      });
-      _showError('${label == 'logo' ? 'Logo' : 'Image'} upload failed. '
-          'Please try again.');
-    }
-  }
-
-  /// Desktop-web: photos dropped onto the form are routed to the main ad image
-  /// (the logo keeps its own picker). No-op on native via the WebDropZone stub.
-  Future<void> _handleDroppedAdImage(List<XFile> dropped) async {
-    if (dropped.isEmpty || !mounted) return;
-    await _normalizeAndUpload(
-      dropped.first,
-      folder: 'ad_images',
-      label: 'main',
-      onPicked: (file, url) {
-        _imageFile = file;
-        _imageUrl = url;
-      },
-      setUploading: (v) => _isUploadingImage = v,
-    );
   }
 
   Future<void> _pickAndUploadImage() => _pickAndUpload(
@@ -769,8 +717,14 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     final user = Supabase.instance.client.auth.currentUser;
     final aiService = ref.read(aiValidationServiceProvider);
     final validation = await aiService.validateAd(
-      image:       _imageForModeration(),
-      submittedBy: user?.id,
+     /* headline:          _headlineController.text.trim(),
+      description:       _descriptionController.text.trim(),
+      callToAction:      _selectedCTA,
+      companyType:       'advertiser',  // generic — all business types are allowed
+      campaignObjective: widget.campaign.campaignObjective,
+      landingUrl:        landingUrl,*/
+      image:             _imageFile,
+      submittedBy:       user?.id,
     );
 
     if (!mounted) return;
@@ -1046,15 +1000,9 @@ class _CreateCreativeScreenState extends ConsumerState<CreateCreativeScreen> {
     return Scaffold(
       backgroundColor: ThemeConfig.getBackgroundColor(context),
       appBar: _buildAppBar(),
-      // On desktop web the form is a drop target — a photo dropped from the
-      // file explorer becomes the ad image. No-op on native via the stub.
       body: (_isSubmitting || _isValidating)
           ? _buildSubmittingState()
-          : WebDropZone(
-              maxFiles: 1,
-              onFilesDropped: _handleDroppedAdImage,
-              child: _buildForm(),
-            ),
+          : _buildForm(),
     );
   }
 
