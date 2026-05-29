@@ -273,20 +273,12 @@ class PushNotificationService {
   }
 
   // ── Show a local notification banner ─────────────────────────────────────
-  final Set<int> _recentlyShown = {};
-
   Future<void> show({
     required String title,
     required String body,
     String? payload,
     int id = 0,
   }) async {
-    // 1. Deduplicate rapid double-fires (Supabase Realtime vs FCM onMessage)
-  if (_recentlyShown.contains(id)) return;
-  _recentlyShown.add(id);
-  
-  // Clear the block after 5 seconds so the same ID can be updated later if genuinely needed
-  Future.delayed(const Duration(seconds: 5), () => _recentlyShown.remove(id));
     // Tell any open in-app screen (e.g. the inbox) that a notification arrived,
     // so it can reload immediately even if its Realtime stream missed the row.
     _arrivals.add(null);
